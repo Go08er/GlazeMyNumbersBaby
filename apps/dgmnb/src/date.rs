@@ -1,13 +1,14 @@
 //! Date calculation (upstream DateCalculator.xaml).
 
 use appcore::input::{self, Key, KeyPress, Named};
+use appcore::metrics::{controls as ctl, date as md, shape, text as txt};
 use chrono::{Datelike, Days, Local, Months, NaiveDate};
 use datecalc::{DateCalculatorState, strings as S};
 
 use crate::app::{Cx, Msg as AppMsg};
 use crate::edit::TextEdit;
 use crate::gfx::Rect;
-use crate::ui::{Align, BODY, CAPTION, Frame, SMALL, STRONG, Style, id};
+use crate::ui::{Align, BODY, CAPTION, Frame, SMALL, STRONG, id, style};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Msg {
@@ -289,8 +290,19 @@ impl DatePage {
             _ => self.state.start_date(),
         });
         let t = f.t;
-        f.label(r.take_top(22.0).0, label, CAPTION, t.fg_dim, Align::Start);
-        let b = Rect::new(r.x, r.y + 24.0, r.w.min(320.0), 38.0);
+        f.label(
+            r.take_top(md::FIELD_LABEL_H).0,
+            label,
+            CAPTION,
+            t.fg_dim,
+            Align::Start,
+        );
+        let b = Rect::new(
+            r.x,
+            r.y + md::FIELD_TOP,
+            r.w.min(md::FIELD_MAX_W),
+            md::FIELD_H,
+        );
         f.button(
             id(("date-btn", which)),
             b,
@@ -323,11 +335,14 @@ impl DatePage {
         let changed = self.told.as_deref().is_some_and(|was| was != name);
         self.told = Some(name.to_string());
         let t = f.t;
-        let col = area.inset_xy(16.0, 8.0);
-        let col = Rect::new(col.x, col.y, col.w.min(480.0), col.h);
+        let col = area.inset_xy(md::MARGIN_X, md::MARGIN_Y);
+        let col = Rect::new(col.x, col.y, col.w.min(md::MAX_WIDTH), col.h);
         let diff = self.state.is_date_diff_mode();
-        let seg = Rect::new(col.x, col.y, col.w, 36.0);
-        let (a, b) = (seg.cell(1, 2, 0, 0, 4.0), seg.cell(1, 2, 0, 1, 4.0));
+        let seg = Rect::new(col.x, col.y, col.w, ctl::SEGMENTED_H);
+        let (a, b) = (
+            seg.cell(1, 2, 0, 0, ctl::SEGMENTED_GAP),
+            seg.cell(1, 2, 0, 1, ctl::SEGMENTED_GAP),
+        );
         f.button(
             id("date-diff"),
             a,
@@ -348,36 +363,36 @@ impl DatePage {
             Some(!diff),
             true,
         );
-        let mut y = seg.bottom() + 16.0;
+        let mut y = seg.bottom() + md::SWITCH_GAP;
         if diff {
             self.date_button(
                 f,
-                Rect::new(col.x, y, col.w, 64.0),
+                Rect::new(col.x, y, col.w, md::FIELD_BLOCK_H),
                 0,
                 S::DATE_DIFF_FROM_HEADER,
             );
-            y += 72.0;
+            y += md::STEP_FROM_TO;
             self.date_button(
                 f,
-                Rect::new(col.x, y, col.w, 64.0),
+                Rect::new(col.x, y, col.w, md::FIELD_BLOCK_H),
                 1,
                 S::DATE_DIFF_TO_HEADER,
             );
-            y += 80.0;
+            y += md::STEP_TO_LABEL;
             f.label(
-                Rect::new(col.x, y, col.w, 22.0),
+                Rect::new(col.x, y, col.w, md::FIELD_LABEL_H),
                 S::DATE_DIFFERENCE_LABEL,
                 CAPTION,
                 t.fg_dim,
                 Align::Start,
             );
-            y += 24.0;
-            let res = Rect::new(col.x, y, col.w, 44.0);
+            y += md::STEP_LABEL_RESULT;
+            let res = Rect::new(col.x, y, col.w, md::RESULT_H);
             f.label_fit(
                 res,
                 self.state.str_date_diff_result(),
-                Style::new(28.0, 400.0),
-                14.0,
+                style(txt::DATE_RESULT),
+                txt::DATE_RESULT_MIN_SIZE,
                 t.fg,
                 Align::Start,
             );
@@ -389,9 +404,9 @@ impl DatePage {
             ) {
                 n.live = changed;
             }
-            y += 46.0;
+            y += md::STEP_RESULT_NEXT;
             if !self.state.is_diff_in_days() {
-                let line = Rect::new(col.x, y, col.w, 24.0);
+                let line = Rect::new(col.x, y, col.w, md::SUBRESULT_H);
                 let days = self.state.str_date_diff_result_in_days();
                 f.label(line, days, BODY, t.fg_dim, Align::Start);
                 // Not a live one: upstream's DateDiffByDaysResultLabel
@@ -403,16 +418,16 @@ impl DatePage {
         } else {
             self.date_button(
                 f,
-                Rect::new(col.x, y, col.w, 64.0),
+                Rect::new(col.x, y, col.w, md::FIELD_BLOCK_H),
                 2,
                 S::ADD_SUBTRACT_FROM_HEADER,
             );
-            y += 76.0;
+            y += md::STEP_FROM_OP;
             let add = self.state.is_add_mode();
-            let seg = Rect::new(col.x, y, 240.0f32.min(col.w), 34.0);
+            let seg = Rect::new(col.x, y, md::OP_SWITCH_W.min(col.w), md::OP_SWITCH_H);
             f.button(
                 id("date-op-add"),
-                seg.cell(1, 2, 0, 0, 4.0),
+                seg.cell(1, 2, 0, 0, ctl::SEGMENTED_GAP),
                 S::ADD_OPTION,
                 SMALL,
                 msg(Msg::Add(true)),
@@ -422,7 +437,7 @@ impl DatePage {
             );
             f.button(
                 id("date-op-sub"),
-                seg.cell(1, 2, 0, 1, 4.0),
+                seg.cell(1, 2, 0, 1, ctl::SEGMENTED_GAP),
                 S::SUBTRACT_OPTION,
                 SMALL,
                 msg(Msg::Add(false)),
@@ -430,20 +445,26 @@ impl DatePage {
                 Some(!add),
                 true,
             );
-            y += 46.0;
-            let row = Rect::new(col.x, y, col.w, 66.0);
+            y += md::STEP_OP_OFFSETS;
+            let row = Rect::new(col.x, y, col.w, md::OFFSETS_H);
             for (i, label) in [S::YEARS_LABEL, S::MONTHS_LABEL, S::DAYS_LABEL]
                 .into_iter()
                 .enumerate()
             {
-                let c = row.cell(1, 3, 0, i, 10.0);
-                f.label(c.take_top(22.0).0, label, CAPTION, t.fg_dim, Align::Start);
-                let line = Rect::new(c.x, c.y + 24.0, c.w, 36.0);
-                let (minus, rest) = line.take_left(30.0);
-                let (plus, field) = rest.take_right(30.0);
+                let c = row.cell(1, 3, 0, i, md::OFFSETS_GAP);
+                f.label(
+                    c.take_top(md::OFFSET_LABEL_H).0,
+                    label,
+                    CAPTION,
+                    t.fg_dim,
+                    Align::Start,
+                );
+                let line = Rect::new(c.x, c.y + md::OFFSET_LINE_TOP, c.w, md::OFFSET_LINE_H);
+                let (minus, rest) = line.take_left(md::OFFSET_STEP_W);
+                let (plus, field) = rest.take_right(md::OFFSET_STEP_W);
                 f.icon_button(
                     id(("date-minus", i)),
-                    minus.inset(1.0),
+                    minus.inset(md::OFFSET_STEP_INSET),
                     "M7 12h10",
                     &format!("Fewer {}", label.to_lowercase()),
                     msg(Msg::Step(i as u8, -1)),
@@ -452,7 +473,7 @@ impl DatePage {
                 );
                 f.text_field(
                     offset_id(i),
-                    field.inset_xy(2.0, 0.0),
+                    field.inset_xy(md::OFFSET_FIELD_INSET, 0.0),
                     &self.offsets[i],
                     "0",
                     false,
@@ -460,7 +481,7 @@ impl DatePage {
                 );
                 f.icon_button(
                     id(("date-plus", i)),
-                    plus.inset(1.0),
+                    plus.inset(md::OFFSET_STEP_INSET),
                     "M12 7v10M7 12h10",
                     &format!("More {}", label.to_lowercase()),
                     msg(Msg::Step(i as u8, 1)),
@@ -468,16 +489,16 @@ impl DatePage {
                     None,
                 );
             }
-            y += 82.0;
+            y += md::STEP_OFFSETS_LABEL;
             f.label(
-                Rect::new(col.x, y, col.w, 22.0),
+                Rect::new(col.x, y, col.w, md::FIELD_LABEL_H),
                 S::DATE_LABEL,
                 CAPTION,
                 t.fg_dim,
                 Align::Start,
             );
-            y += 24.0;
-            let res = Rect::new(col.x, y, col.w, 44.0);
+            y += md::STEP_LABEL_RESULT;
+            let res = Rect::new(col.x, y, col.w, md::RESULT_H);
             let color = if self.state.is_out_of_bound() {
                 t.danger
             } else {
@@ -486,8 +507,8 @@ impl DatePage {
             f.label_fit(
                 res,
                 self.state.str_date_result(),
-                Style::new(28.0, 400.0),
-                14.0,
+                style(txt::DATE_RESULT),
+                txt::DATE_RESULT_MIN_SIZE,
                 color,
                 Align::Start,
             );
@@ -512,23 +533,26 @@ impl DatePage {
             .find(|h| h.id == id(("date-btn", which)))
             .map(|h| h.rect)
             .unwrap_or(area);
-        let (w, h) = (300.0, 316.0);
-        let x = anchor.x.min(area.right() - w - 8.0).max(area.x + 8.0);
-        let y = if anchor.bottom() + h + 8.0 < area.bottom() {
-            anchor.bottom() + 4.0
+        let (w, h) = md::CALENDAR;
+        let x = anchor
+            .x
+            .min(area.right() - w - md::CALENDAR_EDGE)
+            .max(area.x + md::CALENDAR_EDGE);
+        let y = if anchor.bottom() + h + md::CALENDAR_EDGE < area.bottom() {
+            anchor.bottom() + md::CALENDAR_GAP
         } else {
-            (anchor.y - h - 4.0).max(area.y + 4.0)
+            (anchor.y - h - md::CALENDAR_GAP).max(area.y + md::CALENDAR_GAP)
         };
         let card = Rect::new(x, y, w, h);
-        f.card(card, 12.0);
-        let inner = card.inset(10.0);
-        let (head, grid) = inner.take_top(36.0);
+        f.card(card, shape::POPUP_RADIUS);
+        let inner = card.inset(md::CALENDAR_PAD);
+        let (head, grid) = inner.take_top(md::CALENDAR_HEAD_H);
         let title = format!(
             "{} {}",
             MONTHS[self.shown.month0() as usize],
             self.shown.year()
         );
-        let title_rect = head.inset_xy(76.0, 0.0);
+        let title_rect = head.inset_xy(md::CALENDAR_TITLE_INSET, 0.0);
         f.label(title_rect, &title, STRONG, t.fg, Align::Center);
         // The month, a heading (as GMNB's), said when it changes.
         if let Some(n) = f.node(
@@ -540,10 +564,10 @@ impl DatePage {
             n.live = true;
         }
         let (min, max) = (datecalc::picker_min_date(), datecalc::picker_max_date());
-        let (left, rest) = head.take_left(36.0);
-        let (left2, _) = rest.take_left(36.0);
-        let (right, rest) = head.take_right(36.0);
-        let (right2, _) = rest.take_right(36.0);
+        let (left, rest) = head.take_left(md::CALENDAR_ARROWS_W);
+        let (left2, _) = rest.take_left(md::CALENDAR_ARROWS_W);
+        let (right, rest) = head.take_right(md::CALENDAR_ARROWS_W);
+        let (right2, _) = rest.take_right(md::CALENDAR_ARROWS_W);
         for (bid, r, icon, name, delta, enabled) in [
             (
                 NAV[0],
@@ -588,13 +612,13 @@ impl DatePage {
                 None,
             );
         }
-        let (dow, days) = grid.take_top(26.0);
+        let (dow, days) = grid.take_top(md::CALENDAR_WEEKDAY_H);
         for (i, d) in ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
             .into_iter()
             .enumerate()
         {
             f.label(
-                dow.cell(1, 7, 0, i, 2.0),
+                dow.cell(1, 7, 0, i, md::CALENDAR_GRID_GAP),
                 d,
                 CAPTION,
                 t.fg_dim,
@@ -607,7 +631,13 @@ impl DatePage {
         let start = self.shown - chrono::Duration::days(lead);
         for i in 0..42 {
             let d = start + chrono::Duration::days(i);
-            let c = days.cell(6, 7, (i / 7) as usize, (i % 7) as usize, 2.0);
+            let c = days.cell(
+                6,
+                7,
+                (i / 7) as usize,
+                (i % 7) as usize,
+                md::CALENDAR_GRID_GAP,
+            );
             let in_month = d.month() == self.shown.month();
             let enabled = d >= min && d <= max;
             let did = day_id(d);
@@ -616,7 +646,7 @@ impl DatePage {
             if sel {
                 f.cv.rounded(c, c.h / 2.0, t.accent);
             } else if d == today {
-                f.cv.rounded_border(c, c.h / 2.0, t.accent_text, 1.0);
+                f.cv.rounded_border(c, c.h / 2.0, t.accent_text, md::TODAY_BORDER);
             }
             if enabled {
                 f.row(

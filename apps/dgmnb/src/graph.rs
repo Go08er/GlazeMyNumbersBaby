@@ -10,6 +10,7 @@ use appcore::KeyPress;
 use appcore::graph::{self as session, SavedEquation};
 use appcore::input::{self, GraphAction};
 use appcore::keys::GRAPH_PAD;
+use appcore::metrics::{graph as mg, shape, text as txt};
 use graphing::analysis::KeyGraphFeatures;
 use graphing::equation::LineStyle;
 use graphing::graph::EquationPlot;
@@ -22,11 +23,11 @@ use winit::event_loop::EventLoopProxy;
 use crate::app::{Cx, Msg as AppMsg, UserEvent};
 use crate::edit::TextEdit;
 use crate::gfx::{Color, Rect};
-use crate::ui::{self, Align, BODY, CAPTION, Frame, Hit, SMALL, STRONG, Sense, Style, id};
+use crate::ui::{self, Align, BODY, CAPTION, Frame, Hit, SMALL, STRONG, Sense, id, style};
 
-pub const WIDE: f32 = 760.0;
-const SIDE_W: f32 = 340.0;
-const PAD_H: f32 = 214.0;
+pub const WIDE: f32 = mg::WIDE;
+const SIDE_W: f32 = mg::SIDE_W;
+const PAD_H: f32 = mg::PAD_H;
 const INLINE_PLOT_MS: f64 = 12.0;
 /// Re-analysis waits this long after the last edit (typing `sin(x)` doesn't
 /// start six analyses).
@@ -1015,11 +1016,11 @@ impl GraphPage {
 
     pub fn view(&mut self, f: &mut Frame, area: Rect) {
         let wide = area.w >= WIDE;
-        let area = area.inset_xy(8.0, 4.0);
+        let area = area.inset_xy(mg::MARGIN_X, mg::MARGIN_Y);
         if wide {
             let (side, canvas) = area.take_left(SIDE_W);
             self.side_panel(f, side);
-            self.draw_canvas(f, canvas.take_right(canvas.w - 8.0).0, true);
+            self.draw_canvas(f, canvas.take_right(canvas.w - mg::GAP).0, true);
         } else if self.show_graph {
             self.draw_canvas(f, area, true);
         } else {
@@ -1029,13 +1030,16 @@ impl GraphPage {
 
     fn side_panel(&mut self, f: &mut Frame, r: Rect) {
         let t = f.t;
-        let (pad, top) = r.inset_xy(0.0, 4.0).take_bottom(PAD_H);
-        f.cv.fill_rect(Rect::new(pad.x, pad.y - 1.0, pad.w, 1.0), t.border);
+        let (pad, top) = r.inset_xy(0.0, mg::SIDE_PAD_Y).take_bottom(PAD_H);
+        f.cv.fill_rect(
+            Rect::new(pad.x, pad.y - mg::DIVIDER, pad.w, mg::DIVIDER),
+            t.border,
+        );
         match &self.side {
             Side::Equations => self.equations(f, top),
             Side::Analysis { .. } => self.analysis(f, top),
         }
-        self.keypad(f, pad.take_bottom(PAD_H - 8.0).0);
+        self.keypad(f, pad.take_bottom(PAD_H - mg::PAD_TRIM).0);
     }
 
     fn equations(&mut self, f: &mut Frame, r: Rect) {
@@ -1046,20 +1050,29 @@ impl GraphPage {
         let n_series = t.series.len();
         for i in 0..self.rows.len() {
             let (eid, color) = (self.rows[i].id, self.rows[i].color);
-            let line = Rect::new(r.x, y, r.w, 40.0);
+            let line = Rect::new(r.x, y, r.w, mg::ROW_H);
             let c = t.series[color % n_series];
             let enabled = self.graph.is_line_enabled(eid);
             // Swatch: show/hide.
-            let sw = Rect::new(line.x + 2.0, line.y + 6.0, 28.0, 28.0);
+            let sw = Rect::new(
+                line.x + mg::SWATCH_X,
+                line.y + mg::SWATCH_Y,
+                mg::SWATCH_BOX,
+                mg::SWATCH_BOX,
+            );
             let swid = id(("swatch", eid));
             f.cv.circle(
                 sw.cx(),
                 sw.cy(),
-                9.0,
-                if enabled { c } else { c.alpha(0.3) },
+                mg::SWATCH_RADIUS,
+                if enabled {
+                    c
+                } else {
+                    c.alpha(mg::SWATCH_HIDDEN_ALPHA)
+                },
             );
             if f.hovered(swid) {
-                f.cv.rounded(sw, 14.0, t.hover);
+                f.cv.rounded(sw, mg::SWATCH_HOVER_RADIUS, t.hover);
             }
             f.hit(swid, sw, Sense::Click, Some(msg(Msg::Toggle(eid))), true);
             if let Some(n) = f.node(swid, accesskit::Role::Button, "Show or hide", sw) {
@@ -1067,19 +1080,31 @@ impl GraphPage {
                 n.clickable = true;
                 n.focusable = true;
             }
-            let (buttons, field) =
-                Rect::new(line.x + 34.0, line.y + 2.0, line.w - 34.0, 36.0).take_right(96.0);
+            let (buttons, field) = Rect::new(
+                line.x + mg::ROW_FIELD_X,
+                line.y + mg::ROW_FIELD_Y,
+                line.w - mg::ROW_FIELD_X,
+                mg::ROW_FIELD_H,
+            )
+            .take_right(mg::ROW_BUTTONS_W);
             let err = self.graph.error(eid).cloned();
             let has_err = err.is_some() && !self.rows[i].edit.text.trim().is_empty();
             f.text_field(
                 eq_field(eid),
-                field.take_left(field.w - 4.0).0,
+                field.take_left(field.w - mg::ROW_FIELD_TRIM).0,
                 &self.rows[i].edit,
                 "Enter an expression",
                 has_err,
                 "Equation",
             );
-            let b = |k: usize| Rect::new(buttons.x + k as f32 * 32.0, buttons.y + 2.0, 32.0, 32.0);
+            let b = |k: usize| {
+                Rect::new(
+                    buttons.x + k as f32 * mg::ROW_BUTTON,
+                    buttons.y + mg::ROW_BUTTON_Y,
+                    mg::ROW_BUTTON,
+                    mg::ROW_BUTTON,
+                )
+            };
             f.icon_button(
                 id(("eq-style", eid)),
                 b(0),
@@ -1107,10 +1132,22 @@ impl GraphPage {
                 true,
                 None,
             );
-            y += 42.0;
+            y += mg::ROW_STEP;
             if has_err && let Some(e) = err {
-                let er = Rect::new(r.x + 36.0, y - 2.0, r.w - 40.0, 18.0);
-                f.label_fit(er, e.message(), CAPTION, 9.0, t.danger, Align::Start);
+                let er = Rect::new(
+                    r.x + mg::ERROR_X,
+                    y - mg::ERROR_UP,
+                    r.w - mg::ERROR_TRIM,
+                    mg::ERROR_H,
+                );
+                f.label_fit(
+                    er,
+                    e.message(),
+                    CAPTION,
+                    txt::GRAPH_ERROR_MIN_SIZE,
+                    t.danger,
+                    Align::Start,
+                );
                 // Read out as GMNB's error label is.
                 f.node(
                     id(("eq-error", eid)),
@@ -1118,10 +1155,10 @@ impl GraphPage {
                     e.message(),
                     er,
                 );
-                y += 18.0;
+                y += mg::ERROR_H;
             }
         }
-        let add = Rect::new(r.x, y + 2.0, r.w, 36.0);
+        let add = Rect::new(r.x, y + mg::ADD_Y, r.w, mg::ADD_H);
         f.button(
             id("eq-add"),
             add,
@@ -1136,31 +1173,31 @@ impl GraphPage {
         if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
             n.label = "Enter an expression".into();
         }
-        y += 44.0;
+        y += mg::ADD_STEP;
         if !self.vars.is_empty() {
             f.label(
-                Rect::new(r.x + 4.0, y, r.w, 26.0),
+                Rect::new(r.x + mg::VARIABLES_X, y, r.w, mg::VARIABLES_H),
                 "Variables",
                 STRONG,
                 t.fg,
                 Align::Start,
             );
-            y += 28.0;
+            y += mg::VARIABLES_STEP;
             let names: Vec<String> = self.vars.keys().cloned().collect();
             for name in names {
                 let Some(v) = self.graph.variable(&name).copied() else {
                     continue;
                 };
-                let row = Rect::new(r.x, y, r.w, 36.0);
-                let (label, rest) = row.take_left(34.0);
+                let row = Rect::new(r.x, y, r.w, mg::VARIABLE_ROW_H);
+                let (label, rest) = row.take_left(mg::VARIABLE_NAME_W);
                 f.label(
-                    label.inset_xy(6.0, 0.0),
+                    label.inset_xy(mg::VARIABLE_NAME_INSET, 0.0),
                     &name,
-                    Style::new(15.0, 600.0),
+                    style(txt::GRAPH_VARIABLE),
                     t.fg,
                     Align::Start,
                 );
-                let (value, slider) = rest.take_right(84.0);
+                let (value, slider) = rest.take_right(mg::VARIABLE_VALUE_W);
                 let span = (v.max() - v.min()).max(1e-12);
                 let frac = ((v.value() - v.min()) / span) as f32;
                 f.slider(
@@ -1174,14 +1211,14 @@ impl GraphPage {
                 if let Some(e) = self.vars.get(&name) {
                     f.text_field(
                         var_field(&name),
-                        value.inset_xy(2.0, 2.0),
+                        value.inset_xy(mg::VARIABLE_FIELD_INSET, mg::VARIABLE_FIELD_INSET),
                         e,
                         "0",
                         false,
                         &format!("Value of {name}"),
                     );
                 }
-                y += 40.0;
+                y += mg::VARIABLE_STEP;
             }
         }
         f.scroll_end(sid, r, y + off - r.y);
@@ -1192,10 +1229,10 @@ impl GraphPage {
         let Side::Analysis { title, result, .. } = &self.side else {
             return;
         };
-        let (head, body) = r.take_top(40.0);
+        let (head, body) = r.take_top(mg::ANALYSIS_HEAD_H);
         f.button(
             id("an-back"),
-            head.take_left(190.0).0,
+            head.take_left(mg::ANALYSIS_BACK_W).0,
             "‹  Function analysis",
             STRONG,
             msg(Msg::Back),
@@ -1207,86 +1244,132 @@ impl GraphPage {
         let off = f.scroll_begin(sid, body, "Function analysis");
         let mut y = body.y - off;
         f.label_fit(
-            Rect::new(body.x + 6.0, y, body.w - 12.0, 30.0),
+            Rect::new(
+                body.x + mg::ANALYSIS_TITLE_X,
+                y,
+                body.w - mg::ANALYSIS_TITLE_X * 2.0,
+                mg::ANALYSIS_TITLE_H,
+            ),
             title,
-            Style::new(18.0, 600.0),
-            10.0,
+            style(txt::ANALYSIS_TITLE),
+            txt::ANALYSIS_TITLE_MIN_SIZE,
             t.fg,
             Align::Start,
         );
-        y += 36.0;
+        y += mg::ANALYSIS_TITLE_STEP;
         match result {
             None => {
                 f.label(
-                    Rect::new(body.x + 6.0, y, body.w, 24.0),
+                    Rect::new(
+                        body.x + mg::ANALYSIS_TITLE_X,
+                        y,
+                        body.w,
+                        mg::ANALYSIS_NOTE_H,
+                    ),
                     "Analyzing…",
                     SMALL,
                     t.fg_dim,
                     Align::Start,
                 );
-                y += 28.0;
+                y += mg::ANALYSIS_NOTE_STEP;
             }
             Some(features) => {
                 if let Some(m) = features.analysis_error_string() {
-                    for l in f.wrap(m, body.w - 12.0, SMALL) {
+                    for l in f.wrap(m, body.w - mg::ANALYSIS_TITLE_X * 2.0, SMALL) {
                         f.label(
-                            Rect::new(body.x + 6.0, y, body.w, 20.0),
+                            Rect::new(
+                                body.x + mg::ANALYSIS_TITLE_X,
+                                y,
+                                body.w,
+                                mg::ANALYSIS_ERROR_STEP,
+                            ),
                             &l,
                             SMALL,
                             t.fg_dim,
                             Align::Start,
                         );
-                        y += 20.0;
+                        y += mg::ANALYSIS_ERROR_STEP;
                     }
                 } else {
                     for (k, item) in features.items().iter().enumerate() {
                         let top = y;
                         if !item.title.is_empty() {
                             f.label(
-                                Rect::new(body.x + 12.0, y + 6.0, body.w - 24.0, 20.0),
+                                Rect::new(
+                                    body.x + mg::ANALYSIS_CARD_X,
+                                    y + mg::ANALYSIS_CARD_TOP,
+                                    body.w - mg::ANALYSIS_CARD_X * 2.0,
+                                    mg::ANALYSIS_CARD_TITLE_H,
+                                ),
                                 &item.title,
                                 CAPTION,
                                 t.fg_dim,
                                 Align::Start,
                             );
-                            y += 26.0;
+                            y += mg::ANALYSIS_CARD_TITLE_STEP;
                         }
                         for v in &item.display_items {
-                            for l in f.wrap(v, body.w - 24.0, BODY) {
+                            for l in f.wrap(v, body.w - mg::ANALYSIS_CARD_X * 2.0, BODY) {
                                 f.label(
-                                    Rect::new(body.x + 12.0, y, body.w - 24.0, 22.0),
+                                    Rect::new(
+                                        body.x + mg::ANALYSIS_CARD_X,
+                                        y,
+                                        body.w - mg::ANALYSIS_CARD_X * 2.0,
+                                        mg::ANALYSIS_VALUE_STEP,
+                                    ),
                                     &l,
                                     if item.is_text { SMALL } else { BODY },
                                     t.fg,
                                     Align::Start,
                                 );
-                                y += 22.0;
+                                y += mg::ANALYSIS_VALUE_STEP;
                             }
                         }
                         for g in &item.grid_items {
-                            let row = Rect::new(body.x + 12.0, y, body.w - 24.0, 22.0);
-                            let (a, b) = row.take_left(row.w * 0.6);
+                            let row = Rect::new(
+                                body.x + mg::ANALYSIS_CARD_X,
+                                y,
+                                body.w - mg::ANALYSIS_CARD_X * 2.0,
+                                mg::ANALYSIS_VALUE_STEP,
+                            );
+                            let (a, b) = row.take_left(row.w * mg::ANALYSIS_GRID_SHARE);
                             f.label_fit(a, &g.expression, BODY, 9.0, t.fg, Align::Start);
                             f.label_fit(b, &g.direction, SMALL, 9.0, t.fg_dim, Align::Start);
-                            y += 22.0;
+                            y += mg::ANALYSIS_VALUE_STEP;
                         }
                         // A list proven correct but maybe not complete
                         // says so.
                         if !item.note.is_empty() {
-                            for l in f.wrap(&item.note, body.w - 24.0, CAPTION) {
+                            for l in f.wrap(&item.note, body.w - mg::ANALYSIS_CARD_X * 2.0, CAPTION)
+                            {
                                 f.label(
-                                    Rect::new(body.x + 12.0, y, body.w - 24.0, 18.0),
+                                    Rect::new(
+                                        body.x + mg::ANALYSIS_CARD_X,
+                                        y,
+                                        body.w - mg::ANALYSIS_CARD_X * 2.0,
+                                        mg::ANALYSIS_CARD_NOTE_STEP,
+                                    ),
                                     &l,
                                     CAPTION,
                                     t.fg_dim,
                                     Align::Start,
                                 );
-                                y += 18.0;
+                                y += mg::ANALYSIS_CARD_NOTE_STEP;
                             }
                         }
-                        y += 8.0;
-                        let card = Rect::new(body.x + 4.0, top, body.w - 8.0, y - top);
-                        f.cv.rounded_border(card, 8.0, t.border, 1.0);
+                        y += mg::ANALYSIS_CARD_BOTTOM;
+                        let card = Rect::new(
+                            body.x + mg::ANALYSIS_CARD_INSET,
+                            top,
+                            body.w - mg::ANALYSIS_CARD_INSET * 2.0,
+                            y - top,
+                        );
+                        f.cv.rounded_border(
+                            card,
+                            shape::ANALYSIS_CARD_RADIUS,
+                            t.border,
+                            shape::BORDER,
+                        );
                         // Everything the card shows, monotonicity rows
                         // included; the untitled footer card is a note.
                         let title = if item.title.is_empty() {
@@ -1311,7 +1394,7 @@ impl GraphPage {
                             }
                             n.value = Some(value);
                         }
-                        y += 6.0;
+                        y += mg::ANALYSIS_CARD_GAP;
                     }
                 }
             }
@@ -1325,7 +1408,7 @@ impl GraphPage {
         f.group(id("graph-pad"), accesskit::Role::Group, "Keypad", r);
         for (ri, row) in GRAPH_PAD.iter().enumerate() {
             for (ci, (label, insert)) in row.iter().enumerate() {
-                let cell = r.cell(rows, cols, ri, ci, 3.0);
+                let cell = r.cell(rows, cols, ri, ci, mg::PAD_GAP);
                 let look = if label.chars().all(|c| c.is_ascii_digit() || c == '.') {
                     ui::KeyLook::Number
                 } else {
@@ -1384,39 +1467,41 @@ impl GraphPage {
         }
         self.replot();
         let Some(vp) = self.vp else { return };
-        f.cv.rounded(r, 12.0, t.surface);
+        f.cv.rounded(r, mg::CANVAS_RADIUS, t.surface);
         f.push_clip(r);
         let to_sx = |x: f64| r.x + vp.to_screen(x, 0.0).0 as f32;
         let to_sy = |y: f64| r.y + vp.to_screen(0.0, y).1 as f32;
         let grid = Grid::for_viewport(&vp);
-        let minor = t.fg.alpha(if t.dark { 0.05 } else { 0.06 });
-        let major = t.fg.alpha(if t.dark { 0.11 } else { 0.13 });
+        let (dark, light) = mg::GRID_MINOR_ALPHA;
+        let minor = t.fg.alpha(if t.dark { dark } else { light });
+        let (dark, light) = mg::GRID_MAJOR_ALPHA;
+        let major = t.fg.alpha(if t.dark { dark } else { light });
         for x in &grid.x.minor {
             let sx = to_sx(*x);
-            f.cv.line(sx, r.y, sx, r.bottom(), minor, 1.0);
+            f.cv.line(sx, r.y, sx, r.bottom(), minor, mg::GRID_WIDTH);
         }
         for y in &grid.y.minor {
             let sy = to_sy(*y);
-            f.cv.line(r.x, sy, r.right(), sy, minor, 1.0);
+            f.cv.line(r.x, sy, r.right(), sy, minor, mg::GRID_WIDTH);
         }
         for tk in &grid.x.major {
             let sx = to_sx(tk.value);
-            f.cv.line(sx, r.y, sx, r.bottom(), major, 1.0);
+            f.cv.line(sx, r.y, sx, r.bottom(), major, mg::GRID_WIDTH);
         }
         for tk in &grid.y.major {
             let sy = to_sy(tk.value);
-            f.cv.line(r.x, sy, r.right(), sy, major, 1.0);
+            f.cv.line(r.x, sy, r.right(), sy, major, mg::GRID_WIDTH);
         }
-        let axis = t.fg.alpha(0.55);
+        let axis = t.fg.alpha(mg::AXIS_ALPHA);
         let (ax, ay) = (to_sx(0.0), to_sy(0.0));
         if (r.x..=r.right()).contains(&ax) {
-            f.cv.line(ax, r.y, ax, r.bottom(), axis, 1.3);
+            f.cv.line(ax, r.y, ax, r.bottom(), axis, mg::AXIS_WIDTH);
         }
         if (r.y..=r.bottom()).contains(&ay) {
-            f.cv.line(r.x, ay, r.right(), ay, axis, 1.3);
+            f.cv.line(r.x, ay, r.right(), ay, axis, mg::AXIS_WIDTH);
         }
         let label_c = t.fg_dim;
-        let st = Style::new(11.0, 400.0);
+        let st = style(txt::CANVAS_LABEL);
         let ly = ay.clamp(r.y + 4.0, r.bottom() - 18.0);
         for tk in &grid.x.major {
             if tk.value.abs() < 1e-12 {
@@ -1480,7 +1565,7 @@ impl GraphPage {
                     pts(&mut pb, poly, true);
                 }
                 if let Some(p) = pb.finish() {
-                    f.cv.fill_path(&p, color.alpha(0.18));
+                    f.cv.fill_path(&p, color.alpha(mg::FILL_OPACITY));
                 }
             }
             let mut pb = PathBuilder::new();
@@ -1518,24 +1603,39 @@ impl GraphPage {
                 .map(|c| c.1)
                 .unwrap_or(t.accent);
             let (sx, sy) = (r.x + tp.screen_x as f32, r.y + tp.screen_y as f32);
-            f.cv.line(sx, r.y, sx, r.bottom(), color.alpha(0.45), 1.0);
-            f.cv.line(r.x, sy, r.right(), sy, color.alpha(0.45), 1.0);
-            let rad = graphing::graph::trace_point_radius(self.line_width) as f32 + 2.0;
-            f.cv.circle(sx, sy, rad + 1.5, t.surface);
+            f.cv.line(
+                sx,
+                r.y,
+                sx,
+                r.bottom(),
+                color.alpha(mg::HAIR_OPACITY),
+                mg::HAIR_WIDTH,
+            );
+            f.cv.line(
+                r.x,
+                sy,
+                r.right(),
+                sy,
+                color.alpha(mg::HAIR_OPACITY),
+                mg::HAIR_WIDTH,
+            );
+            let rad =
+                graphing::graph::trace_point_radius(self.line_width) as f32 + mg::TRACE_DOT_ADD;
+            f.cv.circle(sx, sy, rad + mg::TRACE_HALO_GROW, t.surface);
             f.cv.circle(sx, sy, rad, color);
             let text = tp.text();
             let line = f.layout(&text, SMALL);
-            let (bw, bh) = (line.width + 18.0, 28.0);
-            let mut bx = sx + 14.0;
-            let mut by = sy - bh - 14.0;
-            if bx + bw > r.right() - 6.0 {
-                bx = sx - bw - 14.0;
+            let (bw, bh) = (line.width + mg::BUBBLE_PAD, mg::BUBBLE_H);
+            let mut bx = sx + mg::BUBBLE_OFFSET;
+            let mut by = sy - bh - mg::BUBBLE_OFFSET;
+            if bx + bw > r.right() - mg::BUBBLE_EDGE {
+                bx = sx - bw - mg::BUBBLE_OFFSET;
             }
-            if by < r.y + 6.0 {
-                by = sy + 14.0;
+            if by < r.y + mg::BUBBLE_EDGE {
+                by = sy + mg::BUBBLE_OFFSET;
             }
             let bubble = Rect::new(bx, by, bw, bh);
-            f.surface(bubble, 8.0);
+            f.surface(bubble, shape::BUBBLE_RADIUS);
             f.draw_line(&line, bubble, Align::Center, t.fg);
             // Read as a screen reader should: "≈" as "approximately".
             let spoken = graphing::trace::spoken(&text);
@@ -1544,7 +1644,7 @@ impl GraphPage {
             }
         }
         f.pop_clip();
-        f.cv.rounded_border(r, 12.0, t.border, 1.0);
+        f.cv.rounded_border(r, mg::CANVAS_RADIUS, t.border, shape::BORDER);
         if !controls {
             return;
         }
@@ -1553,8 +1653,17 @@ impl GraphPage {
             n.focusable = true;
         }
         // Toolbar.
-        let tb = Rect::new(r.right() - 46.0, r.y + 8.0, 38.0, 6.0 * 36.0 + 8.0);
-        f.cv.rounded(tb, 10.0, t.surface2.alpha(0.94));
+        let tb = Rect::new(
+            r.right() - mg::TOOLBAR_RIGHT,
+            r.y + mg::TOOLBAR_TOP,
+            mg::TOOLBAR_W,
+            mg::TOOLBAR_BUTTONS * mg::TOOLBAR_STEP + mg::TOOLBAR_PAD_Y * 2.0,
+        );
+        f.cv.rounded(
+            tb,
+            shape::TOOLBAR_RADIUS,
+            t.surface2.alpha(mg::TOOLBAR_FILL_ALPHA),
+        );
         let items: [(&'static str, &str, Msg, Option<bool>); 6] = [
             (
                 appcore::icons::ZOOM_IN,
@@ -1594,7 +1703,12 @@ impl GraphPage {
             ),
         ];
         for (k, (icon, name, m, on)) in items.into_iter().enumerate() {
-            let b = Rect::new(tb.x + 2.0, tb.y + 4.0 + k as f32 * 36.0, 34.0, 34.0);
+            let b = Rect::new(
+                tb.x + mg::TOOLBAR_PAD_X,
+                tb.y + mg::TOOLBAR_PAD_Y + k as f32 * mg::TOOLBAR_STEP,
+                mg::TOOLBAR_BUTTON,
+                mg::TOOLBAR_BUTTON,
+            );
             f.icon_button(id(("gtool", k)), b, icon, name, msg(m), true, on);
         }
     }
@@ -1611,12 +1725,12 @@ impl GraphPage {
                     .find(|h| h.id == id(("eq-style", eid)))
                     .map(|h| h.rect)
                     .unwrap_or(area);
-                let (w, h) = (264.0, 150.0);
+                let (w, h) = mg::STYLE_POPUP;
                 let x = (anchor.right() - w).clamp(area.x + 8.0, area.right() - w - 8.0);
                 let y = (anchor.bottom() + 4.0).min(area.bottom() - h - 8.0);
                 let card = Rect::new(x, y, w, h);
-                f.card(card, 12.0);
-                let inner = card.inset(12.0);
+                f.card(card, shape::POPUP_RADIUS);
+                let inner = card.inset(mg::STYLE_PAD);
                 f.label(
                     inner.take_top(20.0).0,
                     "Color",
@@ -1680,12 +1794,12 @@ impl GraphPage {
                     .find(|h| h.id == id(("gtool", 5usize)))
                     .map(|h| h.rect)
                     .unwrap_or(area);
-                let (w, h) = (300.0, 300.0);
+                let (w, h) = mg::OPTIONS_POPUP;
                 let x = (anchor.x - w - 6.0).max(area.x + 8.0);
                 let y = anchor.y.min(area.bottom() - h - 8.0).max(area.y + 8.0);
                 let card = Rect::new(x, y, w, h);
-                f.card(card, 12.0);
-                let inner = card.inset(12.0);
+                f.card(card, shape::POPUP_RADIUS);
+                let inner = card.inset(mg::OPTIONS_PAD);
                 f.label(
                     inner.take_top(20.0).0,
                     "Window",

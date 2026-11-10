@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use appcore::graph::NumberPrecision;
 use appcore::history;
 use appcore::input::{self, Focus, FocusKey, WindowAction};
+use appcore::metrics::{controls as ctl, nav as mnav, shape, toast as mtoast, window as wm};
 use appcore::modes::{Group, PageKind, ViewMode};
 use appcore::settings::{HasPages, PageStates};
 use appcore::{Key, KeyPress, Named};
@@ -34,7 +35,7 @@ use crate::theme::Theme;
 use crate::touch;
 use crate::ui::{
     self, Align, BODY, CAPTION, Frame, Hit, Icons, Input, Node, SMALL, STRONG, Scroll, Sense,
-    Style, TITLE, id,
+    TITLE, id,
 };
 
 pub const APP_ID: &str = "io.github.Go08er.DontGlazeMyNumbersBaby";
@@ -42,9 +43,9 @@ pub const APP_NAME: &str = "DGMNB";
 /// Directory name under the XDG config/cache dirs.
 pub const DATA_DIR: &str = "dgmnb";
 
-const HEADER_H: f32 = 46.0;
-const RESIZE_EDGE: f32 = 6.0;
-const NAV_W: f32 = 280.0;
+const HEADER_H: f32 = wm::HEADER_H;
+const RESIZE_EDGE: f32 = wm::RESIZE_EDGE;
+const NAV_W: f32 = mnav::WIDTH;
 
 mod glyph {
     pub const MINIMIZE: &str = "M6 12.5h12";
@@ -80,8 +81,8 @@ impl Default for Settings {
             system_accent: true,
             literal_digits: NumberPrecision::DEFAULT,
             mode: "standard".into(),
-            width: 360,
-            height: 600,
+            width: wm::DEFAULT_WIDTH,
+            height: wm::DEFAULT_HEIGHT,
             pages: Default::default(),
         }
     }
@@ -811,9 +812,9 @@ impl App {
         // Toasts.
         if let Some((msg, _)) = self.toasts.last() {
             let line = f.layout(msg, BODY);
-            let tw = line.width + 32.0;
-            let r = Rect::new((w - tw) / 2.0, h - 64.0, tw, 38.0);
-            f.cv.rounded(r, 19.0, theme.fg.alpha(0.92));
+            let tw = line.width + mtoast::PAD_X * 2.0;
+            let r = Rect::new((w - tw) / 2.0, h - mtoast::BOTTOM, tw, mtoast::MIN_HEIGHT);
+            f.cv.rounded(r, shape::TOAST_RADIUS, theme.fg.alpha(mtoast::ALPHA));
             f.draw_line(&line, r, Align::Center, theme.bg);
             if let Some(n) = f.node(id("toast"), accesskit::Role::Status, msg, r) {
                 n.live = true;
@@ -1516,7 +1517,7 @@ impl App {
             && !kp.alt
             && let Some(sid) = self.focused_scroll_view()
         {
-            const LINE: f32 = 40.0;
+            const LINE: f32 = wm::SCROLL_LINE;
             self.scroll_set(sid, |s| match n {
                 Named::Up => s.offset - LINE,
                 Named::Down => s.offset + LINE,
@@ -1821,14 +1822,14 @@ impl ApplicationHandler<UserEvent> for App {
             window_size(
                 d.width,
                 d.height,
-                (300.0, 400.0),
+                wm::MIN_SIZE,
                 screens(el.available_monitors()),
             )
         };
         let attrs = Window::default_attributes()
             .with_title(APP_NAME)
             .with_inner_size(size)
-            .with_min_inner_size(LogicalSize::new(300.0, 400.0))
+            .with_min_inner_size(LogicalSize::new(wm::MIN_SIZE.0, wm::MIN_SIZE.1))
             .with_decorations(false)
             .with_visible(false);
         let attrs =
@@ -2117,7 +2118,7 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 };
                 let dy = match delta {
-                    MouseScrollDelta::LineDelta(_, l) => l * 48.0,
+                    MouseScrollDelta::LineDelta(_, l) => l * wm::WHEEL_LINE,
                     MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => y as f32 / scale,
                 };
                 self.wheel(dy, x, y);
@@ -2169,13 +2170,13 @@ pub(crate) fn draw_header(
     graph: Option<&GraphPage>,
 ) {
     let t = f.t;
-    let r = r.inset_xy(6.0, 5.0);
+    let r = r.inset_xy(wm::HEADER_PAD_X, wm::HEADER_PAD_Y);
     let mut x = r.x;
     let btn =
         |f: &mut Frame, x: &mut f32, d: &'static str, name: &str, msg: Msg, on: Option<bool>| {
-            let b = Rect::new(*x, r.y, 36.0, 36.0);
+            let b = Rect::new(*x, r.y, ctl::ICON_BUTTON, ctl::ICON_BUTTON);
             f.icon_button(id(("hdr", name)), b, d, name, msg, true, on);
-            *x += 38.0;
+            *x += wm::HEADER_BUTTON_STEP;
         };
     if compact {
         btn(
@@ -2189,7 +2190,12 @@ pub(crate) fn draw_header(
     } else if settings {
         btn(f, &mut x, glyph::BACK, "Back", Msg::Settings(false), None);
         f.label(
-            Rect::new(x + 6.0, r.y, 200.0, 36.0),
+            Rect::new(
+                x + wm::HEADER_TITLE_GAP,
+                r.y,
+                wm::HEADER_SETTINGS_TITLE_W,
+                ctl::ICON_BUTTON,
+            ),
             "Settings",
             TITLE,
             t.fg,
@@ -2205,7 +2211,12 @@ pub(crate) fn draw_header(
             None,
         );
         f.label(
-            Rect::new(x + 6.0, r.y, 220.0, 36.0),
+            Rect::new(
+                x + wm::HEADER_TITLE_GAP,
+                r.y,
+                wm::HEADER_TITLE_W,
+                ctl::ICON_BUTTON,
+            ),
             mode.title(),
             TITLE,
             t.fg,
@@ -2216,10 +2227,10 @@ pub(crate) fn draw_header(
     let mut rx = r.right();
     let rbtn =
         |f: &mut Frame, rx: &mut f32, d: &'static str, name: &str, msg: Msg, on: Option<bool>| {
-            *rx -= 36.0;
-            let b = Rect::new(*rx, r.y, 36.0, 36.0);
+            *rx -= ctl::ICON_BUTTON;
+            let b = Rect::new(*rx, r.y, ctl::ICON_BUTTON, ctl::ICON_BUTTON);
             f.icon_button(id(("hdr", name)), b, d, name, msg, true, on);
-            *rx -= 2.0;
+            *rx -= wm::HEADER_BUTTON_GAP;
         };
     // The window controls aren't focused by a click (GTK's can't take the
     // focus): Enter after maximizing mustn't restore.
@@ -2242,7 +2253,7 @@ pub(crate) fn draw_header(
         f.no_focus_on_click(id(("hdr", max)));
         rbtn(f, &mut rx, glyph::MINIMIZE, "Minimize", Msg::Minimize, None);
         f.no_focus_on_click(id(("hdr", "Minimize")));
-        rx -= 8.0;
+        rx -= wm::HEADER_CONTROLS_GAP;
     }
     if !settings && !compact {
         match mode {
@@ -2314,17 +2325,20 @@ pub(crate) fn draw_header(
 pub(crate) fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool) {
     let t = f.t;
     f.scrim(Msg::Nav(false), true);
-    let panel = Rect::new(0.0, 0.0, NAV_W.min(full.w - 40.0), full.h);
+    let panel = Rect::new(0.0, 0.0, NAV_W.min(full.w - mnav::MIN_UNCOVERED), full.h);
     f.cv.fill_rect(panel, t.bg);
     // Blank parts of the drawer don't close it.
     f.hit(id("nav-panel"), panel, Sense::Click, None, false);
-    f.cv.fill_rect(Rect::new(panel.right() - 1.0, 0.0, 1.0, full.h), t.border);
+    f.cv.fill_rect(
+        Rect::new(panel.right() - mnav::EDGE, 0.0, mnav::EDGE, full.h),
+        t.border,
+    );
     f.group(id("nav"), accesskit::Role::Navigation, "Navigation", panel);
     let (head, rest) = panel.take_top(HEADER_H);
-    let head = head.inset_xy(6.0, 5.0);
+    let head = head.inset_xy(wm::HEADER_PAD_X, wm::HEADER_PAD_Y);
     f.icon_button(
         id("nav-close"),
-        Rect::new(head.x, head.y, 36.0, 36.0),
+        Rect::new(head.x, head.y, ctl::ICON_BUTTON, ctl::ICON_BUTTON),
         appcore::icons::MENU,
         "Close Navigation",
         Msg::Nav(false),
@@ -2332,17 +2346,22 @@ pub(crate) fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool
         None,
     );
     f.label(
-        Rect::new(head.x + 48.0, head.y, 200.0, 36.0),
+        Rect::new(
+            head.x + mnav::TITLE_X,
+            head.y,
+            mnav::TITLE_W,
+            ctl::ICON_BUTTON,
+        ),
         APP_NAME,
         TITLE,
         t.fg,
         Align::Start,
     );
-    let (list, foot) = rest.take_bottom(52.0);
+    let (list, foot) = rest.take_bottom(mnav::FOOT_H);
     let (foot, list) = (list, foot);
     let sid = id("nav-scroll");
     let off = f.scroll_begin(sid, list, "Modes");
-    let mut y = list.y - off + 4.0;
+    let mut y = list.y - off + mnav::LIST_PAD;
     let mut group = None;
     for m in ViewMode::ALL {
         if group != Some(m.group()) {
@@ -2351,7 +2370,7 @@ pub(crate) fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool
                 Group::Calculator => "Calculator",
                 Group::Converter => "Converter",
             };
-            let header = Rect::new(list.x + 18.0, y, 200.0, 28.0);
+            let header = Rect::new(list.x + mnav::HEADER_X, y, mnav::HEADER_W, mnav::HEADER_H);
             f.label(header, label, CAPTION, t.fg_dim, Align::Start);
             // Named as upstream's NavCategoryGroup, as GMNB's.
             f.node(
@@ -2363,9 +2382,14 @@ pub(crate) fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool
                 },
                 header,
             );
-            y += 28.0;
+            y += mnav::HEADER_H;
         }
-        let row = Rect::new(list.x + 6.0, y, list.w - 12.0, 40.0);
+        let row = Rect::new(
+            list.x + mnav::ROW_MARGIN_X,
+            y,
+            list.w - mnav::ROW_MARGIN_X * 2.0,
+            mnav::ROW_H,
+        );
         let sel = m == mode && !settings;
         // Named as upstream's NavCategory, the mode and its group
         // ("Standard Calculator"), with its shortcut, as GMNB's.
@@ -2386,23 +2410,28 @@ pub(crate) fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool
             node.description = Some((format!("{} (Alt+{n})", m.title()), None));
         }
         f.icon(
-            Rect::new(row.x + 8.0, row.y, 28.0, row.h),
+            Rect::new(row.x + mnav::ROW_ICON_X, row.y, mnav::ROW_ICON_BOX, row.h),
             m.icon(),
-            18.0,
+            mnav::ROW_ICON,
             if sel { t.accent_text } else { t.fg },
         );
         f.label(
-            Rect::new(row.x + 44.0, row.y, row.w - 50.0, row.h),
+            Rect::new(
+                row.x + mnav::ROW_LABEL_X,
+                row.y,
+                row.w - mnav::ROW_LABEL_TRIM,
+                row.h,
+            ),
             m.title(),
             BODY,
             if sel { t.accent_text } else { t.fg },
             Align::Start,
         );
-        y += 42.0;
+        y += mnav::ROW_STEP;
     }
-    let content = y + off - list.y + 4.0;
+    let content = y + off - list.y + mnav::LIST_PAD;
     f.scroll_end(sid, list, content);
-    let row = foot.inset_xy(6.0, 6.0);
+    let row = foot.inset_xy(mnav::FOOT_INSET, mnav::FOOT_INSET);
     f.row(
         id("nav-settings"),
         row,
@@ -2411,13 +2440,18 @@ pub(crate) fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool
         "Settings",
     );
     f.icon(
-        Rect::new(row.x + 8.0, row.y, 28.0, row.h),
+        Rect::new(row.x + mnav::ROW_ICON_X, row.y, mnav::ROW_ICON_BOX, row.h),
         appcore::icons::SETTINGS,
-        18.0,
+        mnav::ROW_ICON,
         t.fg,
     );
     f.label(
-        Rect::new(row.x + 44.0, row.y, row.w - 50.0, row.h),
+        Rect::new(
+            row.x + mnav::ROW_LABEL_X,
+            row.y,
+            row.w - mnav::ROW_LABEL_TRIM,
+            row.h,
+        ),
         "Settings",
         BODY,
         t.fg,
@@ -2463,7 +2497,7 @@ pub(crate) fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: De
     let line_h = 20.0;
     let row_h = (lines.len() as f32 * line_h + 14.0).max(34.0);
     let card = Rect::new(x, y, col_w, 82.0 + row_h);
-    f.cv.rounded(card, 12.0, t.surface);
+    f.cv.rounded(card, shape::CARD_RADIUS, t.surface);
     let style = Rect::new(x + 14.0, y + 8.0, col_w, 24.0);
     f.label(style, "Style", SMALL, t.fg_dim, Align::Start);
     text(f, "style", "Style", style);
@@ -2495,13 +2529,26 @@ pub(crate) fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: De
             Align::Start,
         );
     }
-    let sw = Rect::new(row.right() - 52.0, row.cy() - 12.0, 46.0, 24.0);
+    let sw = Rect::new(
+        row.right() - 52.0,
+        row.cy() - ctl::SWITCH_H / 2.0,
+        ctl::SWITCH_W,
+        ctl::SWITCH_H,
+    );
     let on = s.system_accent && accent_ok;
-    f.cv.rounded(sw, 12.0, if on { t.accent } else { t.border });
+    f.cv.rounded(
+        sw,
+        ctl::SWITCH_H / 2.0,
+        if on { t.accent } else { t.border },
+    );
     f.cv.circle(
-        if on { sw.right() - 12.0 } else { sw.x + 12.0 },
+        if on {
+            sw.right() - ctl::SWITCH_KNOB_INSET
+        } else {
+            sw.x + ctl::SWITCH_KNOB_INSET
+        },
         sw.cy(),
-        9.0,
+        ctl::SWITCH_KNOB_RADIUS,
         if on { t.on_accent } else { t.surface },
     );
     let sid2 = id("accent-switch");
@@ -2545,7 +2592,7 @@ pub(crate) fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: De
     const SITE: &str = "https://github.com/Go08er/GlazeMyNumbersBaby";
     let text_h = {
         let lines = f.wrap(ABOUT, col_w - 28.0, SMALL);
-        lines.len() as f32 * (SMALL.size * 1.4).round()
+        lines.len() as f32 * (SMALL.size * appcore::metrics::text::PARAGRAPH_LINE).round()
     };
     // The buttons flow onto further rows when the column is narrow.
     let buttons = [
@@ -2570,10 +2617,16 @@ pub(crate) fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: De
         bx += w + 8.0;
     }
     let card = Rect::new(x, y, col_w, by + 34.0 + 28.0);
-    f.cv.rounded(card, 12.0, t.surface);
+    f.cv.rounded(card, shape::CARD_RADIUS, t.surface);
     let inner = card.inset(14.0);
     let r = Rect::new(inner.x, inner.y, inner.w, 28.0);
-    f.label(r, "DGMNB", Style::new(22.0, 700.0), t.fg, Align::Start);
+    f.label(
+        r,
+        "DGMNB",
+        ui::style(appcore::metrics::text::ABOUT_TITLE),
+        t.fg,
+        Align::Start,
+    );
     text(f, "name", "DGMNB", r);
     let r = Rect::new(inner.x, inner.y + 28.0, inner.w, 22.0);
     let full = "Don't Glaze My Numbers, Baby";
@@ -2663,7 +2716,8 @@ fn precision_fraction(position: f32) -> f32 {
 pub(crate) fn precision_at(r: Rect, x: f32) -> NumberPrecision {
     let first = f32::from(*NumberPrecision::POSITIONS.start());
     let last = f32::from(*NumberPrecision::POSITIONS.end());
-    let frac = ((x - r.x - 8.0) / (r.w - 16.0).max(1.0)).clamp(0.0, 1.0);
+    let frac =
+        ((x - r.x - ctl::SLIDER_INSET) / (r.w - ctl::SLIDER_INSET * 2.0).max(1.0)).clamp(0.0, 1.0);
     NumberPrecision::at_position(f64::from(first + frac * (last - first)))
 }
 
@@ -2694,11 +2748,11 @@ fn draw_precision(f: &mut Frame, r: Rect, p: NumberPrecision) -> f32 {
     use appcore::graph::NUMBER_PRECISION_HELP as HELP;
     let t = f.t;
     let inner_w = r.w - 28.0;
-    let line = (SMALL.size * 1.4).round();
+    let line = (SMALL.size * appcore::metrics::text::PARAGRAPH_LINE).round();
     let help_h = f.wrap(HELP, inner_w, SMALL).len() as f32 * line;
     let h = 14.0 + 24.0 + help_h + 12.0 + 18.0 + 30.0 + 18.0 + 22.0 + 12.0;
     let card = Rect::new(r.x, r.y, r.w, h);
-    f.cv.rounded(card, 12.0, t.surface);
+    f.cv.rounded(card, shape::CARD_RADIUS, t.surface);
     let (x, mut y) = (r.x + 14.0, r.y + 14.0);
     let title = Rect::new(x, y, inner_w, 24.0);
     f.label(title, "Number precision", BODY, t.fg, Align::Start);
