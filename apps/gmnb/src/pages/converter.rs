@@ -17,7 +17,7 @@ use gtk::{gio, glib};
 use unitconv::{ConverterMode, NetworkAccessBehavior, UnitConverterViewModel};
 
 use super::{Ctx, Page};
-use crate::widgets::fit::{FitLabel, Prefix, SizeBin, pango_font};
+use crate::widgets::fit::{FitLabel, Prefix, SizeBin, Texts, pango_font};
 use crate::widgets::icon::{PathIcon, paths};
 use crate::widgets::keypad::Keypad;
 use appcore::KeyPress;
@@ -43,13 +43,15 @@ pub struct ConverterPage {
     f1: Field,
     f2: Field,
     supp: gtk::FlowBox,
-    supp_header: gtk::Label,
+    supp_header: FitLabel,
+    /// The page's lines of text, set in the style's fonts.
+    texts: Texts,
     /// The chips' sparkle (`converter.whimsy_icon`).
     whimsy_icon: Cell<bool>,
     currency_box: gtk::Box,
-    ratio: gtk::Label,
-    timestamp: gtk::Label,
-    status: gtk::Label,
+    ratio: FitLabel,
+    timestamp: FitLabel,
+    status: FitLabel,
     refresh: gtk::Button,
     spinner: adw::Spinner,
     keypad: Keypad,
@@ -257,10 +259,12 @@ impl ConverterPage {
         swap.set_margin_top(mc::SWAP_TOP as i32);
         swap.set_margin_bottom((mc::SWAP_STEP - mc::SWAP_TOP - ctl::ICON_BUTTON) as i32);
 
-        let supp_header = gtk::Label::new(Some("About equal to"));
+        let texts = Texts::default();
+        let supp_header = FitLabel::new();
+        supp_header.set_text("About equal to");
         supp_header.add_css_class("wc-conv-caption");
-        supp_header.set_xalign(0.0);
         supp_header.set_size_request(-1, mc::CAPTION_H as i32);
+        texts.add(&supp_header, "converter.caption", 1.0);
         supp_header.set_margin_bottom((mc::CAPTION_STEP - mc::CAPTION_H) as i32);
         let supp = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
@@ -271,17 +275,22 @@ impl ConverterPage {
             .css_classes(["wc-supp"])
             .build();
 
-        let line = |class: &str, height: f32| {
-            let l = gtk::Label::new(None);
+        let line = |class: &str, height: f32, path: &'static str, min: f32| {
+            let l = FitLabel::new();
             l.add_css_class(class);
-            l.set_xalign(0.0);
             l.set_size_request(-1, height as i32);
+            texts.add(&l, path, min);
             l
         };
-        let ratio = line("wc-ratio", mc::RATIO_H);
-        let timestamp = line("wc-timestamp", mc::TIMESTAMP_H);
-        let status = line("wc-status", mc::STATUS_H);
-        status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let ratio = line("wc-ratio", mc::RATIO_H, "converter.ratio", 1.0);
+        let timestamp = line("wc-timestamp", mc::TIMESTAMP_H, "converter.timestamp", 1.0);
+        let status = line(
+            "wc-status",
+            mc::STATUS_H,
+            "converter.caption",
+            txt::STATUS_MIN_SIZE,
+        );
+        status.set_hexpand(true);
         status.set_margin_bottom((mc::STATUS_STEP - mc::STATUS_H) as i32);
         let refresh = gtk::Button::builder()
             .label("Update rates")
@@ -345,6 +354,7 @@ impl ConverterPage {
             f2,
             supp,
             supp_header,
+            texts,
             whimsy_icon: Cell::new(false),
             currency_box,
             ratio,
@@ -381,6 +391,7 @@ impl ConverterPage {
                         swap_icon.set_style(icon.size, stroke);
                     }
                     p.whimsy_icon.set(style.flag("converter.whimsy_icon"));
+                    p.texts.apply(style);
                     for f in [&p.f1, &p.f2] {
                         f.value.set_halo(style.shadows("window.text_halo"));
                     }

@@ -1303,8 +1303,8 @@ button.wc-flyout-button {
 /* Laid out in Rust as DGMNB's page (pages/date.rs). The switch is a
    segmented control; the captions, the date buttons, the results. */
 
-/* text date.label label.wc-date-label */
-label.wc-date-label {
+/* text date.label fitlabel.wc-date-label */
+fitlabel.wc-date-label {
   color: var(--gmnb-date-label-color);
   font-family: var(--gmnb-date-label-font-family);
   font-size: var(--gmnb-date-label-font-size);
@@ -3074,8 +3074,8 @@ window.gmnb .wc-inert button.wc-swap:checked:disabled:not(.wc-off) pathicon {
 }
 /* end control */
 
-/* text converter.ratio label.wc-ratio */
-label.wc-ratio {
+/* text converter.ratio fitlabel.wc-ratio */
+fitlabel.wc-ratio {
   color: var(--gmnb-converter-ratio-color);
   font-family: var(--gmnb-converter-ratio-font-family);
   font-size: var(--gmnb-converter-ratio-font-size);
@@ -3089,8 +3089,8 @@ label.wc-ratio {
 }
 /* end text */
 
-/* text converter.timestamp label.wc-timestamp */
-label.wc-timestamp {
+/* text converter.timestamp fitlabel.wc-timestamp */
+fitlabel.wc-timestamp {
   color: var(--gmnb-converter-timestamp-color);
   font-family: var(--gmnb-converter-timestamp-font-family);
   font-size: var(--gmnb-converter-timestamp-font-size);
@@ -3104,8 +3104,8 @@ label.wc-timestamp {
 }
 /* end text */
 
-/* text converter.caption label.wc-status */
-label.wc-status {
+/* text converter.caption fitlabel.wc-status */
+fitlabel.wc-status {
   color: var(--gmnb-converter-caption-color);
   font-family: var(--gmnb-converter-caption-font-family);
   font-size: var(--gmnb-converter-caption-font-size);
@@ -3243,8 +3243,8 @@ window.gmnb .wc-inert button.wc-link:checked:disabled:not(.wc-off) {
 }
 /* end control */
 
-/* text converter.caption label.wc-conv-caption */
-label.wc-conv-caption {
+/* text converter.caption fitlabel.wc-conv-caption */
+fitlabel.wc-conv-caption {
   color: var(--gmnb-converter-caption-color);
   font-family: var(--gmnb-converter-caption-font-family);
   font-size: var(--gmnb-converter-caption-font-size);

@@ -1,15 +1,18 @@
-//! Two small pieces the pages lay out with as DGMNB does.
+//! The pieces the pages lay out and set their text with as DGMNB does.
 //!
 //! * [`FitLabel`]: one line of text in a style's font, shrunk to fit its
-//!   width (down to a least size) and set with its capitals centred
-//!   between its top and bottom, as DGMNB's `label_fit`. The date page's
-//!   results and the converter's values. Its colour and halo are the CSS
-//!   `color` and `text-shadow` it gets.
+//!   width (down to a least size) and set as DGMNB sets a line: its
+//!   capitals centred between its top and bottom on a whole pixel, each
+//!   glyph at the nearest quarter pixel, unhinted. The pages' results,
+//!   values, captions and keys. Its colour is the CSS `color` it gets; its
+//!   font and halo come from the style ([`Texts`]).
 //! * [`MaxWidth`]: a bin that gives its child the width it has, but no more
 //!   than a most, at its start (DGMNB's columns and buttons are
 //!   `w.min(MAX)` from the left; `AdwClamp` centres).
+//! * [`SizeBin`]: a bin that tells its size, for layouts that follow it.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use gmnb_theme::types::Font;
 use gtk::prelude::*;
@@ -269,9 +272,12 @@ impl FitLabel {
         self.imp().text.borrow().clone()
     }
 
+    /// The text, which is also its name to assistive technology (a
+    /// control that holds it names itself afterwards).
     pub fn set_text(&self, text: &str) {
         if *self.imp().text.borrow() != text {
             self.imp().text.replace(text.to_string());
+            self.update_property(&[gtk::accessible::Property::Label(text)]);
             self.queue_resize();
         }
     }
@@ -530,6 +536,39 @@ impl MaxWidth {
     pub fn set_max(&self, max: i32) {
         if self.imp().max.replace(max) != max {
             self.queue_resize();
+        }
+    }
+}
+
+/// A page's FitLabels and the style path each takes its font from: a Text
+/// (its font and halo) or a Control (its font, and the raised halo).
+#[derive(Clone, Default)]
+pub struct Texts(Rc<RefCell<Vec<(glib::WeakRef<FitLabel>, &'static str, f32)>>>);
+
+impl Texts {
+    /// `label` in `path`'s font, shrinking to fit down to `min` px.
+    pub fn add(&self, label: &FitLabel, path: &'static str, min: f32) {
+        self.0.borrow_mut().push((label.downgrade(), path, min));
+    }
+
+    pub fn apply(&self, style: &gmnb_theme::Style) {
+        use gmnb_theme::types::Value;
+        self.0.borrow_mut().retain(|(l, ..)| l.upgrade().is_some());
+        for (label, path, min) in self.0.borrow().iter() {
+            let Some(label) = label.upgrade() else {
+                continue;
+            };
+            match style.get(path) {
+                Some(Value::Text(t)) => {
+                    label.set_font(&t.font, *min);
+                    label.set_halo(&t.shadow);
+                }
+                Some(Value::Control(c)) => {
+                    label.set_font(&c.font, *min);
+                    label.set_halo(style.shadows("window.raised_text_halo"));
+                }
+                _ => {}
+            }
         }
     }
 }

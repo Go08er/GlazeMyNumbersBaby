@@ -17,7 +17,7 @@ use gtk::glib;
 
 use super::{Ctx, Page};
 use crate::widgets::day_grid::DayGrid;
-use crate::widgets::fit::{FitLabel, MaxWidth};
+use crate::widgets::fit::{Align, FitLabel, MaxWidth, Texts};
 use crate::widgets::icon::PathIcon;
 use appcore::modes::ViewMode;
 
@@ -103,7 +103,7 @@ impl DateButton {
     /// October 4, 2026"), as upstream's CalendarDatePicker reads its header
     /// and date. The menu button's inner toggle is what takes focus, so it
     /// gets the same relation.
-    fn labelled_by(&self, caption: &gtk::Label) {
+    fn labelled_by(&self, caption: &FitLabel) {
         let by: [&gtk::Accessible; 2] = [caption.upcast_ref(), self.label.upcast_ref()];
         let relation = [gtk::accessible::Relation::LabelledBy(&by)];
         self.button.update_relation(&relation);
@@ -118,25 +118,39 @@ impl DateButton {
 }
 
 /// A caption ("From", "Difference"), in its 22 px line.
-fn section_label(text: &str) -> gtk::Label {
-    let l = gtk::Label::new(Some(text));
-    l.set_xalign(0.0);
+fn section_label(text: &str, texts: &Texts) -> FitLabel {
+    let l = FitLabel::new();
+    l.set_text(text);
     l.add_css_class("wc-date-label");
     l.set_size_request(-1, md::FIELD_LABEL_H as i32);
+    texts.add(&l, "date.label", 1.0);
     l
 }
 
-/// The labels in `w` cut at their end in a narrow window, rather than make
-/// the page wider than it is (DGMNB shrinks them).
-pub fn shrinkable_labels(w: &gtk::Widget) {
+/// A switch's choice: its label set as DGMNB sets it.
+fn toggle(name: &str, label: &str, texts: &Texts) -> adw::Toggle {
+    let text = FitLabel::drawn();
+    text.set_text(label);
+    text.set_align(Align::Center);
+    texts.add(
+        &text,
+        "segmented.item",
+        appcore::metrics::text::BUTTON_MIN_SIZE,
+    );
+    adw::Toggle::builder().name(name).child(&text).build()
+}
+
+/// The buttons among `w`'s children (a switch's choices).
+fn buttons(w: &gtk::Widget) -> impl Iterator<Item = gtk::Button> {
+    let mut all = Vec::new();
     let mut child = w.first_child();
     while let Some(c) = child {
-        if let Some(l) = c.downcast_ref::<gtk::Label>() {
-            l.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        }
-        shrinkable_labels(&c);
         child = c.next_sibling();
+        if let Ok(b) = c.downcast::<gtk::Button>() {
+            all.push(b);
+        }
     }
+    all.into_iter()
 }
 
 /// The space between a part and the next.
@@ -162,9 +176,9 @@ fn step_button(button: &gtk::Widget, icon: &str) -> Option<PathIcon> {
 }
 
 /// A year, month or day box: its caption over DGMNB's [−][box][+].
-fn spin(label: &str) -> (gtk::Box, gtk::SpinButton, Vec<PathIcon>) {
+fn spin(label: &str, texts: &Texts) -> (gtk::Box, gtk::SpinButton, Vec<PathIcon>) {
     let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let caption = section_label(label);
+    let caption = section_label(label, texts);
     below(&caption, md::OFFSET_LINE_TOP - md::OFFSET_LABEL_H);
     b.append(&caption);
     let spin = gtk::SpinButton::with_range(0.0, datecalc::MAX_OFFSET_VALUE as f64, 1.0);
@@ -248,20 +262,12 @@ impl DatePage {
             state.borrow_mut().set_to_date(datecalc::utc_midnight(d));
         }
 
+        // The page's texts, set in the style's fonts.
+        let texts = Texts::default();
         // DGMNB's switch: two halves, the chosen one lit.
         let mode = adw::ToggleGroup::new();
-        mode.add(
-            adw::Toggle::builder()
-                .name("diff")
-                .label(S::DATE_DIFFERENCE_OPTION)
-                .build(),
-        );
-        mode.add(
-            adw::Toggle::builder()
-                .name("add")
-                .label(S::DATE_ADD_SUBTRACT_OPTION)
-                .build(),
-        );
+        mode.add(toggle("diff", S::DATE_DIFFERENCE_OPTION, &texts));
+        mode.add(toggle("add", S::DATE_ADD_SUBTRACT_OPTION, &texts));
         mode.set_active_name(Some("diff"));
         mode.set_homogeneous(true);
         mode.set_hexpand(true);
@@ -270,18 +276,11 @@ impl DatePage {
         below(&mode, md::SWITCH_GAP);
         // Each reads as upstream's option ("Difference between dates"), as
         // DGMNB's do.
-        let mut options = [S::DATE_DIFFERENCE_OPTION, S::DATE_ADD_SUBTRACT_OPTION].into_iter();
-        let mut child = mode.first_child();
-        while let Some(c) = child {
-            if let Some(b) = c.downcast_ref::<gtk::Button>()
-                && let Some(name) = options.next()
-            {
-                crate::a11y::name_button(b, name);
-            }
-            child = c.next_sibling();
+        let options = [S::DATE_DIFFERENCE_OPTION, S::DATE_ADD_SUBTRACT_OPTION];
+        for (b, name) in buttons(mode.upcast_ref()).zip(options) {
+            crate::a11y::name_button(&b, name);
         }
         mode.add_css_class("wc-toggle-group");
-        shrinkable_labels(mode.upcast_ref());
         mode.upcast_ref::<gtk::Widget>()
             .update_property(&[gtk::accessible::Property::Label(
                 S::DATE_CALCULATION_OPTION_AUTOMATION_NAME,
@@ -301,18 +300,18 @@ impl DatePage {
         diff_days.set_size_request(-1, md::SUBRESULT_H as i32);
 
         let diff_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let from_caption = section_label(S::DATE_DIFF_FROM_HEADER);
+        let from_caption = section_label(S::DATE_DIFF_FROM_HEADER, &texts);
         below(&from_caption, caption_gap);
         from.labelled_by(&from_caption);
         diff_box.append(&from_caption);
         diff_box.append(&from.bin);
-        let to_caption = section_label(S::DATE_DIFF_TO_HEADER);
+        let to_caption = section_label(S::DATE_DIFF_TO_HEADER, &texts);
         below(&to_caption, caption_gap);
         to.labelled_by(&to_caption);
         diff_box.append(&to_caption);
         diff_box.append(&to.bin);
         below(&to.bin, md::STEP_TO_LABEL - md::FIELD_TOP - md::FIELD_H);
-        let diff_caption = section_label(S::DATE_DIFFERENCE_LABEL);
+        let diff_caption = section_label(S::DATE_DIFFERENCE_LABEL, &texts);
         below(&diff_caption, md::STEP_LABEL_RESULT - md::FIELD_LABEL_H);
         diff_box.append(&diff_caption);
         diff_box.append(&diff_result);
@@ -323,18 +322,11 @@ impl DatePage {
         let start = date_button();
         below(&start.bin, md::STEP_FROM_OP - md::FIELD_TOP - md::FIELD_H);
         let op = adw::ToggleGroup::new();
-        op.add(
-            adw::Toggle::builder()
-                .name("add")
-                .label(S::ADD_OPTION)
-                .build(),
-        );
-        op.add(
-            adw::Toggle::builder()
-                .name("sub")
-                .label(S::SUBTRACT_OPTION)
-                .build(),
-        );
+        op.add(toggle("add", S::ADD_OPTION, &texts));
+        op.add(toggle("sub", S::SUBTRACT_OPTION, &texts));
+        for (b, name) in buttons(op.upcast_ref()).zip([S::ADD_OPTION, S::SUBTRACT_OPTION]) {
+            crate::a11y::name_button(&b, name);
+        }
         op.set_active_name(Some("add"));
         op.add_css_class("wc-toggle-group");
         op.add_css_class("wc-date-op");
@@ -342,9 +334,9 @@ impl DatePage {
         op.set_size_request(-1, md::OP_SWITCH_H as i32);
         let op_bin = MaxWidth::new(&op, md::OP_SWITCH_W as i32);
         below(&op_bin, md::STEP_OP_OFFSETS - md::OP_SWITCH_H);
-        let (yb, years, yi) = spin(S::YEARS_LABEL);
-        let (mb, months, mi) = spin(S::MONTHS_LABEL);
-        let (db, days, di) = spin(S::DAYS_LABEL);
+        let (yb, years, yi) = spin(S::YEARS_LABEL, &texts);
+        let (mb, months, mi) = spin(S::MONTHS_LABEL, &texts);
+        let (db, days, di) = spin(S::DAYS_LABEL, &texts);
         let spins = gtk::Box::new(gtk::Orientation::Horizontal, md::OFFSETS_GAP as i32);
         spins.set_homogeneous(true);
         spins.append(&yb);
@@ -358,14 +350,14 @@ impl DatePage {
         let date_result = result_line();
 
         let add_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let start_caption = section_label(S::ADD_SUBTRACT_FROM_HEADER);
+        let start_caption = section_label(S::ADD_SUBTRACT_FROM_HEADER, &texts);
         below(&start_caption, caption_gap);
         start.labelled_by(&start_caption);
         add_box.append(&start_caption);
         add_box.append(&start.bin);
         add_box.append(&op_bin);
         add_box.append(&spins);
-        let date_caption = section_label(S::DATE_LABEL);
+        let date_caption = section_label(S::DATE_LABEL, &texts);
         below(&date_caption, md::STEP_LABEL_RESULT - md::FIELD_LABEL_H);
         add_box.append(&date_caption);
         add_box.append(&date_result);
@@ -407,6 +399,7 @@ impl DatePage {
             let grids = [from.days.clone(), to.days.clone(), start.days.clone()];
             let (diff_result, date_result) = (diff_result.clone(), date_result.clone());
             ctx.hub.subscribe_style(&column, move |column, style| {
+                texts.apply(style);
                 let m = spacing(style, "layout.date.margin");
                 column.set_margin_top(m.top.round() as i32);
                 column.set_margin_end(m.right.round() as i32);
