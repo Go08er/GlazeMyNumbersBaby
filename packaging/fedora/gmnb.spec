@@ -123,7 +123,8 @@ done
 
 %changelog
 * Mon Nov 09 2026 Go08er <Go08er@users.noreply.github.com> - 0.3.0-1
-- GMNB gets scripted themes (Luau)
+- GMNB gets scripted themes (Luau) with pictures, animations and sounds;
+  the default look matches DGMNB's; Aurora, Glazed and Swirls built in
 * Sun Nov 01 2026 Go08er <Go08er@users.noreply.github.com> - 0.2.0-1
 - Add the dgmnb subpackage, the lean twin
 * Fri Oct 02 2026 Go08er <Go08er@users.noreply.github.com> - 0.1.0-1
