@@ -1512,8 +1512,10 @@ built-in theme, each of its palettes, light and dark, at opacity 1: for
 every pair in a fixed table of (text, the fills beneath it, bottom-most
 last) the text's contrast against the composited fill is at least 4.5,
 or 3 where the text is 24 px or larger (19 px if weight ≥ 700), is an
-icon, a graph line, or an operator key's glyph (÷ × − +: a symbol, not
-text to read; DGMNB's own light palette puts them at 4.1 on `surface2`). Gradients are checked at both ends and the
+icon, a graph line, an operator key's glyph (÷ × − +: a symbol, not
+text to read; DGMNB's own light palette puts them at 4.1 on `surface2`),
+or a selected row's label (the sidebar's current page, the current
+radix: [open point 8](#open-points)). Gradients are checked at both ends and the
 middle. A translucent stack is composited over `window.background`'s
 colours. Disabled text is exempt, as in WCAG. The table covers: each key
 class and `keys.on`; `text_button` at rest and checked; the header title;
@@ -1522,7 +1524,11 @@ sidebar rows at rest and checked; `segmented` and `panel.tabs` items at
 rest and checked; `field` text and placeholder (placeholder: 3); chips
 and the whimsy chip; lit bits; radix names and values; calendar days at
 rest and checked; the toast; the graph's labels, axes and each series
-colour on the canvas.
+colour on the canvas. (Not yet for Aurora: the chrome's pairs, the
+header title to the bits, are checked for the base look and Mono. Aurora's
+own values for them fail in its light palettes, and on a see-through
+window, where its `plain` has no scrim; its polish pass takes them on,
+and the exemption in `tests/css.rs` goes with it. The owner's call.)
 
 **4. See-through** (new; 0.2 judged this by eye). The same table at
 opacity 0.1 and 0.5, each stack composited over

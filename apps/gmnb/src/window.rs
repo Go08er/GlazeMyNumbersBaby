@@ -757,6 +757,7 @@ impl Window {
         start.append(&back);
         let title = gtk::Label::new(None);
         title.add_css_class("wc-title");
+        title.set_xalign(0.0);
         title.set_margin_start(
             (wm::HEADER_BUTTON_STEP - ctl::ICON_BUTTON + wm::HEADER_TITLE_GAP) as i32,
         );

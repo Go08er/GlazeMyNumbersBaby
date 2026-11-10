@@ -617,9 +617,8 @@ impl CalcPanel {
         use appcore::metrics::panel as mp;
         for (i, value) in items.iter().enumerate() {
             let label = line_label(value, "wc-hist-result", mp::MEMORY_VALUE_H);
-            let actions =
-                gtk::Box::new(gtk::Orientation::Horizontal, mp::MEMORY_BUTTONS_GAP as i32);
-            actions.set_homogeneous(true);
+            // DGMNB's three cells, to the fraction of a pixel.
+            let actions = super::width_bin::Cells::new(mp::MEMORY_BUTTONS_GAP);
             actions.set_halign(gtk::Align::End);
             actions.set_width_request(mp::MEMORY_BUTTONS_W as i32);
             actions.add_css_class("wc-mem-actions");
