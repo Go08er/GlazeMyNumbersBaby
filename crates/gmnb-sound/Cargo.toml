@@ -1,0 +1,25 @@
+[package]
+name = "gmnb-sound"
+description = "GMNB's theme sounds: the synthesiser, sound files, the mixer and the PulseAudio-protocol output"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+# sin, cos, exp, pow and tanh correctly rounded: a recipe renders to the
+# same samples on every machine (docs/theming-media.md, "The synthesiser,
+# exactly").
+core-math = { package = "crmath", path = "../crmath" }
+# Sound files: WAV and Ogg Vorbis, both in safe Rust.
+hound = "3.5"
+lewton = "0.10"
+# PulseAudio's native protocol in Rust (PipeWire's pipewire-pulse and
+# PulseAudio serve it): no native library, nothing loaded until a theme
+# with sounds is.
+pulseaudio = "0.3"
+
+[dev-dependencies]
+# The render example loads real theme files.
+gmnb-theme.workspace = true
