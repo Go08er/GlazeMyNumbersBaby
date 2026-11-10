@@ -598,6 +598,8 @@ export type Style = {
 	-- MC MR M+ M- MS, DEG, F-E, the programmer toolbar.
 	text_button: Control?,
 	text_button_gap: number?,
+	-- "Trigonometry" and "Function": buttons that open a flyout of keys.
+	flyout_button: Control?,
 	-- Filled buttons.
 	button: Control?,
 	-- Two- and three-way switches; `checked` is the choice.

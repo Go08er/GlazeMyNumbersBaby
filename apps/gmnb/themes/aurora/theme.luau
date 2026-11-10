@@ -383,6 +383,27 @@ local function style(ctx: Ctx): Style
 	local toolbar_shadow: { Shadow } = { rim, { y = 8, blur = 24, spread = -10, color = alpha(black, 0.4) } }
 	local panel_fill = over_tint(down(glass_hi, glass), 0.55)
 
+	-- The memory row's buttons, DEG, F-E and their like: text that lights up.
+	local function text_button(padding: Spacing): Control
+		return {
+			min_width = 30,
+			min_height = 30,
+			padding = padding,
+			radius = 10,
+			font = outfit(13, 600, 0.04),
+			color = alpha(fg, 0.78),
+			background = if see then alpha(base, 0.45) else gmnb.transparent,
+			transition = { background = 150, color = 150 },
+			hover = { background = if see then alpha(mix(base, fg, 0.12), 0.6) else alpha(fg, 0.07), color = fg },
+			active = { background = if see then alpha(mix(base, fg, 0.12), 0.6) else alpha(fg, 0.07), color = fg },
+			checked = {
+				background = if see then alpha(mix(base, accent, 0.2), 0.6) else alpha(accent, 0.12),
+				color = accent,
+			},
+			disabled = { color = alpha(fg, 0.26) },
+		}
+	end
+
 	return {
 		-- Tokens. Anything not styled below is derived from these.
 		colors = {
@@ -579,24 +600,9 @@ local function style(ctx: Ctx): Style
 			pad = { gap = 4, radius = 10, min_height = 32, font = { size = 15 } },
 		},
 
-		text_button = {
-			min_width = 30,
-			min_height = 30,
-			padding = { 0, 6 },
-			radius = 10,
-			font = outfit(13, 600, 0.04),
-			color = alpha(fg, 0.78),
-			background = if see then alpha(base, 0.45) else gmnb.transparent,
-			transition = { background = 150, color = 150 },
-			hover = { background = if see then alpha(mix(base, fg, 0.12), 0.6) else alpha(fg, 0.07), color = fg },
-			active = { background = if see then alpha(mix(base, fg, 0.12), 0.6) else alpha(fg, 0.07), color = fg },
-			checked = {
-				background = if see then alpha(mix(base, accent, 0.2), 0.6) else alpha(accent, 0.12),
-				color = accent,
-			},
-			disabled = { color = alpha(fg, 0.26) },
-		},
+		text_button = text_button({ 0, 6 }),
 		text_button_gap = 2,
+		flyout_button = text_button({ 0, 10 }),
 		icon_button = {
 			min_width = 34,
 			min_height = 34,

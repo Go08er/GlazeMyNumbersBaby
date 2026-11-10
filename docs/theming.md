@@ -407,6 +407,7 @@ emits the finished values:
 - An `overlay` becomes the top layer of `--P-S-background-image`, as
   `linear-gradient(<c>, <c>)`.
 - `fade` is folded into `--P-S-color` and `--P-S-icon-color`.
+- A field has `focus`, `error` and `error-focus` instead.
 - Every one of these is always emitted, equal to the resting value where
   the state changes nothing. The stylesheet can therefore name any of them
   without a fallback, and **a property the stylesheet reads that the app
@@ -418,6 +419,14 @@ them): if measuring shows the reload is too slow, the engine may write a
 control's state values as generated rules instead. Either way the
 structure stylesheet holds no literal colour, size or font, and every
 value in it or in the generated style comes from the checked `Style`.
+
+**Covered is not disabled.** While the sidebar, a sheet or a dialog
+covers the page, what is under it is made insensitive so that assistive
+technology can't operate it (`inert.rs`, the `.wc-inert` class). It must
+keep its look. The structure stylesheet therefore applies the `disabled`
+properties only to what the app itself turned off: under `.wc-inert`,
+anything not marked `.wc-off` reads its resting properties, at full
+opacity and with no filter. (0.2's rules at the end of `style.css`.)
 
 Numbers are written with units by the app (`px`, `ms`, `deg`, `em`).
 Colours are written as `rgb()`/`rgba()`. Font family names are written as
@@ -441,12 +450,26 @@ identical; the 41st is the `none` row below.
 | `var(--unset, fallback)`, a variable holding `var()`, a variable overridden on a parent | work |
 | Replacing the provider that defines a variable | restyles at once |
 | Variables defined on `:root`, read in a second toplevel window | resolve (computed colour checked) |
-| `none` as one layer of a multi-layer `background-image`, literal or through `var()` | **draws no background at all.** The app never emits `none` inside a list: absent layers are left out. |
-| Inter's optical size | Pango sets `opsz` by itself, from the size in **points** (a 21 px label measured like `opsz` 15.75). An explicit `font-variation-settings` wins. DGMNB uses the size in pixels, so the app always writes `"opsz"` explicitly for Inter. |
+| `none` as one layer of a multi-layer `background-image` (`none, linear-gradient(…)`), literal or through `var()` | **The gradient beside it was not drawn either**: the widget looked as it does with no `background-image`, with no parse error. The app never emits `none` inside a list: absent layers are left out. |
+| Inter's optical size | Pango sets `opsz` by itself, and the widths are consistent with it using the size in **points**: at 52 px a label measured as with `opsz` 32, at 12 and 15 px as with 14, at 21 px (15.75 pt) within a pixel of 14 and far from 32. An explicit `font-variation-settings` wins. DGMNB uses the size in pixels, so the app always writes `"opsz"` explicitly for Inter. |
 | The bundled Inter's family name | It is **"Inter Variable"**, not "Inter". `font-family: "Inter"` silently fell back to another face. The base family is `"Inter Variable"`. |
 
 Nothing needed designing around. Transitions were measured mid-flight
 (a 4 s change sampled at 0.4 s and 1.5 s matched the literal).
+
+**Not probed**, and to be confirmed while the stylesheet is written:
+
+- That `text-shadow` set on the window reaches every label by
+  inheritance. 0.2 set it on `label` directly. If it doesn't, the halo
+  goes on `window.gmnb label` and the raised containers' labels.
+- The converter's marker as a sized background layer (`background-size`,
+  `background-position`, `background-repeat`).
+- `border-spacing` for a segmented control's gap.
+- The names of the toolkit's own nodes in the Feeds columns below
+  (`toggle-group > toggle`, `scale trough`, `switch`, `toast`,
+  `tooltip`, `scrollbar slider`, `popover > contents`, `dropdown`,
+  `spinbutton`). They state the intent; check each against libadwaita
+  1.7's node tree.
 
 ### Toolkit-drawn families: `native`
 
@@ -596,7 +619,11 @@ smallest is 300×400, the calculator goes wide at 620 px, the converter at
 **DGMNB's source is the authority for the base column** here and in the
 tables below. They were transcribed from `apps/dgmnb/src/{ui,app,calc,conv,date,graph}.rs`
 at 0.2.0; where a number here and DGMNB's code disagree, the code is right
-and this table is corrected.
+and this table is corrected. Every place DGMNB names a text style was
+matched to an element below; the one known mismatch is the rows of menus
+(`row`): DGMNB sets the bit-shift list in its small style and the unit
+list in its body style, and here both are `row`. If the comparison shows
+it, `row` gains a variant.
 
 ### Stock colours
 
@@ -686,6 +713,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `icon_button` | Control | 36×36; radius 999; `fg`; icon `{ size 18 }`; `checked = { background accent at 0.18, color accent_text }` | `button.wc-icon-button` |
 | `text_button` | Control | min_height 34; padding `{ 0, 6 }`; radius `shape.radius`; `text.caption`; `fg`; no background; `checked = { background accent, color on_accent }` | `button.wc-mem`: MC MR M+ M− MS M▾, DEG, F-E, the programmer bar |
 | `text_button_gap` | number | 2 | The rows' spacing (Rust) |
+| `flyout_button` | Control | as `text_button`, in `text.small`, padding `{ 0, 10 }` | `button.wc-mem.wc-flyout-button`: Trigonometry ▾ and Function ▾ |
 | `button` | Control | background `surface2`; radius `shape.radius`; `text.body`; `fg`; min_height 34; padding `{ 0, 12 }`; `checked = { background accent, color on_accent }` | `window.gmnb.own-button button:not([class*="wc-"])` and dialog buttons |
 | `segmented.gap` | number | 4 | `toggle-group { border-spacing }` |
 | `segmented.item` | Control | min_height 36; radius `shape.radius`; `text.small`; `fg`; background `surface2`; `checked = { background accent, color on_accent }` | `window.gmnb.own-segmented toggle-group > toggle` |
@@ -768,7 +796,7 @@ label's size (fixed).
 | `panel.delete_reveal` | `"always"` or `"hover"` | `"always"` | `"hover"`: opacity 0 until the row is hovered or holds the keyboard focus. The button is always there for the keyboard and for screen readers. |
 | `panel.memory_button` | Control | background `surface2`; radius `shape.radius`; `text.caption`; `fg`; min_height 24; padding `{ 0, 8 }` | `button.wc-mem-small`: MC, M+, M− on a memory row |
 | `panel.memory_reveal` | `"always"` or `"hover"` | `"always"` | `.wc-mem-actions`, as `delete_reveal` |
-| `panel.empty` | Text | `text.body`, `fg_dim` | `.wc-empty` |
+| `panel.empty` | Text | `text.small`, `fg_dim` | `.wc-empty` |
 
 The trash button under the list is an `icon_button`.
 
@@ -783,8 +811,9 @@ The trash button under the list is an `icon_button`.
 | `programmer.bit` | Control | radius `shape.radius`; 16 / 400; `fg`; no background; min 14×30; `checked = { background accent, color on_accent, font { weight 700 } }` | `button.wc-bit` |
 | `programmer.bit_index` | Text | `text.caption`, `fg_faint` | `.wc-bit-index` |
 
-Word size, Bitwise and Bit shift are `text_button`s; their flyouts are
-`popover`s.
+Word size, Bitwise and Bit shift are `text_button`s (DGMNB sets them in
+its caption style, unlike Scientific's two flyout buttons); their flyouts
+are `popover`s.
 
 ### Date page
 
@@ -797,7 +826,7 @@ Word size, Bitwise and Bit shift are `text_button`s; their flyouts are
 | `date.subresult` | Text | `text.body`, `fg_dim` | `.wc-subresult` |
 | `date.calendar.title` | Text | `text.strong`, `fg` | `.wc-days-title` |
 | `date.calendar.weekday` | Text | `text.caption`, `fg_dim` | `.wc-days-weekday` |
-| `date.calendar.day` | Control | 36×36; radius 999; `text.body` with `{ "tnum" }`; `fg`; `checked = { background accent, color on_accent }` | `button.wc-day`; `checked` is `.wc-day-selected` |
+| `date.calendar.day` | Control | 36×36; radius 999; `text.small` with `{ "tnum" }`; `fg`; `checked = { background accent, color on_accent }` | `button.wc-day`; `checked` is `.wc-day-selected` |
 | `date.calendar.other_month` | Color | `fg_faint` | `.wc-day-other` |
 | `date.calendar.today` | Border or `false` | `{ 1, accent_text }` | `.wc-day-today` |
 | `date.calendar.focus` | FocusRing | `focus` | `button.wc-day:focus` (shown on plain focus: a popover isn't told of keyboard use) |
@@ -819,9 +848,9 @@ calendar sits in a `popover`; its arrows are `icon_button`s.
 | `converter.chip` | Control | min_height 28; radius 14; background `surface2`; `text.small`; `fg`; padding `{ 0, 10 }` | `.wc-chip` |
 | `converter.whimsy` | State | changes nothing | `.wc-chip-whimsy` (the playful comparison) |
 | `converter.whimsy_icon` | boolean | `false` | Rust: whether that chip shows its sparkle |
-| `converter.ratio` | Text | `text.body`, `fg` | `.wc-ratio` |
-| `converter.timestamp` | Text | `text.caption`, `fg_dim` | `.wc-timestamp` |
-| `converter.link` | Control | `text.caption`; `accent_text`; no background | `button.wc-link` |
+| `converter.ratio` | Text | `text.small`, `fg` | `.wc-ratio` |
+| `converter.timestamp` | Text | `text.small`, `fg_dim` | `.wc-timestamp` |
+| `converter.link` | Control | `text.small`; `accent_text`; no background | `button.wc-link` |
 
 ### Graphing
 
@@ -841,7 +870,7 @@ calendar sits in a `popover`; its arrows are `icon_button`s.
 | `graph.swatch.transition` | Transition | none | |
 | `graph.add` | Control | min_height 36; `text.body`; `fg`; no background; radius `shape.radius` | `button.wc-add-eq` |
 | `graph.variable` | Text | 15 / 600, `fg` | `.wc-var-name`; its slider is a `slider`, its box a `field` |
-| `graph.analysis.title` | Text | `text.strong`, `fg` | `.wc-analysis-title` |
+| `graph.analysis.title` | Text | 18 / 600, `fg` | `.wc-analysis-title` |
 | `graph.analysis.card` | Surface | no background; border `{ 1, border }`; radius 8; padding `{ 8, 12 }` | `.wc-kgf` |
 | `graph.analysis.card_title` | Text | `text.caption`, `fg_dim` | `.wc-kgf-title` |
 | `graph.analysis.value` | Text | `text.body`, `fg` | `.wc-kgf-value` |
@@ -903,7 +932,7 @@ layers = {
 |---|---|
 | `width`, `height` | The layer's size. |
 | `time` | Seconds this layer has spent animating. It stands still whenever the layer isn't being animated. |
-| `dt` | Seconds since this layer's previous frame **if that frame asked for this one**, else 0. Never more than 0.25. Add it up to run your own clock. |
+| `dt` | Seconds since this layer's previous frame, **if that frame asked for another** (returned a number) and the clock has run since; else 0. It doesn't matter what caused this frame: an event or a pointer move in the middle of an animation still gets the time since the last frame. Never more than 0.25. Add it up to run your own clock. |
 | `motion` | `false`: the desktop asked for reduced motion. Draw a still picture. There are no events, `dt` is 0 and what you return is ignored. |
 | `settled` | `true`: nothing has happened for 45 seconds and the app stopped the clock. Requests for frames wait until something happens. |
 | `active` | The window is the one in use. |
@@ -930,6 +959,8 @@ The app owns the clock:
   asked for the pointer), when a key's state changes (keypad), when the
   value changes (display), and when its own request comes due. Nothing
   else. One layer animating does not redraw the others.
+- A layer has at most one request pending. Each frame's return value
+  replaces it, whatever caused the frame.
 - Requests are honoured only while the window is mapped and active,
   motion is allowed, and the app hasn't settled. Otherwise they wait; when
   the wait ends the layer is drawn once with `dt = 0` and carries on.
@@ -1243,7 +1274,8 @@ sandbox with hard limits, and it can only ever affect how GMNB looks.
 | Images: file; decoded size; count; total decoded | 4 MiB; 2048×2048; 16; 32 MiB |
 | Noise: size; count | 512×512; 8 |
 | Fonts: file; count; total | 16 MiB; 8; 32 MiB |
-| Any string from the theme | 4 KiB (longer: refused) |
+| Any string the theme returns or passes to the app | 4 KiB (longer: refused) |
+| A `credits` text file | 64 KiB |
 | Events kept per layer; longest kept | 32; 5 s |
 
 Every entry into the theme's code runs under its time limit, the first
