@@ -278,8 +278,8 @@ fn focus_by_class(win: adw::ApplicationWindow, class: String) {
     glib::timeout_add_local_once(Duration::from_millis(600), move || {
         let mut todo = vec![win.clone().upcast::<gtk::Widget>()];
         while let Some(w) = todo.pop() {
-            if w.has_css_class(&class) && w.is_focusable() {
-                w.grab_focus();
+            // (A text field takes it in its text, which grab_focus says.)
+            if w.has_css_class(&class) && w.grab_focus() {
                 win.set_focus_visible(true);
                 return;
             }
