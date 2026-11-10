@@ -118,6 +118,113 @@ mod imp {
             }
         }
     }
+
+    #[derive(Default)]
+    pub struct Cells {
+        pub gap: Cell<f32>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for Cells {
+        const NAME: &'static str = "GmnbCells";
+        type Type = super::Cells;
+        type ParentType = gtk::Widget;
+    }
+
+    impl ObjectImpl for Cells {
+        fn dispose(&self) {
+            while let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
+        }
+    }
+
+    impl WidgetImpl for Cells {
+        fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
+            let shown = super::shown_children(self.obj().upcast_ref());
+            let (mut min, mut nat) = (0, 0);
+            // Every cell as wide (and the row as high) as the largest.
+            for child in &shown {
+                let (m, n, _, _) = child.measure(orientation, -1);
+                min = min.max(m);
+                nat = nat.max(n);
+            }
+            if orientation == gtk::Orientation::Horizontal && !shown.is_empty() {
+                let n = shown.len() as i32;
+                let gaps = (self.gap.get() * (n - 1) as f32).ceil() as i32;
+                min = min * n + gaps;
+                nat = nat * n + gaps;
+            }
+            (min, nat, -1, -1)
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
+            let shown = super::shown_children(self.obj().upcast_ref());
+            if shown.is_empty() {
+                return;
+            }
+            let n = shown.len() as f32;
+            let gap = self.gap.get();
+            let cell = ((width as f32 - gap * (n - 1.0)) / n).max(0.0);
+            for (i, child) in shown.iter().enumerate() {
+                let x = i as f32 * (cell + gap);
+                let (min, _, _, _) = child.measure(gtk::Orientation::Horizontal, height);
+                let w = (cell.round() as i32).max(min);
+                // The cell's middle, to the fraction of a pixel.
+                let at = x + (cell - w as f32) / 2.0;
+                let t = gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(at, 0.0));
+                child.allocate(w, height, -1, Some(t));
+            }
+        }
+    }
+}
+
+/// The children of `w` that are shown.
+fn shown_children(w: &gtk::Widget) -> Vec<gtk::Widget> {
+    let mut out = Vec::new();
+    let mut c = w.first_child();
+    while let Some(child) = c {
+        if child.is_visible() {
+            out.push(child.clone());
+        }
+        c = child.next_sibling();
+    }
+    out
+}
+
+glib::wrapper! {
+    /// A row of equal cells, as DGMNB lays one out (`Rect::columns`):
+    /// `gap` apart, each child centred in its cell to the fraction of a
+    /// pixel (GTK gives whole pixels and the spare ones to the first
+    /// cells, which puts a label up to a pixel off DGMNB's).
+    pub struct Cells(ObjectSubclass<imp::Cells>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl Cells {
+    pub fn new(gap: f32) -> Self {
+        let cells: Self = glib::Object::new();
+        cells.imp().gap.set(gap);
+        cells
+    }
+
+    pub fn set_gap(&self, gap: f32) {
+        if self.imp().gap.replace(gap) != gap {
+            self.queue_resize();
+        }
+    }
+
+    pub fn append(&self, child: &impl IsA<gtk::Widget>) {
+        child.set_parent(self);
+    }
+
+    /// Takes `child` out (it was appended).
+    pub fn remove(&self, child: &impl IsA<gtk::Widget>) {
+        if child.parent().as_ref() == Some(self.upcast_ref()) {
+            child.unparent();
+        }
+    }
 }
 
 glib::wrapper! {

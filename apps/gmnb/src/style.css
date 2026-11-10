@@ -2530,7 +2530,8 @@ menubutton.wc-flyout-button>button:checked:disabled {
 
 /* A row shorter than its buttons' own least height (Scientific's DEG and
    F-E, the programmer bar): the row says how high they are. */
-.wc-short-row button {
+.wc-short-row button,
+.wc-short-row menubutton > button {
   min-height: 0;
 }
 

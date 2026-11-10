@@ -16,7 +16,7 @@ use crate::widgets::calc_panel::{CalcPanel, MemOp};
 use crate::widgets::display::{Change, Display};
 use crate::widgets::icon::{PathIcon, icon_toggle, paths};
 use crate::widgets::keypad::Keypad;
-use crate::widgets::width_bin::{SizeBin, WidthBin};
+use crate::widgets::width_bin::{Cells, SizeBin, WidthBin};
 use appcore::KeyPress;
 use appcore::input::{self, Action};
 use appcore::keys::{self, KEY_HYP, KEY_SECOND, KEY_TRIG_SECOND};
@@ -71,7 +71,7 @@ pub struct CalculatorPage {
     programmer: Cell<bool>,
     compact_btn: gtk::ToggleButton,
     compact: Cell<bool>,
-    mem_rows: RefCell<Vec<gtk::Box>>,
+    mem_rows: RefCell<Vec<Cells>>,
     /// Another page was shown since the calculator was (see `switch_mode`).
     left: Cell<bool>,
 }
@@ -95,7 +95,13 @@ fn text_button(label: &str, tip: &str) -> gtk::Button {
 /// `wc-flyout-button` (Scientific's, `flyout_button`) or `wc-text-flyout`
 /// (the programmer bar's, `text_button`).
 fn chevron_menu(ctx: &Ctx, label: &str, class: &str, popover: &gtk::Popover) -> gtk::MenuButton {
-    let text = gtk::Label::new(Some(&format!("{label} ▾")));
+    // The arrow (from a fallback font) in a line box of its own, a pixel
+    // high: the label's line keeps Inter's height (`script_markup`).
+    let text = gtk::Label::new(None);
+    text.set_markup(&format!(
+        "{} <span line_height=\"1025\">▾</span>",
+        glib::markup_escape_text(label)
+    ));
     let button = gtk::MenuButton::builder()
         .child(&text)
         .popover(popover)
@@ -299,9 +305,9 @@ impl CalculatorPage {
         set_margins(&self.side, margin);
         let width = style.number("layout.calculator.panel_width") + margin.left + margin.right;
         self.side_bin.set_width(width.round() as i32);
-        let gap = style.number("text_button_gap").round() as i32;
+        let gap = style.number("text_button_gap");
         for row in self.mem_rows.borrow().iter() {
-            row.set_spacing(gap);
+            row.set_gap(gap);
         }
         self.sync_display();
         self.relabel_scripts();
@@ -447,9 +453,8 @@ impl CalculatorPage {
     /// The memory buttons in a row of their own (`text_button`s, as
     /// DGMNB's): MC MR M+ M− MS, and M▾ while narrow. `full`: false for
     /// the programmer bar's MS and M▾, which are its own.
-    fn memory_row(self: &Rc<Self>, full: bool) -> gtk::Box {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        row.set_homogeneous(full);
+    fn memory_row(self: &Rc<Self>, full: bool) -> Cells {
+        let row = Cells::new(appcore::metrics::controls::TEXT_BUTTON_GAP);
         // Text straight on the backdrop: the scrim of a see-through window.
         row.add_css_class("wc-plain");
         // Named as upstream's (ClearMemoryButton "Clear all memory", ...),
@@ -805,6 +810,7 @@ impl CalculatorPage {
             mem.remove(&button);
             in_bar(&button, mpg::MEMORY_BUTTON_W, 0.0);
         }
+        self.mem_rows.borrow_mut().retain(|r| r != &mem);
         b.append(&bar);
 
         let stack = gtk::Stack::new();
@@ -812,7 +818,7 @@ impl CalculatorPage {
         self.announce_open_parens(&pad);
         Self::keypad_slot(&pad);
         stack.add_named(&pad, Some("full"));
-        let flip = BitFlip::new();
+        let flip = BitFlip::new(&self.ctx.hub);
         let weak = Rc::downgrade(self);
         flip.connect_flip(move |i| {
             if let Some(p) = weak.upgrade() {
@@ -1236,7 +1242,7 @@ impl CalculatorPage {
         match mode {
             CalcMode::Scientific => {
                 if let Some(a) = self.angle_btn.borrow().as_ref() {
-                    a.set_label(vm.angle_unit().label());
+                    set_text(a, vm.angle_unit().label());
                     crate::a11y::name_button(a, appcore::keys::angle_button_name(vm.angle_unit()));
                 }
                 if let Some(fe) = self.fe_btn.borrow().as_ref() {
@@ -1264,7 +1270,7 @@ impl CalculatorPage {
                     ))]);
                 }
                 if let Some(w) = self.word_btn.borrow().as_ref() {
-                    w.set_label(vm.word_size().label());
+                    set_text(w, vm.word_size().label());
                     crate::a11y::name_button(
                         w,
                         appcore::keys::word_size_button_name(vm.word_size()),
@@ -1393,6 +1399,15 @@ pub fn script_markup(label: &str, size: f32) -> String {
         .replace("<sub>", &open(-units(0.16)))
         .replace("</sup>", "</span>")
         .replace("</sub>", "</span>")
+}
+
+/// A button's label, set anew (GTK makes a new label for it) and laid
+/// out to the fraction of a pixel again (`exact_text`).
+fn set_text(button: &gtk::Button, text: &str) {
+    if button.label().as_deref() != Some(text) {
+        button.set_label(text);
+        crate::window::exact_text(button);
+    }
 }
 
 /// The spacing at `path` (none if there is none).

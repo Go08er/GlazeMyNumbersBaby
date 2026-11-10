@@ -180,11 +180,7 @@ impl Scope<'_> {
             min_width: 0.0,
             min_height: 0.0,
             opacity: 1.0,
-            icon: Icon {
-                size: metrics::controls::ICON_BUTTON_ICON,
-                stroke: None,
-                color: None,
-            },
+            icon: self.icon(metrics::controls::ICON_BUTTON_ICON),
             transition: Transition::default(),
             hover: State::overlay(c.hover),
             active: State::overlay(c.press),
@@ -193,6 +189,16 @@ impl Scope<'_> {
                 color: Some(c.fg_faint),
                 ..State::default()
             },
+        }
+    }
+
+    /// An icon `size` px, its line from `icons.stroke` and `icons.taper`
+    /// (`Style::icon_stroke`).
+    fn icon(&self, size: f32) -> Icon {
+        Icon {
+            size,
+            stroke: None,
+            color: None,
         }
     }
 
@@ -299,11 +305,7 @@ impl Scope<'_> {
         };
         let icon = match self.get("keys.icon") {
             Value::Icon(i) => *i,
-            _ => Icon {
-                size: metrics::controls::KEY_ICON,
-                stroke: None,
-                color: None,
-            },
+            _ => self.icon(metrics::controls::KEY_ICON),
         };
         Value::Control(Box::new(Control {
             background: Fill::color(background),
@@ -561,10 +563,10 @@ pub static ROWS: &[Row] = &[
         let c = &s.t.colors;
         let mut row = s.selectable_row(&s.t.text.body);
         row.min_height = ROW_H;
-        // The step to the next row, shared above and below.
-        row.margin = Spacing::vh((ROW_STEP - ROW_H) / 2.0, ROW_MARGIN_X);
+        // The step to the next row is below it.
+        row.margin = Spacing::trbl(0.0, ROW_MARGIN_X, ROW_STEP - ROW_H, ROW_MARGIN_X);
         row.padding = Spacing::vh(0.0, ROW_ICON_X);
-        row.icon.size = ROW_ICON;
+        row.icon = s.icon(ROW_ICON);
         row.checked.color = Some(c.accent_text);
         Value::Control(Box::new(row))
     }),
@@ -737,12 +739,8 @@ pub static ROWS: &[Row] = &[
     row("keys.transition", Kind::Transition, |_| {
         Value::Transition(Transition::default())
     }),
-    row("keys.icon", Kind::Icon, |_| {
-        Value::Icon(Icon {
-            size: metrics::controls::KEY_ICON,
-            stroke: None,
-            color: None,
-        })
+    row("keys.icon", Kind::Icon, |s| {
+        Value::Icon(s.icon(metrics::controls::KEY_ICON))
     }),
     row("keys.hover", Kind::State, |s| {
         Value::State(State::overlay(s.t.colors.hover))
