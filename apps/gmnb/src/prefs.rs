@@ -1,6 +1,6 @@
 //! Settings (upstream Settings.xaml: theme + about), plus the theme, its
-//! options and the window's opacity (docs/theming.md, "Where Settings
-//! puts things").
+//! options, its sounds and the window's opacity (docs/theming.md, "Where
+//! Settings puts things"; docs/theming-media.md, "Settings").
 
 use std::rc::Rc;
 
@@ -99,6 +99,8 @@ pub fn show(win: &Rc<Window>) {
     page.add(&themes.options);
     themes.rebuild_list();
     themes.rebuild_options();
+    // Sound, under the theme they belong to.
+    page.add(&sound_group(&ctx));
 
     {
         // Window.
@@ -801,6 +803,138 @@ impl ThemeSettings {
         }
         row
     }
+}
+
+/// Sound: the theme's sounds on or off, and how loud (docs/theming-media.md,
+/// "Settings"). What the switch says under it follows the theme, the
+/// desktop's own setting and the sound system.
+fn sound_group(ctx: &Rc<Ctx>) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder().title("Sound").build();
+    let on = ctx.store.data.borrow().sound;
+    let switch = adw::SwitchRow::builder()
+        .title("Theme sounds")
+        .active(on)
+        .build();
+    ctx.hub.subscribe_sound(&switch, |row, text| {
+        row.set_subtitle(&gtk::glib::markup_escape_text(text))
+    });
+    group.add(&switch);
+
+    let percent = |v: f64| format!("{}%", (v * 100.0).round());
+    let saved = f64::from(crate::settings::sound_volume(
+        ctx.store.data.borrow().sound_volume,
+    ));
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.05);
+    scale.set_value(saved);
+    scale.set_draw_value(false);
+    scale.set_hexpand(true);
+    scale.set_valign(gtk::Align::Center);
+    scale.set_width_request(160);
+    scale.update_property(&[
+        gtk::accessible::Property::Label("Volume"),
+        gtk::accessible::Property::ValueText(&percent(saved)),
+    ]);
+    let shown = gtk::Label::new(Some(&percent(saved)));
+    shown.add_css_class("numeric");
+    shown.set_width_chars(4);
+    shown.set_xalign(1.0);
+    let volume = adw::ActionRow::builder()
+        .title("Volume")
+        .subtitle("Let go, it plays the theme's key sound")
+        .build();
+    volume.add_suffix(&scale);
+    volume.add_suffix(&shown);
+    volume.set_sensitive(on);
+    group.add(&volume);
+    {
+        let (ctx, volume) = (ctx.clone(), volume.clone());
+        switch.connect_active_notify(move |r| {
+            let saved = ctx.store.data.borrow().sound;
+            if ctx.layers.covers(r) {
+                // Covered, Settings changes nothing (R15-M-02).
+                if r.is_active() != saved {
+                    r.set_active(saved);
+                }
+                return;
+            }
+            let on = r.is_active();
+            volume.set_sensitive(on);
+            if on != saved {
+                ctx.hub.set_sound(on);
+                ctx.store.data.borrow_mut().sound = on;
+                ctx.store.persist();
+            }
+        });
+    }
+    {
+        let (ctx, shown) = (ctx.clone(), shown.clone());
+        let pending = Rc::default();
+        scale.connect_value_changed(move |s| {
+            if ctx.layers.covers(s) {
+                // Covered, Settings changes nothing (R15-M-02).
+                let saved = ctx.store.data.borrow().sound_volume;
+                let saved = f64::from(crate::settings::sound_volume(saved));
+                if s.value() != saved {
+                    s.set_value(saved);
+                }
+                return;
+            }
+            let v = s.value();
+            shown.set_text(&percent(v));
+            s.update_property(&[gtk::accessible::Property::ValueText(&percent(v))]);
+            ctx.hub.set_sound_volume(v as f32);
+            ctx.store.data.borrow_mut().sound_volume = v;
+            persist_at_rest(&ctx, &pending);
+        });
+    }
+    {
+        // Let go (the pointer, or a key that moves it): the theme's key
+        // sound, at the volume now. The range takes the pointer's presses
+        // for itself, so its events are watched before it has them.
+        let ctx = ctx.clone();
+        let watch = gtk::EventControllerLegacy::new();
+        watch.set_propagation_phase(gtk::PropagationPhase::Capture);
+        watch.connect_event(move |c, event| {
+            use gtk::gdk::{EventType, Key};
+            let let_go = match event.event_type() {
+                EventType::ButtonRelease | EventType::TouchEnd => true,
+                EventType::KeyRelease => {
+                    event.downcast_ref::<gtk::gdk::KeyEvent>().is_some_and(|k| {
+                        matches!(
+                            k.keyval(),
+                            Key::Left
+                                | Key::Right
+                                | Key::Up
+                                | Key::Down
+                                | Key::KP_Left
+                                | Key::KP_Right
+                                | Key::KP_Up
+                                | Key::KP_Down
+                                | Key::Page_Up
+                                | Key::Page_Down
+                                | Key::Home
+                                | Key::End
+                                | Key::minus
+                                | Key::plus
+                                | Key::KP_Subtract
+                                | Key::KP_Add
+                        )
+                    })
+                }
+                _ => false,
+            };
+            if let_go
+                && let Some(w) = c.widget()
+                && w.is_sensitive()
+                && !ctx.layers.covers(&w)
+            {
+                ctx.hub.preview_sound();
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        scale.add_controller(watch);
+    }
+    group
 }
 
 /// Saves `ctx`'s settings once a slider has rested for a moment, not on
