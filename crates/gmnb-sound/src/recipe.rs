@@ -8,7 +8,8 @@ use core_math as cr;
 pub const SR: f64 = 48_000.0;
 /// The same, as a whole number.
 pub const RATE: u32 = 48_000;
-pub const TAU: f64 = 6.283185307179586;
+/// 6.283185307179586, as the chapter writes it.
+pub const TAU: f64 = std::f64::consts::TAU;
 /// ln 1000: an "exp" segment falls 60 dB over its length.
 pub const K: f64 = 6.907755278982137;
 /// The noise generator's seed when a layer gives none (or 0).
@@ -493,6 +494,13 @@ pub fn note_name(name: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_constants_are_the_chapters() {
+        assert_eq!(TAU.to_string(), "6.283185307179586");
+        assert_eq!(K.to_string(), "6.907755278982137");
+        assert_eq!(K, 1000f64.ln());
+    }
 
     #[test]
     fn note_names() {
