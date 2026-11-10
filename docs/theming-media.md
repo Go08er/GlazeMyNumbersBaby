@@ -112,9 +112,14 @@ frame) and returns a picture: `{ width, height }` plus what the app needs.
   that is none of the four is refused.
 - 16-bit PNGs are reduced to 8 bits. Colour profiles and rotation tags are
   ignored: save pictures in sRGB, the right way up.
-- Load pictures at the top of the file. The first call for a file decodes
-  it (some tens of milliseconds for the largest allowed); later calls with
+- Load pictures at the top of the file. The call reads the file and looks
+  at its header, so the picture has its size at once. The pixels are
+  decoded when the picture is first drawn (some tens of milliseconds for
+  the largest allowed), and never on your hook's time. Later calls with
   the same name return the same picture at no cost.
+- A file that is cut short or spoiled may still have a sound header. It
+  then has a size and draws nothing, and Settings says so under the theme
+  once it has been drawn.
 
 ### Animated pictures
 
@@ -134,7 +139,8 @@ what is left behind when a frame ends.
   ignored.
 - Frames are decoded as they are shown, not all at the start, so a long
   loop costs no more memory than a short one. Against the
-  [image budget](#limits) an animation counts as four of its frames.
+  [image budget](#limits) an animation counts as four to six of its
+  frames, by its format: a GIF the least, an animated PNG the most.
 
 **Drawing one.** `draw:image(fire, x, y, w, h)` draws the frame that is due
 on the layer's own clock, `frame.time`:
@@ -143,7 +149,7 @@ on the layer's own clock, `frame.time`:
 |---|---|
 | is being animated | plays |
 | waits: the window is hidden or not the active one, or the app has settled | stands on the frame it reached |
-| `frame.motion == false` (reduced motion), and in a `preview` tile | shows its first frame |
+| `frame.motion == false` (reduced motion), and in a `preview` tile | shows its first frame, whatever `time` says |
 
 **The next frame.** A layer that drew an animation this way is drawn again
 when the animation's next frame is due, as if `draw` had returned that
@@ -174,7 +180,8 @@ end
 
 `loop = false` holds the last frame once `time` passes the end. An
 animation has one playhead: draw it from one layer, or with the same
-`time` everywhere.
+`time` everywhere. (Its first frame is the exception: a preview's tile or
+`draw:tile` can show it while the animation plays elsewhere.)
 
 **What it costs.** Decoding happens off the interface's thread and uses at
 most a quarter of one processor core. If an animation is too heavy for
@@ -188,6 +195,14 @@ a second:
 | 480×270, busy detail | 2.7 MiB, 2.3% | 6.0 MiB, 2.8% | 427 KiB, 3.1% |
 | 760×640, soft gradients | 646 KiB, 3.2% | 1.3 MiB, 1.0% | 176 KiB, 3.9% |
 | 760×640, busy detail | 9.9 MiB (too big), 8.0% | 21.2 MiB (too big), 10.2% | 1.5 MiB, 13.3% |
+
+Those are the prototype's figures. The app as built takes more, measured
+while the machine's processors were capped and shared with other work:
+1.3% (GIF), 2.2% (APNG) and 4.5% (WebP) for the soft 480×270 loop, 3.4%
+and 4.5% for the busy GIF and WebP of that size, 5.3%, 5.4% and 8.7% for
+the soft 760×640 loop, and 17.6% for the busy 760×640 WebP, which is
+close to all the quarter allows. A loop that fills the window is best
+kept soft, or small and scaled up.
 
 For photographs and film, WebP is six times smaller than GIF. For flat
 shapes and few colours, GIF and APNG are cheapest to play.
@@ -225,13 +240,18 @@ end
 ```
 
 - `gmnb.pixels(width, height)` makes a picture you fill yourself. It
-  starts transparent.
+  starts transparent. Asked for again with the same size, it is the same
+  picture.
 - `canvas:set(buffer)` copies `width × height × 4` bytes into it: one
   pixel after another, row by row from the top, each as red, green, blue,
   opacity (not premultiplied). Written as one number with
   `buffer.writeu32` that is `0xAABBGGRR`. It returns `true`, or `false` if
   the picture was changed too recently ([limits](#limits)); the old
-  picture then stays.
+  picture then stays, and the app draws your layer once more when the
+  picture can be changed again, so a picture that stands is never left
+  out of date.
+- Setting it to the bytes it already holds changes nothing and costs
+  nothing.
 - The buffer is yours and counts against the theme's 8 MiB of memory; the
   picture is the app's and counts against the image budget.
 
@@ -340,13 +360,21 @@ draw = function(draw, frame)
 end
 ```
 
-What that costs, measured for a 760×640 window: the field takes 1.4 ms in
-Luau (0.8 ms with a point every 16 px) ten times a second, and the app's
-colouring pass 0.74 ms at `quality = 0.5` thirty times a second. Those
-two add up to about 4% of one core while the window is in use, and nothing
-at rest. (Handing each picture to the graphics card and redrawing the
-window thirty times a second come on top and were not measured.) The same
-picture worked out per pixel on the processor takes 62 ms a frame.
+What that costs, measured for a 760×640 window in the app's own engine:
+the field takes 1.6 ms in Luau (0.9 ms with a point every 16 px) ten
+times a second, and a whole `draw` call that only glides, the app's
+colouring pass at `quality = 0.5` included, 0.5 ms thirty times a second.
+Together about 3% of one core while the window is in use, and nothing at
+rest. (Handing each picture to the graphics card and redrawing the window
+thirty times a second come on top: the whole app, with the software
+renderer, used 10 to 12% of a core, and 2 MiB of memory more than with
+the same theme standing still.) The same picture worked out per pixel on
+the processor takes 62 ms a frame.
+
+A field that hasn't changed isn't coloured again. Drawn with the same
+numbers, the same ramp and the same size as last time, it is the picture
+already made, at no cost: a layer that is redrawn for another reason (an
+event, the pointer) pays nothing for a background that stands still.
 
 `quality` is how many pixels the app computes per pixel of the rectangle
 along each side (0.1 to 1; 0.5 by default). The app may use less to stay
@@ -646,7 +674,7 @@ These rows join [the contract's table](theming.md#limits-and-what-happens-when-a
 |---|---|
 | Images: formats | PNG, JPEG, WebP, GIF (the existing rows for size and count apply) |
 | Animations: file; frame size; frames; count | 8 MiB; 1024×1024; 2048; 4 |
-| Animations: counted against "Images: total decoded" | 4 frames each (4 × width × height × 4 bytes) |
+| Animations: counted against "Images: total decoded" | By what playing one holds: a GIF 4¼ of its frames, a WebP 5, an animated PNG 6 (a frame is width × height × 4 bytes); a file of one frame, that frame |
 | Animations: frames shown; decoding | 30 a second; a quarter of one core, all animations together |
 | Pixel pictures: size; count; changes | 512×512; 4; 30 a second each |
 | Fields: points; per `draw`; computed pixels per call; passes | 16 384, each side 2 to 256; 2; 262 144; 30 a second per layer |
@@ -659,16 +687,21 @@ These rows join [the contract's table](theming.md#limits-and-what-happens-when-a
 | A play: `volume`; `rate`; `pan`; `delay` | 0 to 1; 0.5 to 2; −1 to 1; 0 to 1 s |
 | Time: one `sound` call | 2 ms |
 
-Time the app spends decoding a picture or reading a sound file inside one
-of the theme's calls does not count against that call's time limit. The
-work is bounded by the sizes above instead. The colouring pass of
-`draw:field` does count: it is part of drawing.
+**A picture is never decoded inside one of the theme's calls.** A still
+is decoded when it is first drawn, after the hook that drew it has
+returned; an animation's frames on a thread of their own. What does
+happen inside the call counts against its time limit like any other work
+done on the theme's behalf: reading a file (a tenth of a millisecond for
+a picture of 2 MiB), counting an animation's frames, copying a buffer in
+`canvas:set`, and the colouring pass of `draw:field`, which is part of
+drawing. All of it is bounded by the sizes above.
 
 | What goes wrong | What the user sees |
 |---|---|
 | A picture or sound file can't be read, is of another kind than its first bytes promise, or is over a limit | The theme loads without it (drawing it draws nothing; playing it plays nothing); a note. |
+| A picture's file has a sound header and its contents can't be decoded | It has its size and draws nothing; a note, when it is first drawn. An animation that fails after its first frame stands on the frame it reached. |
 | An animation is too heavy to decode in time | It plays slower. A note, once. |
-| `canvas:set` or `draw:field` is called more often than allowed | `set` returns `false`; the field's last picture is drawn again. No note. |
+| `canvas:set` or `draw:field` is called more often than allowed | `set` returns `false`; the field's last picture is drawn again. The layer is drawn once more when there is room, so what stands is never out of date. No note. |
 | A buffer is the wrong size for its picture or field | That call does nothing; a note, once per call site. |
 | A recipe has an unknown key or a value of the wrong type | That value's default is used; a note. A number out of range is clamped; a note. |
 | A recipe has no layers, or more than the limits allow | The sound is silent; a note. |
@@ -718,10 +751,10 @@ proves not to be enough.
 
 | Crate | Holds | Depends on |
 |---|---|---|
-| `crates/gmnb-media` (new) | Sniffing and decoding stills; the animation player and its thread; the field pass; ramps. No toolkit: it produces RGBA bytes. | `png`, `zune-jpeg`, `gif`, `image-webp` |
+| `crates/gmnb-media` (new) | What a file is and how big (`sniff.rs`); decoding stills (`still.rs`); an animation's timeline (`anim.rs`), its frames composited (`stream.rs`), the player and its thread (`player.rs`); ramps and the field pass (`field.rs`); the allowance (`bucket.rs`). No toolkit and no Luau: bytes in, RGBA bytes out. | `png`, `zune-jpeg`, `gif`, `image-webp`; `libc` for a thread's processor time |
 | `crates/gmnb-sound` (new) | The synthesiser (`synth.rs`); reading sound files (`file.rs`, `resample.rs`); the mixer (`mixer.rs`); the table of sounds by event and how an entry becomes a play (`table.rs`); the PulseAudio client (`pulse.rs`); the engine and its thread (`engine.rs`) | `crmath`, `hound`, `lewton`, `pulseaudio` |
-| `crates/gmnb-theme` | `gmnb.synth`, `gmnb.sound`, `gmnb.note`; checking the `sounds` table and what `sound` returns; an event's name (`sound.rs`). It declares; it makes no sound. | `gmnb-sound`, for the types |
-| `apps/gmnb` | Turning bytes into `gdk::MemoryTexture`; the `gmnb` and `draw` functions for pictures; handing a theme's sounds to the engine and its events to `play`; Settings | both |
+| `crates/gmnb-theme` | `gmnb.synth`, `gmnb.sound`, `gmnb.note`; checking the `sounds` table and what `sound` returns; an event's name (`sound.rs`). It declares; it makes no sound. And the pictures' functions: `gmnb.image`, `gmnb.animation`, `gmnb.pixels` (`picture.rs`), `gmnb.ramp` and `draw:field` (`field.rs`), `draw:image`'s options (`draw.rs`): the caps, which frame of an animation is due, the allowances. It decodes nothing while a theme's code runs. | `gmnb-sound`, for the types; `gmnb-media` |
+| `apps/gmnb` | Turning bytes into `gdk::MemoryTexture`, owning the animation player, and the one place its thread reaches the main loop (`layers/replay.rs`, `layers/mod.rs`); handing a theme's sounds to the engine and its events to `play`; Settings | both |
 
 Rules these keep:
 
@@ -767,13 +800,47 @@ Instead:
 3. Read the header for the size. Refuse over 2048×2048, or if it would
    pass the count or the total.
 4. Decode to RGBA8 with the decoder's own limits set to match (`png`
-   `Limits`, `zune` `set_max_width/height`, `gif` `MemoryLimit`, `webp`
-   `set_memory_limit`). PNG: `EXPAND | ALPHA | STRIP_16`. JPEG:
-   `DecoderOptions::new_safe()` (zune's portable code only, none of its
-   `unsafe` SIMD paths; at most 100 scans, its default), output RGBA. A
-   decoder that panics is caught (`catch_unwind`) and the file refused.
+   `Limits`, `zune` `set_max_width/height`, `gif` `MemoryLimit`; for
+   WebP see below). PNG: `EXPAND | ALPHA | STRIP_16`. JPEG:
+   `DecoderOptions::new_safe()`, and zune-jpeg built without its `x86`
+   and `neon` features (its portable code only: none of its `unsafe` SIMD
+   paths is even compiled; at most 100 scans, its default), output RGBA.
+   A decoder that panics is caught (`catch_unwind`) and the file refused.
 5. Premultiply, and wrap as a `gdk::MemoryTexture`
-   (`R8G8B8A8_PREMULTIPLIED`).
+   (`R8G8B8A8_PREMULTIPLIED`) that holds the bytes without copying them.
+
+**When.** Steps 1 to 3 happen at the `gmnb.image` call: the theme is told
+a size, and the caps are checked, from the header alone. Steps 4 and 5
+happen when the app first draws the picture (`layers/replay.rs`), on the
+thread that draws, after the hook that drew it has returned. A picture
+loaded at the top of the file is there for the first frame all the same.
+A theme that is only listed in Settings, or loads pictures it doesn't
+draw, decodes nothing. A file whose header passes and whose contents
+don't decode keeps the size the theme was told, draws nothing, and is
+noted when that is found; it is not tried again.
+
+**A WebP says its size twice**: in the file's header (for an animation,
+in each frame's) and in the picture's own bitstream. `image-webp` 0.2.4
+decodes a lossy picture at the size its bitstream says, allocating for
+it, and compares with the header only afterwards; its `set_memory_limit`
+covers metadata (ICC, EXIF, XMP) and no picture. Measured: a file of 126
+bytes with a 16×12 header around a bitstream claiming 16 383×16 383 made
+the decoder ask for 384 MiB before it refused. So `gmnb-media` reads the
+bitstream's own size first (`VP8 `: 14 bits each after the start code;
+`VP8L`: 14 bits each after the signature) and hands it to the decoder
+only if it is the size already approved; a lossy bitstream must also be a
+key frame whose first partition the chunk holds. Every picture reaches
+the decoder as a still file made of just its own chunks (`ALPH`, `VP8 `,
+`VP8L`), so what was checked is what is decoded. A WebP shorter than its
+RIFF header says is refused as cut short.
+
+One thing is left open: a lossy bitstream also says how long each of its
+later partitions is, in 24 bits, and the decoder allocates a partition
+before finding that the file doesn't hold it. How many partitions there
+are is inside the compressed header, out of reach without decoding. One
+such allocation is alive at a time, so a spoiled lossy WebP can make the
+decoder ask for up to 16 MiB that it never touches, for a moment
+(7.1 MiB seen, from a file with one changed byte).
 
 **A file that fails is remembered.** Asked for again, by the same name,
 it is the same empty picture at no cost and with no second attempt, until
@@ -783,98 +850,227 @@ files, good or bad, however its hooks are written.
 
 Measured, 2048×2048, in the configuration above: PNG 31 ms (a detailed
 picture) to 45 ms (film grain, 9.7 MiB, over the size limit); JPEG 34 ms.
-Reading a header takes a microsecond. Decoding is done on the calling thread, at the `gmnb.image`
-call, so that a picture loaded at the top of the file is there for the
-first frame.
+Reading a header takes a microsecond. As built, with the machine's
+processors capped and shared with other work: a 2.1 MiB PNG 45 ms, a
+2.8 MiB JPEG 61 ms (`tests/memory.rs` prints both).
 
-**The engine gives the time back.** `gmnb_theme::Engine` gains
-`credit(Duration)`: the running call's deadline, and the instant
-`call_in` compares against for "ran four times over", move later by that
-much. The media functions measure their own decoding and reading and
-credit it. Without this a 2048×2048 picture loaded inside `draw` (8 ms)
-would switch the hook off. Credit is given once per file, for its first
-load, success or failure; with the counts above that bounds all the time
-a theme can ever have credited (sixteen images and four animations at the
-measured rates: under a second). Sound files are read on the sound thread
-and need no credit.
+What a decoder holds while it works, counted with a counting allocator
+(`crates/gmnb-media/tests/memory.rs`), as a multiple of the decoded
+picture: PNG 1.1 (1.03 for a real 2048×2048 one), JPEG 1.03, GIF 1.26,
+lossless WebP up to 1.64 (the picture, and its file once more). Files
+with a few bytes changed, under a cap of 256×256, never held more than
+288 KiB (but for the lossy WebP case above).
 
-The four decoders together add 664 KiB to a stripped release binary
-(png 176, zune-jpeg 224, gif 96, image-webp 292, each measured alone).
+**No time is given back.** The first design had `Engine::credit`, to take
+decoding off a call's deadline, because deadlines were of time on the
+wall and a picture was decoded at the `gmnb.image` call. Neither holds
+now: a time limit is of the processor time the calling thread has run,
+and no picture is decoded inside a call. What the pictures' functions
+still do inside a call is small and bounded by the limits: reading the
+file, reading a header, counting an animation's frames (at most 0.9 ms).
+It counts against the call like any other work. Measured in the engine,
+the processor time of the whole call: `gmnb.image` of a 2.1 MiB PNG or a
+2.8 MiB JPEG 0.12 ms; `gmnb.animation` of a 2.7 MiB GIF 0.35 ms, of a
+1.3 MiB animated PNG or a 1.5 MiB WebP 0.09 ms (`gmnb-theme`'s
+`tests/media.rs`, `what_making_a_picture_costs_its_call`). By those
+figures a theme that loads sixteen images and four animations at the top
+of the file spends a few milliseconds of its 250 on them.
+
+The four decoders and the code around them add 836 KiB to GMNB's stripped
+release binary (the decoders alone were measured at 664: png 176,
+zune-jpeg 224, gif 96, image-webp 292). DGMNB links none of it. Its
+binary grows by 8 KiB all the same: the new crates' licences, in the
+list of them it shows.
 
 ### The animation player
 
-**Opening** (`gmnb.animation`, on the calling thread, time credited):
+**Opening** (`gmnb.animation`, on the calling thread, on the call's own
+time):
 
 1. Read (8 MiB at most), sniff: GIF, PNG with an `acTL` chunk before
    `IDAT`, or WebP with the animation flag. A still PNG, WebP or GIF is
-   accepted as an animation of one frame.
+   accepted as an animation of one frame. A JPEG is refused.
 2. Walk the file without decoding pixels and build the timeline: GIF with
-   `DecodeOptions::skip_frame_decoding(true)`; APNG by its `fcTL` chunks;
-   WebP from what `WebPDecoder::new` has already read. Measured: at most
+   `DecodeOptions::skip_frame_decoding(true)`; APNG by its `fcTL` chunks
+   (which must be as many as `acTL` announces); WebP by its `ANMF` chunks
+   (which `WebPDecoder::new` must count the same). Measured: at most
    0.9 ms, for a 9.9 MiB GIF.
 3. Delays: GIF hundredths of a second; APNG `delay_num / delay_den` (a
    denominator of 0 is 100); WebP milliseconds. A delay under 20 ms
    becomes 100 ms. A delay over 10 s becomes 10 s.
-4. Check the limits. Charge `4 × width × height × 4` bytes to the image
-   total.
-5. Decode frame 1 now. It is the still frame, and it means reduced motion
-   never starts the thread.
+4. Check the limits, and charge the image total with what playing it
+   will hold (below).
 
-**Compositing.** One RGBA8 canvas of the file's canvas size, transparent
-at the start of each pass.
+No frame is decoded at the call. **Frame 1** is decoded when the
+animation is first drawn, on the thread that draws, and kept for as long
+as the theme is loaded: it is the still frame. Reduced motion, a
+preview's tile and `draw:tile` show it without asking anything of the
+media thread, which they therefore never start, and without disturbing
+an animation that plays in another layer.
 
-- GIF: draw the frame's rectangle, skipping transparent pixels; then
-  dispose as the frame says (keep; restore to transparent; restore the
-  canvas as it was before the frame, for which one copy is kept).
+**Compositing** (`stream.rs`). One RGBA8 canvas of the file's canvas
+size, transparent at the start of each pass.
+
+- GIF: decoded to palette indices; the frame's rectangle is drawn,
+  skipping transparent pixels; then disposed of as the frame says (keep;
+  restore to transparent; restore the canvas as it was before the frame,
+  for which a copy of that rectangle is kept).
 - APNG: `blend_op` source or over; `dispose_op` none, background
-  (transparent), previous.
-- WebP: `image-webp` composites; its output is the canvas.
+  (transparent), previous (on the first frame: background). A first image
+  that is not a frame (no `fcTL` before `IDAT`) is skipped.
+- WebP: each frame's own picture is decoded by `image-webp` as a still
+  (see "A WebP says its size twice") and composited here: blended or not
+  as its flag says, its rectangle made transparent afterwards if it asks
+  to be disposed of. `image-webp` 0.2.4's own compositing is not used:
+  it ignores "dispose to background" unless it is given a background
+  colour, and with one it clears the wrong bytes under a frame that has
+  no alpha.
 
-Each finished canvas is copied, premultiplied, into a
-`gdk::MemoryTexture`.
+Blending is source-over on straight alpha, rounded to the nearest. The
+compositing was compared once, frame by frame, with other programs' on
+the six test animations this chapter's figures come from (ImageMagick
+for GIF and, through libwebp, WebP; ffmpeg for APNG): 288 frames, all
+identical. Which blends and disposals those six files use was not
+catalogued (their frames cover parts of the picture, and three of them
+are partly clear throughout); every blend and disposal is exercised by
+the tests' hand-made files, against pictures written out by hand.
 
-**Playing.** Per animation the main thread holds `shown` (a frame's index
-and texture) and at most one frame `ahead`. A draw wants frame `i`: the
-last frame whose start is at or before the position (`time`, or the
-layer's clock; modulo `duration` when looping, else clamped).
+Each finished canvas is copied, premultiplied, and handed over; the
+texture made of it holds those bytes without another copy.
+
+**Playing** (`player.rs`). Per animation the main thread holds `first`,
+`shown` and at most one frame `ahead`. A draw wants frame `i`: the last
+frame whose start is at or before the position (`time`, or the layer's
+clock; modulo `duration` when looping, else clamped).
 
 | `i` is | Then |
 |---|---|
 | `shown` | Draw it. |
 | `ahead` | It becomes `shown`; ask the thread for the frame after it (wrapping); draw it. |
-| neither | Ask the thread for `i`; draw `shown` meanwhile. When `i` arrives it becomes `shown`, and every layer that drew this animation in its last frame is redrawn. |
+| neither | Ask the thread for `i`; draw `shown` meanwhile. When `i` arrives it becomes `shown`, every layer that drew this animation in its last frame is painted again (its hook is not run again), and the frame after `i` is asked for. |
+
+The first frame is never asked of the thread: after the last frame,
+`ahead` is `first`.
 
 The thread decodes forward only. Asked for a frame behind its place, it
 starts the file again. Asked for one further ahead, it decodes and drops
-the frames between. At the last frame it rewinds, so the first frame of
-the next pass is `ahead` in time and the loop has no gap.
+the frames between. Of several requests for one animation it does the
+latest.
 
-**The quarter core.** After a frame that took `d` to decode and
-composite, the thread does not start another for `3d`. One thread serves
-all the theme's animations in turn, so the cap covers them together.
+**A frame that fails.** A frame that can't be decoded (a file spoiled
+past its header; a decoder that panics, which is caught) leaves the
+animation on the frame it reached, with a note; the thread is not asked
+again, and goes on serving the others.
+
+**What it holds**, counted with a counting allocator while each format
+played (256×256 frames, one of them a part that asks for the previous
+picture back): the first frame, the one shown, the one ahead (or being
+made) and the thread's canvas are four frames. On top comes what the
+format's decoder keeps between frames: a GIF's frame as palette indices,
+a quarter of a frame (4.47 frames held in all); for a PNG the `png`
+crate's own buffers, about a frame and a half (5.72); for a WebP nothing
+between frames (4.01) and the frame being decoded while it is (4.68). And
+the rectangle a frame asks to have put back. The image total is charged
+4¼, 6 and 5 frames, plus that rectangle (`Timeline::charge`). (The first
+design said four frames for every format.) A file of one frame never
+plays, so no thread or canvas is made for it: it is charged its one
+frame, as a still is.
+
+**The quarter core.** After a frame that took `d` of processor time to
+decode and composite (the thread's own, `CLOCK_THREAD_CPUTIME_ID`: a
+machine busy with other things doesn't make an animation rest longer),
+the thread does not start another for `3d`. One thread serves all the
+theme's animations in turn, so the cap covers them together.
+
+**Too heavy.** The player keeps the mean processor time a frame of each
+animation takes: of the frames decoded so far and, once there are as
+many as the file has, of about the last pass (frames of one file differ
+in cost, its first being the dearest, and what counts is what a pass
+takes). It is believed once two dozen frames are in it. The animations
+asked for within the last
+second need, at full speed, the sum of `time a frame / mean delay` of a
+core. If that is more than a quarter, the app tells the theme's clock how
+much slower to go (`Api::set_slow`): from then on an animation falls
+behind its layer's clock by that factor, frame by frame, none skipped,
+and its next frame is due that much later. At a factor of 1 its position
+is the layer's clock exactly. A note says so, once.
 
 **Scheduling.** A draw of an animation on the layer clock records "next
-frame due in `max(start[i+1] − position, 1/30)`". After the hook returns,
-the layer's request is the smaller of that and what the hook returned
-(`nil` being "never"). Everything else is the contract's frame clock: the
+frame due in `max(start[i+1] − position, 1/30)`" (`Drawn::due`). It is
+kept apart from what the hook returned (a readout's change ends when
+`draw` returns `nil`, whatever it drew); the layer's request is the
+smaller of the two. Everything else is the contract's frame clock: the
 request is honoured only while the window is mapped and active, motion is
 allowed and the app has not settled.
 
+**Once a frame.** The toolkit rounds a frame's time to the display's
+refresh, so the time a layer is drawn at can be some milliseconds before
+or after the moment (up to 7 seen, at 60 a second). Three things keep a
+layer's clock and its timer in step (`layers/mod.rs`, `draw.rs`):
+
+- A layer its timer woke is drawn at a time no earlier than the timer's.
+- A timer waits from the frame's time: one armed in a frame dated ahead
+  of the moment waits that much longer.
+- Timers are of whole milliseconds, so the frame due on a layer's clock
+  is the last that starts within 2 ms (no frame is shorter than 20 ms).
+
+Without them a layer was often woken a few milliseconds before its
+animation's next frame was due on its clock. It drew the old frame again
+and showed the frames after it late, a thirtieth of a second apart, until
+it had caught up: a 24-a-second loop was drawn 28 times a second.
+Measured now, for each of the nine loops below: 358 to 361 draws for the
+361 frames decoded in 15 s.
+
 **At rest:** no request, so no frame; the thread blocks on its queue;
-0 wake-ups.
+0 wake-ups. Measured in the running app: with an animated background and
+the window not in use, or under reduced motion, no media thread exists;
+after the app has settled the thread's processor time and its count of
+wake-ups (the kernel's) stand still. Over 10 s, every thread of the
+settled app (an animated background, and the swirl) spent 0.000 ms on a
+processor and was not woken once, like the base look's (each thread's
+`schedstat` and voluntary context switches).
+
+**Playing, measured** in the running app for the 2 s loops at 24 frames a
+second of the authors' table, the media thread's own processor time
+(decoding, compositing, the premultiplied copy), of one core:
+
+| Loop | GIF | APNG | WebP (lossy) |
+|---|---|---|---|
+| 480×270, soft gradients | 1.3% | 2.2% | 4.5% |
+| 480×270, busy detail | 3.4% | (file not kept) | 4.5% |
+| 760×640, soft gradients | 5.3% | 5.4% | 8.7% |
+| 760×640, busy detail | (too big) | (too big) | 17.6% |
+
+It is woken once a frame. Nothing was said to play slower: the busy
+760×640 WebP, the heaviest, keeps under the quarter. The whole app,
+painting the window 24 times a second with the software renderer, used
+8 to 12% of a core at 480×270 and 23 to 35% at 760×640: scaling and
+painting a picture costs more than decoding it.
 
 ### Pixel pictures
 
-`gmnb.pixels(w, h)` charges `w × h × 4` to the image total and starts as a
-transparent texture. `set(buffer)` checks the length, copies the bytes
-(`mlua::Buffer::to_vec`), and makes a new `gdk::MemoryTexture`
-(`R8G8B8A8`, straight alpha). The old texture is dropped; the toolkit
-frees its copy on the graphics card with it.
+`gmnb.pixels(w, h)` charges `w × h × 4` to the image total and starts
+transparent. Like the others it remembers its arguments: the same size is
+the same picture. `set(buffer)` checks the length and copies the bytes
+(`mlua::Buffer::to_vec`); the app makes a new `gdk::MemoryTexture`
+(`R8G8B8A8`, straight alpha) of them the next time the picture is drawn.
+The old texture is dropped; the toolkit frees its copy on the graphics
+card with it. Bytes equal to the ones it holds change nothing and spend
+nothing. A picture over a limit has no size, and a `set` that returns
+`false`.
 
 The allowance: each picture has up to 2 tokens, gains 30 a second, and a
 `set` spends one. (A plain "not within 33 ms" would refuse every other
 frame of a steady 30 a second, since frames arrive a millisecond early as
 often as late.) Fields use the same rule per layer.
+
+**A refusal doesn't leave a stale picture standing.** When a `set` or a
+field's pass is refused inside a hook, the layer is owed a frame
+(`Drawn::retry`): the app draws it once more when the allowance has room,
+under reduced motion and after a hook that returned `nil` too. Four such
+frames in a row at most, so a hook that is refused every time it is drawn
+(it sets one picture twice a frame) is not drawn for ever on that
+account.
 
 Measured in the real engine (sandbox, heap cap, deadline interrupt on):
 17.2 ns per `buffer.writeu32`; 96×80 in 0.13 ms, 190×160 in 0.52 ms,
@@ -899,7 +1095,8 @@ the rectangle `w × h`. All arithmetic in 32-bit floats.
    (`row = top + (bottom − top) × ty`, then
    `value = left + (right − left) × tx`).
 4. **Value.** One channel: the number. Two: `√(u² + v²)`.
-5. **Position.** `p = value × scale + offset`.
+5. **Position.** `p = value × scale + offset`. A position that is not
+   finite counts as 0.
    - `cycle`: `p ← p − n × floor(p / n)`. Band `b = floor(p)`, fraction
      `f = p − b`; the colours are `b` and `(b + 1) mod n`.
    - not `cycle`: `p` is clamped to `0 … n − 1`. Band
@@ -918,15 +1115,46 @@ the rectangle `w × h`. All arithmetic in 32-bit floats.
    (`R8G8B8A8_PREMULTIPLIED`), drawn with `append_scaled_texture`
    (linear) over the rectangle.
 
-Measured for a 760×640 rectangle, one thread, no hand-written SIMD:
+Step 1's "rounded down" is done in whole numbers (the largest `W'` with
+`W'² × H ≤ W × 262 144`), so that no rounding of a square root decides a
+pixel. The rest is the steps as written, in 32-bit floats, with nothing
+left to the compiler's taste: `floor` is computed in float arithmetic
+alone (adding and taking away 2²³, which is exact), with no branch and
+one conversion to a whole number a pixel, so a row is worked several
+pixels at a time. `crates/gmnb-media/tests/field.rs` holds the pass equal,
+byte for byte, to these steps written out plainly with the library's own
+`floor` (120 fields, ramps and sizes, over a million pixels), and to a
+stored hash.
 
-| Computed pixels | Table (as specified) | Blend computed per pixel |
-|---|---|---|
-| 760×640 (`quality` 1; over the cap, so not reachable) | 2.9 ms | 7.2 ms |
-| 380×320 (`quality` 0.5) | 0.74 ms | 1.8 ms |
-| 253×213 (`quality` 1/3) | 0.33 ms | 0.8 ms |
+The texture is of the picture's own bytes, without a copy. The app keeps
+the textures of the last four fields' pictures (`layers/replay.rs`), so
+a field that moves leaves no heap of old frames behind it; one let go
+while its picture still stands is made again of the same bytes.
 
-The largest pass allowed (262 144 pixels) is therefore about 1.6 ms.
+**Where and how often.** The pass runs inside the `draw:field` call that
+asks for it, on that call's time. Per layer (per keypad, per readout) it
+runs 30 times a second at most, two in hand. Past that the field's last
+picture is drawn again and the layer is owed a frame (see "Pixel
+pictures"). Two fields in one `draw` take turns: the one that went
+without last time goes first. A field asked for with the numbers (after
+the glide), the ramp, `scale`, `offset` and size of its last picture *is*
+that picture: nothing is coloured and nothing spent. A preview's tile is
+drawn once and stands, so its fields are always coloured.
+
+Measured for a 760×640 rectangle, one thread, no hand-written SIMD
+(release build, the development machine under its processor cap):
+
+| Computed pixels | As built | The first prototype's table | Blend computed per pixel |
+|---|---|---|---|
+| 760×640 (`quality` 1; over the cap, so not reachable) | 2.2 ms | 2.9 ms | 7.2 ms |
+| 557×469 (the most allowed) | 1.2 ms | | |
+| 380×320 (`quality` 0.5) | 0.55 ms | 0.74 ms | 1.8 ms |
+| 253×213 (`quality` 1/3) | 0.25 ms | 0.33 ms | 0.8 ms |
+
+In the real engine, a whole `draw` call of the swirl demonstration at
+760×640 (`crates/gmnb-theme/tests/themes/swirls`): 0.53 ms of processor
+time when it only glides, 2.2 ms when it also computes a field every
+12 px (1.5 ms every 16 px); the Luau field itself 1.6 ms and 0.93 ms.
 
 **Does the primitive earn its place?** Against the same shader worked out
 per pixel (the picture the user's site draws), for the ColorMix swirl:
@@ -943,6 +1171,14 @@ per pixel (the picture the user's site draws), for the ColorMix swirl:
 A field every 12 px matches what colours every 4 px achieve, at a tenth
 of the Luau time, and its errors are soft where the other's are broken
 band edges. Stills of each are in `theming-work/media/out/swirls/`.
+
+As built the same comparison is a test (`tests/field.rs`, the field
+computed in Rust; `gmnb-theme`'s `tests/media.rs`, by the demonstration
+theme's Luau in the real engine): 1.92 / 0.87% at 16 px, 1.14 / 0.18% at
+12 px, 0.66 / 0.01% at 8 px; colours 4.42 / 4.94% at 12 px. With a
+hard-edged ramp every pixel the pass makes is one of the ramp's colours;
+scaled up from half size 4.3% of the window's pixels sit on a softened
+edge, whatever the grid, against 19.8% for colours every 12 px.
 
 ### The synthesiser, exactly
 
@@ -1387,6 +1623,29 @@ most in the built-in themes, so at the default nothing peaks above
     `via = "assistive"` reaches layers and makes no play.
 11. **DGMNB**: the widened `cargo tree` check.
 
+**The pictures' tests, as built** (5 to 9). Ten small files by other
+programs' encoders are in `crates/gmnb-media/tests/fixtures`, 2 KiB in
+all (a JPEG and a lossy WebP can't be written by the tests at all);
+everything else is written by the tests, chunk by chunk, so that every
+field of every frame is theirs to choose:
+
+| Where | What |
+|---|---|
+| `gmnb-media` `tests/stills.rs` | Each decoder with good files of every kind; truncated at every length, the wrong first byte, a header claiming 60 000×60 000 (each format), a GIF frame claiming it inside a small canvas, a WebP whose bitstream claims another size than its header, 4 400 files with a few bytes changed; a decoder that panics |
+| `gmnb-media` `tests/animations.rs` | Frame `i` against hand-written pictures for a GIF, an animated PNG (with and without a first image that is no frame) and an animated WebP, every disposal and blend; delays of 0; the loop; a GIF of 3 000 one-pixel frames; files that announce other than they hold; 1 500 animations with bytes changed. The player: order, the loop, 0 wake-ups at rest (counted), no thread under reduced motion or for a still, the thread gone with its player, a quarter of a core (processor time against the clock), too heavy, a source that fails or panics |
+| `gmnb-media` `tests/memory.rs` | Under a counting allocator: what playing each format holds against what is charged; what decoding a still holds; nothing allocated for a refused header; malformed files under a cap |
+| `gmnb-media` `tests/field.rs` | The pass against the steps written plainly, byte for byte; a stored hash; the swirl against the shader, and against colours computed coarsely; the cost (ignored: a measurement) |
+| `gmnb-theme` `tests/media.rs` | The same through a theme: the four kinds of still; hostile files through the draw path; every cap of the limits table hit on purpose; an animation's frames, loop and next frame under a clock the test holds; reduced motion, previews, tiles; "plays slower"; `gmnb.pixels` and its allowance; ramps; a field written by Luau hashing to the stored value; the allowance, the owed frame, the unchanged field; the swirl demonstration under the real limits |
+| `apps/gmnb` `layers::tests::a_themes_pictures_render` | A still, a tile, a filled picture, an animation's frame and a field through the toolkit's software renderer, colours checked at points, the toolkit's criticals fatal, no media thread started |
+| `apps/gmnb` `theme::tests::theming_installs_no_sources` | The one place the media thread reaches the main loop (`wake`) |
+| The running app (`GMNB_THEME_STATS`) | Media threads ever started (0 for the base look and Mono), the thread's wake-ups, frames decoded |
+
+Test 7 as first written said a malformed file "never allocates past the
+image total". What holds, counted: a refused header allocates nothing;
+a decoder holds at most the picture it was allowed and its working copy;
+and a spoiled lossy WebP can make its decoder ask for up to 16 MiB more
+that it never touches (see "Decoding stills").
+
 ### Packaging
 
 No package gains a build or run-time dependency: everything added is a
@@ -1491,3 +1750,17 @@ Decided here, and worth a second look by the owner:
 8. **The engine connects to the sound server when a theme with sounds is
    loaded**, not at its first sound, so that Settings can say early that no
    sound system was found.
+9. **No time is given back to a theme** (`Engine::credit` was not built):
+   pictures are decoded outside the theme's calls, and what is left
+   inside them (reading a file) counts.
+10. **An animation counts as 4¼ to 6 of its frames, by format**, not 4:
+    that is what playing one was counted to hold. The animated PNG's 6 is
+    the `png` crate keeping a frame and a half of buffers between frames.
+11. **`image-webp` 0.2.4 is kept at arm's length.** It composites no
+    animation here, and sees no bitstream whose own size wasn't checked
+    first. What it can still be made to do is ask for 16 MiB it never
+    touches, for a moment. A later version may make all of this
+    unnecessary; the checks cost nothing to keep.
+12. **A picture that changes too often is made good one frame later**
+    (the layer is owed a frame), under reduced motion too. Without it a
+    still picture could stand out of date.

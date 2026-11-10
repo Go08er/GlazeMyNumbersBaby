@@ -1058,7 +1058,9 @@ The app owns the clock:
   the wait ends the layer is drawn once with `dt = 0` and carries on.
 - "Next frame" is the display's refresh, at most 120 a second. A wait of
   1/30 s or more uses a plain timer, so a slow drift doesn't keep the
-  toolkit's frame clock running.
+  toolkit's frame clock running. A request never comes due sooner than
+  asked, to the millisecond, on the layer's own clock (`frame.time`); it
+  may come a few milliseconds later.
 - The app settles after 45 seconds without a key press, a pointer move
   over the window, an event or the window becoming active. Any of those
   wakes it.
@@ -1446,7 +1448,7 @@ sounds.
 | Events kept per layer; longest kept | 32; 5 s |
 | Images: formats | PNG, JPEG, WebP, GIF |
 | Animations: file; frame size; frames; count | 8 MiB; 1024×1024; 2048; 4 |
-| Animations: counted against "Images: total decoded" | 4 frames each (4 × width × height × 4 bytes) |
+| Animations: counted against "Images: total decoded" | By what playing one holds: a GIF 4¼ of its frames, a WebP 5, an animated PNG 6 (a frame is width × height × 4 bytes); a file of one frame, that frame |
 | Animations: frames shown; decoding | 30 a second; a quarter of one core, all animations together |
 | Pixel pictures: size; count; changes | 512×512; 4; 30 a second each |
 | Fields: points; per `draw`; computed pixels per call; passes | 16 384, each side 2 to 256; 2; 262 144; 30 a second per layer |
@@ -1465,8 +1467,11 @@ code has run, not what the clock on the wall says. A machine busy with
 other things doesn't fail a theme that did nothing slow. Files (`fonts`, `credits`, `gmnb.image`) are relative
 paths inside the theme's own folder; `..`, absolute paths and links that
 lead outside are refused. The same holds for `gmnb.animation` and
-`gmnb.sound`. Time the app spends decoding a picture or reading a sound
-file inside a theme's call does not count against that call's limit.
+`gmnb.sound`. A picture is never decoded inside a theme's call (a still
+when it is first drawn, after the hook has returned; an animation's
+frames on a thread of their own); reading a file inside a call counts
+against it like any other work, and is small (a tenth of a millisecond
+for a picture of 2 MiB).
 
 | What goes wrong | What the user sees |
 |---|---|
@@ -1481,6 +1486,7 @@ file inside a theme's call does not count against that call's limit.
 | The memory limit is hit | The theme is unloaded: the base look, and a toast. |
 | A font or image can't be read or is too big | The theme loads without it; a note. |
 | An animation or sound can't be read, is too big, or isn't what its first bytes promise | The same: drawing it draws nothing, playing it plays nothing; a note. |
+| A picture's file has a sound header and can't be decoded | It has its size and draws nothing; a note, when it is first drawn. |
 | An animation is too heavy to decode in time | It plays slower; a note, once. |
 | `sound` fails or runs out of time | The `sounds` table decides for that event. After 3 failures the function is switched off; a toast, once. |
 | There is no sound system | Silence. Settings → Sound says so. No toast. |
@@ -1693,7 +1699,7 @@ straight on a page counts wherever the style puts something under it in
 | `GMNB_ACTIVE` | The window counts as the one in use whatever the compositor says. A headless compositor never says so, and layers only animate in a window that is. |
 | `GMNB_POINTER="x,y"` | A pointer position for the first keypad's layer, as now. |
 | `GMNB_BENCH="themes=base,aurora,mono,base;opacity"` | Measure: each theme switch, and an opacity drag from 1 to 0.1 and back, each to the end of the next painted frame; prints the figures and the hub's counters, then quits. |
-| `GMNB_THEME_STATS` | Print the hub's counters once the window has settled, after 1.2 s or after as many milliseconds as its value: Luau machines, `style` calls, provider loads and their property counts; and for the layers the frames drawn by kind, the milliseconds their hooks and their replay took, the timers and frame callbacks ever armed and alive now, and each hook's failures. |
+| `GMNB_THEME_STATS` | Print the hub's counters once the window has settled, after 1.2 s or after as many milliseconds as its value: Luau machines, `style` calls, provider loads and their property counts; and for the layers the frames drawn by kind, the milliseconds their hooks and their replay took, the timers and frame callbacks ever armed and alive now, and each hook's failures; and for a theme's animations the media threads ever started (0 in the base look), the thread's wake-ups, the frames it decoded and the processor time they took. |
 | `GMNB_SOUND=0` | No sound for the run; nothing sound-related is created. `null`: the mixer runs with no sound server, for tests. |
 | `GMNB_SOUND_DUMP=<folder>` | Every sound the theme makes is written there as a WAV file. |
 | `GMNB_DATE_TO=YYYY-MM-DD` | The date page's "To" date (the comparison's "Date with a result"). |
@@ -1750,11 +1756,12 @@ readout). On the date page a day picked and add/subtract switched are
 | Where | What |
 |---|---|
 | `crates/gmnb-theme/src/draw.rs` | The `draw` table: every call recorded into a `DisplayList` of typed `Op`s, the caps, the push/save stack |
-| `…/path.rs`, `…/picture.rs` | Paths (tables of numbers a Luau builder writes; read when drawn) and pictures (a file's header for its size, the noise recipe; pixels made when first drawn) |
+| `…/path.rs`, `…/picture.rs` | Paths (tables of numbers a Luau builder writes; read when drawn) and pictures (a file's header for its size, the noise recipe; pixels made when first drawn; an animation's timeline; pictures a theme fills) |
+| `…/field.rs` | Ramps and `draw:field`: the pass (which is `gmnb-media`'s) and how often a layer's fields are coloured |
 | `…/layer.rs`, `theme.rs` | The frame a hook is told, in host tables kept between frames; `Theme::draw` and `Theme::preview` |
 | `…/sched.rs`, `…/events.rs` | "Asking for the next frame" as a state machine with no clock of its own; a layer's ring of events |
 | `apps/gmnb/src/layers/mod.rs` | The runtime: an `Instance` per place a layer is drawn, the one function that arms a timer or a frame callback, `emit` |
-| `…/layers/replay.rs` | A display list into a `GtkSnapshot`, as the draw API's table maps it; textures and layouts kept between frames |
+| `…/layers/replay.rs` | A display list into a `GtkSnapshot`, as the draw API's table maps it; textures and layouts kept between frames; a theme's files decoded by the app's own decoders when first drawn, and its animations' player ([the media chapter](theming-media.md#for-implementers)) |
 | `widgets/backdrop.rs`, `keypad.rs`, `display.rs`, `layers/tile.rs` | Where the four layers and the previews are drawn |
 
 A layer's hook runs inside its widget's `snapshot`, and only if the
