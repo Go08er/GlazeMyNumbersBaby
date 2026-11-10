@@ -4,8 +4,9 @@
 --   "luau-lsp.types.definitionFiles": ["path/to/gmnb.d.luau"],
 --   "luau-lsp.platform.type": "standard"
 --
--- The contract these types belong to is docs/theming.md. Where the two
--- disagree, the document wins and this file has a bug.
+-- The contract these types belong to is docs/theming.md, with
+-- docs/theming-media.md for pictures that move and for sound. Where they
+-- and this file disagree, the documents win and this file has a bug.
 
 ---------------------------------------------------------------------------
 -- Values
@@ -696,6 +697,78 @@ export type Path = {
 -- A picture from the theme's images folder, or generated noise.
 export type Image = { width: number, height: number }
 
+-- An animated picture (GIF, APNG, animated WebP). It always loops.
+export type Animation = {
+	width: number,
+	height: number,
+	-- How many frames, and how long one pass takes, in seconds.
+	frames: number,
+	duration: number,
+}
+
+-- A picture the theme fills from a buffer.
+export type Pixels = {
+	width: number,
+	height: number,
+	-- Copies width × height × 4 bytes: each pixel red, green, blue,
+	-- opacity (not premultiplied), rows from the top. As one number with
+	-- buffer.writeu32: 0xAABBGGRR. Returns false, changing nothing, if
+	-- the picture was changed too recently (30 times a second at most).
+	set: (self: Pixels, data: buffer) -> boolean,
+}
+
+export type Picture = Image | Animation | Pixels
+
+export type ImageOptions = {
+	-- "trilinear" (the default for stills): smooth, and clean when drawn
+	-- much smaller. "linear" (the default for animations and Pixels):
+	-- smooth. "nearest": hard pixels.
+	filter: ("trilinear" | "linear" | "nearest")?,
+	-- Animations: where in the animation, in seconds. Left out, the
+	-- layer's clock, and the app schedules the next frame itself.
+	time: number?,
+	-- Animations, with `time`: wrap around past the end (the default) or
+	-- hold the last frame.
+	loop: boolean?,
+}
+
+-- Made by gmnb.ramp: the colours a field is drawn in.
+export type Ramp = { colors: { Rgba }, edge: { number }, cycle: boolean }
+
+export type RampSpec = {
+	-- 2 to 16.
+	colors: { Color },
+	-- Where in a band (0 to 1) the blend to the next colour starts and
+	-- ends. { 0, 1 } by default; two equal numbers give a hard edge.
+	edge: { number }?,
+	-- True: after the last colour comes the first again (repeating
+	-- bands). False (the default): a gradient map from the first colour
+	-- at position 0 to the last at position #colors - 1.
+	cycle: boolean?,
+}
+
+-- A coarse grid of numbers, coloured per pixel by the app.
+export type FieldSpec = {
+	-- cols × rows × channels 32-bit floats (buffer.writef32), rows from
+	-- the top. The grid's corners sit on the rectangle's corners.
+	data: buffer,
+	cols: number,
+	rows: number,
+	-- 1: a point's value is the number. 2: the length of the pair.
+	channels: number,
+	ramp: Ramp,
+	-- position = value × scale + offset. Defaults 1 and 0.
+	scale: number?,
+	offset: number?,
+	-- A second snapshot of the same size, and how far towards it (0 to 1)
+	-- to glide. Done on the numbers, before the colours.
+	next: buffer?,
+	mix: number?,
+	-- Computed pixels per pixel of the rectangle along each side, 0.1 to
+	-- 1. Default 0.5. The app may use less.
+	quality: number?,
+}
+
 -- One character of the display's value, laid out by the app.
 export type Glyph = { index: number, x: number, y: number, w: number, h: number }
 
@@ -712,8 +785,9 @@ export type Draw = {
 	text: (self: Draw, text: string, x: number, y: number, font: Font, paint: Paint) -> (),
 	text_size: (self: Draw, text: string, font: Font) -> (number, number),
 	glyph: (self: Draw, glyph: Glyph, paint: Paint) -> (),
-	image: (self: Draw, image: Image, x: number, y: number, w: number, h: number) -> (),
-	tile: (self: Draw, image: Image, x: number, y: number, w: number, h: number) -> (),
+	image: (self: Draw, image: Picture, x: number, y: number, w: number, h: number, options: ImageOptions?) -> (),
+	tile: (self: Draw, image: Picture, x: number, y: number, w: number, h: number) -> (),
+	field: (self: Draw, x: number, y: number, w: number, h: number, spec: FieldSpec) -> (),
 	-- Groups: everything drawn until the matching pop() is affected.
 	push_clip: (self: Draw, x: number, y: number, w: number, h: number, radius: Radius?) -> (),
 	push_opacity: (self: Draw, opacity: number) -> (),
@@ -741,8 +815,8 @@ export type KeyKind = "number" | "operator" | "func" | "equals" | "toggle" | "ot
 export type Event = {
 	-- "press": a control was used. "result" / "error": a calculation ended.
 	-- "show": a keypad came into view. "option": one of the theme's
-	-- options changed.
-	kind: "press" | "result" | "error" | "show" | "option",
+	-- options changed. "mode": the user changed page or calculator mode.
+	kind: "press" | "result" | "error" | "show" | "option" | "mode",
 	-- Seconds since it happened.
 	age: number,
 	-- Where: the press point, or the middle of `rect`. In the layer's
@@ -753,7 +827,10 @@ export type Event = {
 	page: "calculator" | "converter" | "date" | "graphing" | "settings",
 	-- press: what was pressed and how.
 	source: ("key" | "button" | "swap" | "date")?,
-	via: ("pointer" | "keyboard")?,
+	-- "assistive": operated through the accessibility interface.
+	via: ("pointer" | "keyboard" | "assistive")?,
+	-- press: what the control does, when it is one of these.
+	action: ("clear" | "backspace" | "memory")?,
 	-- press on a key: which one. `id` is the same for the same key every
 	-- time; use it for variety, not meaning.
 	key: { id: number, kind: KeyKind }?,
@@ -837,13 +914,184 @@ export type Layer = {
 	draw: ((draw: Draw, frame: Frame) -> Again)?,
 	-- Which events this layer is told about, and for how many seconds each
 	-- stays in `frame.events`.
-	events: { press: number?, result: number?, error: number?, show: number?, option: number? }?,
+	events: { press: number?, result: number?, error: number?, show: number?, option: number?, mode: number? }?,
 	-- True: `frame.pointer` is filled in and the layer is redrawn as the
 	-- pointer moves over it.
 	pointer: boolean?,
 	-- Keypad only: move, scale or fade one cell (an entrance, say).
 	place: ((key: KeyCell, frame: Frame) -> Placement?)?,
 }
+
+---------------------------------------------------------------------------
+-- Sound
+---------------------------------------------------------------------------
+
+-- Made by gmnb.synth or gmnb.sound.
+export type Sound = { kind: "sound" }
+
+-- Hertz, or a note name: "A4" (440), "C#5", "Eb3".
+export type Pitch = number | string
+
+-- From the first value to the second over `time` seconds (left out: the
+-- layer's or the sound's whole length), then staying there. "exp" (the
+-- default) moves by equal musical steps and needs both above zero.
+export type Glide = { [number]: number, time: number?, curve: ("exp" | "linear")? }
+export type PitchGlide = { [number]: Pitch, time: number?, curve: ("exp" | "linear")? }
+
+-- A layer's loudness over time, in seconds: up to full in `attack`, down
+-- to `sustain` (0 to 1) in `decay`, there for `hold`, to silence in
+-- `release`. Defaults 0.002, 0.1, 0, 0, 0. With sustain 0 the layer ends
+-- after attack + decay.
+export type Envelope = {
+	attack: number?,
+	decay: number?,
+	sustain: number?,
+	hold: number?,
+	release: number?,
+	-- How decay and release fall: "exp" (the default; 60 dB over the
+	-- segment) or "linear".
+	curve: ("exp" | "linear")?,
+}
+
+export type SynthFilter = {
+	type: "lowpass" | "highpass" | "bandpass",
+	-- Hertz, 20 to 20000; may glide.
+	freq: number | Glide,
+	-- 0.1 to 30. Default 0.707.
+	q: number?,
+}
+
+export type SynthLayer = {
+	-- Default "sine".
+	wave: ("sine" | "triangle" | "square" | "saw" | "noise")?,
+	-- Default 440. Noise: left out, white noise; given, each value is
+	-- held for one period.
+	freq: (Pitch | PitchGlide)?,
+	-- Cents.
+	detune: number?,
+	-- Square: the fraction of a period spent high, 0.05 to 0.95.
+	width: number?,
+	-- Where in its period the wave starts, 0 to 1.
+	phase: number?,
+	-- Noise: which noise.
+	seed: number?,
+	-- A sine at `ratio` × the pitch bends this layer's phase by up to
+	-- `index` radians.
+	fm: { ratio: number, index: number | Glide }?,
+	-- Pitch wobble: hertz, and cents either way.
+	vibrato: { rate: number, depth: number }?,
+	-- Loudness wobble: hertz, and 0 to 1.
+	tremolo: { rate: number, depth: number }?,
+	filter: SynthFilter?,
+	env: Envelope?,
+	-- Its share of the mix. Default 1.
+	gain: number?,
+	-- -1 left to 1 right.
+	pan: number?,
+	-- Seconds into the sound at which it starts.
+	at: number?,
+}
+
+-- One effect on the whole mix. Which fields are read depends on `type`.
+export type SynthEffect = {
+	type: "delay" | "reverb" | "drive" | "crush" | "lowpass" | "highpass" | "bandpass",
+	-- delay: seconds between echoes (0.001 to 1), how much quieter each
+	-- is (0 to 0.9), and whether they bounce left and right.
+	time: number?,
+	feedback: number?,
+	ping_pong: boolean?,
+	-- delay and reverb: how much of it is added, 0 to 1.
+	mix: number?,
+	-- reverb: the room's length and how dull its walls are, each 0 to 1.
+	size: number?,
+	damp: number?,
+	-- drive: 0 to 1.
+	amount: number?,
+	-- crush: bits (1 to 16) and samples a second (100 to 48000).
+	bits: number?,
+	rate: number?,
+	-- lowpass, highpass, bandpass: as a layer's filter.
+	freq: (number | Glide)?,
+	q: number?,
+}
+
+export type Recipe = {
+	-- 1 to 8, mixed.
+	layers: { SynthLayer },
+	-- Up to 4, applied to the mix in order.
+	effects: { SynthEffect }?,
+	-- The finished sound's loudest sample, 0 to 1. Default 0.5.
+	gain: number?,
+	-- The whole length in seconds, echoes included; 4 at most. Left out:
+	-- as long as the layers, plus the tail of a delay or reverb.
+	length: number?,
+}
+
+-- One sound, played one way.
+export type Play = {
+	sound: Sound,
+	-- 0 to 1. Default 1.
+	volume: number?,
+	-- Speed and with it pitch, 0.5 to 2. Default 1.
+	rate: number?,
+	-- -1 left to 1 right. Default 0.
+	pan: number?,
+	-- Seconds before it starts, up to 1.
+	delay: number?,
+}
+
+-- A value, or a range { low, high } to pick from for each play.
+export type Varied = number | { number }
+
+-- What the `sounds` table holds for one event name.
+export type SoundEntry = Sound | false | {
+	-- One sound, or up to 8 to choose from.
+	sound: Sound | { Sound },
+	-- "cycle" (the default): the list in turn, ranges at random.
+	-- "random": both at random. "key": by the key pressed, so the same
+	-- key always sounds the same.
+	pick: ("cycle" | "random" | "key")?,
+	volume: Varied?,
+	rate: Varied?,
+	-- "position": where the control is across the window, at 60% width.
+	pan: (Varied | "position")?,
+	delay: number?,
+}
+
+-- Which sound for which event. A name with no entry uses the next one
+-- listed for it; false plays nothing and stops the search.
+export type Sounds = {
+	-- Any press.
+	press: SoundEntry?,
+	-- Any keypad key; then `press`.
+	key: SoundEntry?,
+	-- These seven try `key`, then `press`.
+	digit: SoundEntry?,
+	operator: SoundEntry?,
+	func: SoundEntry?,
+	equals: SoundEntry?,
+	toggle: SoundEntry?,
+	clear: SoundEntry?,
+	backspace: SoundEntry?,
+	-- Buttons that aren't keys; then `press`.
+	button: SoundEntry?,
+	-- The memory buttons; then `button`, then `press`.
+	memory: SoundEntry?,
+	-- A calculation gave a value, or an error, on the Calculator page.
+	result: SoundEntry?,
+	error: SoundEntry?,
+	-- The page or the calculator's mode was changed.
+	mode: SoundEntry?,
+}
+
+-- What the `sound` function is given: an event as a layer sees it, in
+-- window coordinates, with age 0, and where it happened across the
+-- window: -1 at the left edge to 1 at the right.
+export type SoundEvent = Event & { pan: number }
+
+-- nil: let the `sounds` table decide. false: play nothing. Else what to
+-- play: a sound, one play, or up to 4 plays together.
+export type SoundChoice = nil | false | Sound | Play | { Play }
 
 ---------------------------------------------------------------------------
 -- Options
@@ -909,6 +1157,11 @@ export type Theme = {
 		-- The whole window, over everything.
 		overlay: Layer?,
 	}?,
+	-- Which sound goes with which event.
+	sounds: Sounds?,
+	-- Called for every press, result, error, mode and option event before
+	-- `sounds` is consulted.
+	sound: ((event: SoundEvent, ctx: Ctx) -> SoundChoice)?,
 }
 
 ---------------------------------------------------------------------------
@@ -982,6 +1235,16 @@ export type Gmnb = {
 	svg_path: (d: string) -> Path,
 	image: (file: string) -> Image,
 	noise: (spec: { size: number?, seed: number?, color: Color?, opacity: number? }) -> Image,
+	animation: (file: string) -> Animation,
+	pixels: (width: number, height: number) -> Pixels,
+	ramp: (spec: RampSpec) -> Ramp,
+
+	-- Sound.
+	synth: (recipe: Recipe) -> Sound,
+	-- WAV or Ogg Vorbis. With `gain`, scaled so its loudest sample is that.
+	sound: (file: string, options: { gain: number? }?) -> Sound,
+	-- A note name's frequency in hertz: "A4" is 440.
+	note: (name: string) -> number,
 
 	-- Motion.
 	ease: Easings,

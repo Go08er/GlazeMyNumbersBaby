@@ -11,6 +11,9 @@ on it is also the specification the app is built to.
 - Two themes ship with the app and serve as examples:
   [`mono`](../apps/gmnb/themes/mono/theme.luau) (20 lines) and
   [`aurora`](../apps/gmnb/themes/aurora/theme.luau) (everything).
+- Animated pictures, pictures a theme computes, and sound have a chapter
+  of their own, [Pictures that move, and sound](theming-media.md). Their
+  limits, functions and events are also listed here.
 
 Contents
 
@@ -131,6 +134,7 @@ mytheme/
   theme.luau        the theme (required)
   fonts/            font files it names in `fonts`
   images/           pictures it loads with gmnb.image
+  sounds/           sound files it loads with gmnb.sound
 ```
 
 - The folder's name is the theme's **id**: lower-case letters, digits, `-`
@@ -163,6 +167,8 @@ What `theme.luau` returns:
 | `options` | list | What Settings offers. See [Options](#options). |
 | `style` | function | `style(ctx)` → the style table. See the [reference](#reference-tokens). |
 | `layers` | table | Draw hooks. See [Drawing](#drawing). |
+| `sounds` | table | Which sound goes with which event. See [Sound](theming-media.md#sound). |
+| `sound` | function | `sound(event, ctx)` → what to play for one event. |
 
 ## When a theme runs
 
@@ -172,6 +178,7 @@ What `theme.luau` returns:
 | Right after, and whenever `ctx` changes: light/dark, the desktop's accent, an option, the Background opacity, reduced motion, the desktop's font | `style(ctx)` | The checked result and the style generated from it. Regenerated only if the result differs. |
 | A layer needs a new picture (see [Drawing](#drawing)) | That layer's `draw` | The picture, until the layer next needs one. |
 | Settings shows the theme's options | `visible`, `preview`, an action's `run` | Each tile's picture until `ctx` changes. |
+| Something happens that may have a sound, and theme sounds are on | `sound(event, ctx)` | Nothing. |
 
 Rules the app keeps:
 
@@ -984,6 +991,7 @@ An event stays for as many seconds as the layer's `events` table says
 | `"error"` | It produced an error. | |
 | `"show"` | A keypad came into view (first shown, or the mode changed). | |
 | `"option"` | The user changed one of this theme's options. | `id`, `value` |
+| `"mode"` | The user changed page or calculator mode (not sent for the page the app starts on). | |
 
 Every event has `age`, `page` (`"calculator"`, `"converter"`, `"date"`,
 `"graphing"`, `"settings"`), `rect` (the control, readout or keypad it
@@ -1001,7 +1009,11 @@ For `press`:
 | `"date"` | A date was picked | |
 
 `via` is `"pointer"` or `"keyboard"` (a key typed on the keyboard presses
-the matching on-screen key).
+the matching on-screen key), or `"assistive"` when the control was
+operated through the accessibility interface.
+
+A press also has `action` when the control does one of three things:
+`"clear"` (C, CE), `"backspace"` or `"memory"` (any memory button).
 
 ### The draw API
 
@@ -1020,7 +1032,8 @@ the layer's; paints may be colours or gradients everywhere.
 | `draw:text(text, x, y, font, paint)` | `append_layout` (gradient: `push_mask` + `append_layout` + `pop` + gradient + `pop`); `x, y` is the top-left |
 | `draw:text_size(text, font)` → `w, h` | Pango layout pixel size; draws nothing |
 | `draw:glyph(glyph, paint)` | `append_layout` of one laid-out character of the display's value, at its place |
-| `draw:image(image, x, y, w, h)` | `append_scaled_texture` (trilinear) |
+| `draw:image(image, x, y, w, h, options?)` | `append_scaled_texture`; `options.filter` is `"trilinear"` (the default for stills), `"linear"` or `"nearest"`. An [animation](theming-media.md#animated-pictures) draws its current frame. |
+| `draw:field(x, y, w, h, spec)` | A grid of numbers coloured per pixel by the app through a ramp, then `append_scaled_texture`. See [Fields](theming-media.md#fields-swirls-plasma-contours). |
 | `draw:tile(image, x, y, w, h)` | `push_repeat` + `append_texture` + `pop`: the image repeated at its own size |
 | `draw:push_clip(x, y, w, h, radius?)` | `push_clip` / `push_rounded_clip` |
 | `draw:push_opacity(opacity)` | `push_opacity` |
@@ -1038,14 +1051,22 @@ A **stroke** is a width, or `{ width, cap, join, dash, dash_offset }`
 `close`, `rect`, `rounded_rect`, `circle`, each returning the path so
 calls chain; or from `gmnb.svg_path("M6 12.5h12")` (`gsk_path_parse`).
 
-Pictures: `gmnb.image("images/stars.png")` loads a PNG or JPEG from the
-theme's folder (`GdkTexture`). `gmnb.noise({ size, seed, color, opacity })`
+Pictures: `gmnb.image("images/stars.png")` loads a PNG, JPEG, WebP or GIF
+from the theme's folder (decoded by the app itself, not by the toolkit's
+loaders: see [Decoding stills](theming-media.md#decoding-stills)). `gmnb.noise({ size, seed, color, opacity })`
 makes a square of speckles: per pixel, in row order, a 32-bit xorshift
 (`s ^= s << 13; s ^= s >> 17; s ^= s << 5`, starting from `seed`, default
 `0x9e3779b9`) gives `n = (s & 0xff) / 255`, and the pixel is `color` at
 alpha `n × opacity`, premultiplied (`GdkMemoryTexture`, RGBA8). Both are
 remembered by their arguments: calling them every frame costs nothing
 after the first.
+
+`gmnb.animation` (GIF, APNG, animated WebP), `gmnb.pixels` (a picture
+filled from a Luau `buffer`) and `gmnb.ramp` are described in
+[Pictures](theming-media.md#pictures). A layer that draws an animation is
+drawn again when the animation's next frame is due, as if `draw` had
+returned that delay; all the rules under
+[Asking for the next frame](#asking-for-the-next-frame) apply to it.
 
 Pushes must be popped and saves restored by the time `draw` returns. The
 app closes what was left open and reports it once.
@@ -1177,7 +1198,9 @@ Settings → Appearance, top to bottom:
    *Open themes folder*. A theme that failed shows its error here; so do
    its warnings (the latest 20).
 3. **The chosen theme's options**, one group per `group`.
-4. **Window**: Background opacity, Vulkan acceleration (as now).
+4. **Sound**: *Theme sounds* (a switch, on by default) and Volume (50% by
+   default). See [Settings](theming-media.md#settings).
+5. **Window**: Background opacity, Vulkan acceleration (as now).
 
 ### How options are saved
 
@@ -1202,6 +1225,8 @@ In `settings.json`, beside the existing keys:
   no longer fits its option (wrong type, a choice that is gone, out of
   range) is ignored and the default used. Options the theme no longer has
   are kept, not deleted.
+- `sound` (boolean, default `true`) and `sound_volume` (0 to 1, default
+  0.5) are the app's, not a theme's.
 - Each of these loads by itself: one mistyped entry costs only that entry,
   as with the existing settings.
 
@@ -1256,10 +1281,22 @@ Colour maths is `appcore::color`, the same code both apps use, done in
 
 `print` goes the same way as `gmnb.warn`.
 
+Media and sound ([their chapter](theming-media.md)):
+
+| Function | Returns |
+|---|---|
+| `gmnb.animation(file)` | An animated picture (GIF, APNG, animated WebP): `{ width, height, frames, duration }`. |
+| `gmnb.pixels(width, height)` | A picture the theme fills: `:set(buffer)` copies RGBA bytes into it. |
+| `gmnb.ramp(spec)` | A colour ramp for `draw:field`. |
+| `gmnb.synth(recipe)` | A sound rendered from a recipe: oscillators, envelopes, filters, effects. |
+| `gmnb.sound(file, { gain }?)` | A sound from a WAV or Ogg Vorbis file. |
+| `gmnb.note(name)` | A note name's frequency in hertz: `gmnb.note("A4")` is 440. |
+
 ## Limits, and what happens when a theme fails
 
 A theme is someone else's code running inside the calculator. It gets a
-sandbox with hard limits, and it can only ever affect how GMNB looks.
+sandbox with hard limits, and it can only ever affect how GMNB looks and
+sounds.
 
 | Limit | Value |
 |---|---|
@@ -1279,11 +1316,27 @@ sandbox with hard limits, and it can only ever affect how GMNB looks.
 | Any string the theme returns or passes to the app | 4 KiB (longer: refused) |
 | A `credits` text file | 64 KiB |
 | Events kept per layer; longest kept | 32; 5 s |
+| Images: formats | PNG, JPEG, WebP, GIF |
+| Animations: file; frame size; frames; count | 8 MiB; 1024×1024; 2048; 4 |
+| Animations: counted against "Images: total decoded" | 4 frames each (4 × width × height × 4 bytes) |
+| Animations: frames shown; decoding | 30 a second; a quarter of one core, all animations together |
+| Pixel pictures: size; count; changes | 512×512; 4; 30 a second each |
+| Fields: points; per `draw`; computed pixels per call; passes | 16 384, each side 2 to 256; 2; 262 144; 30 a second per layer |
+| Ramps: colours; count | 2 to 16; 8 |
+| Sounds: count; length; all together | 32; 4 s; 8 MiB (43 s) |
+| Sound files: size; kinds | 1 MiB; WAV (8, 16, 24 or 32-bit, or float), Ogg Vorbis; 1 or 2 channels; 8 to 96 kHz |
+| Sound recipes: layers; effects; layer-seconds over the whole theme | 8; 4; 64 |
+| Voices at once; plays per event; the same event again | 12; 4; not within 30 ms |
+| A `sounds` entry's list | 8 sounds |
+| A play: `volume`; `rate`; `pan`; `delay` | 0 to 1; 0.5 to 2; −1 to 1; 0 to 1 s |
+| Time: one `sound` call | 2 ms |
 
 Every entry into the theme's code runs under its time limit, the first
 load included. Files (`fonts`, `credits`, `gmnb.image`) are relative
 paths inside the theme's own folder; `..`, absolute paths and links that
-lead outside are refused.
+lead outside are refused. The same holds for `gmnb.animation` and
+`gmnb.sound`. Time the app spends decoding a picture or reading a sound
+file inside a theme's call does not count against that call's limit.
 
 | What goes wrong | What the user sees |
 |---|---|
@@ -1296,6 +1349,10 @@ lead outside are refused.
 | A `draw` takes more than four times its limit | Switched off at once (a library call the app couldn't interrupt). |
 | The memory limit is hit | The theme is unloaded: the base look, and a toast. |
 | A font or image can't be read or is too big | The theme loads without it; a note. |
+| An animation or sound can't be read, is too big, or isn't what its first bytes promise | The same: drawing it draws nothing, playing it plays nothing; a note. |
+| An animation is too heavy to decode in time | It plays slower; a note, once. |
+| `sound` fails or runs out of time | The `sounds` table decides for that event. After 3 failures the function is switched off; a toast, once. |
+| There is no sound system | Silence. Settings → Sound says so. No toast. |
 
 To get out of a theme that makes the window unusable, start GMNB with
 `--theme base` (or `GMNB_THEME=base`): it starts in the base look without
@@ -1314,6 +1371,11 @@ changing the saved choice.
   it `api = 2`, and the app keeps loading version 1 themes as before.
 - The base look can change between releases. A theme that returns `{}`
   follows it; that is the point.
+- Added to API 1 this way so far: animations, `gmnb.pixels`, `draw:field`
+  and ramps, sound (`sounds`, `sound`, `gmnb.synth`, `gmnb.sound`), the
+  `mode` event, `action` and `via = "assistive"` on presses, and
+  `draw:image`'s options. What was left for later is listed in
+  [What is in API 1 and what is deferred](theming-media.md#what-is-in-api-1-and-what-is-deferred).
 
 ## What is scripted and what is built in
 
@@ -1476,6 +1538,8 @@ must reach 4.5 (its scrim is computed to). Halos are not counted.
 | `GMNB_ACCENT=<hex>` or `none` | What `ctx.accent` is. |
 | `GMNB_STILL` | Layers see `motion = false`: no events, no frames, no `place`. The toolkit's own animations are untouched, as now. |
 | `GMNB_POINTER="x,y"` | A pointer position for the first keypad's layer, as now. |
+| `GMNB_SOUND=0` | No sound for the run; nothing sound-related is created. `null`: the mixer runs with no sound server, for tests. |
+| `GMNB_SOUND_DUMP=<folder>` | Every sound the theme makes is written there as a WAV file. |
 
 `GMNB_DARK`, `GMNB_OPACITY`, `GMNB_SIZE`, `GMNB_MODE`, `GMNB_KEYS` and the
 rest keep working.
@@ -1498,6 +1562,9 @@ passed there are now Aurora's business.
 | Converter and date values changing with `Change::Result` | `result` with their `page` (0.2 drew nothing for these; Aurora ignores them) |
 | `Keypad` mapped; the calculator's mode changed | `show`, `rect` = the keypad |
 | `prefs.rs` palette chosen | `option`, `id = "palette"`; in general any option change |
+| A sidebar row chosen; the calculator's mode changed (new in 0.3) | `mode`, `page` = the new page, `rect` = the page |
+| C, CE, backspace, the memory buttons (new in 0.3) | their `press`, with `action` = `"clear"`, `"backspace"` or `"memory"` |
+| A control activated through the accessibility interface (new in 0.3) | its `press`, with `via = "assistive"` |
 
 `Display::set_value`'s `Change` becomes `frame.value.change` for that
 readout; it is not an event.
@@ -1554,6 +1621,10 @@ the interrupt's error once; it must not buy more time).
    key they return is one the definitions name.
 8. The readability rules above.
 9. Settings: the 0.2 migration, and each entry loading by itself.
+10. Media and sound: the eleven tests in
+    [the media chapter](theming-media.md#tests) (the synthesiser's test
+    vectors, no sound system, the caps, nothing running at rest or in the
+    base look, bad files, DGMNB linking none of it).
 
 ### Open points
 
@@ -1570,3 +1641,5 @@ Decided here, and worth a second look by the owner:
 5. **Themes are code.** They are sandboxed, limited and can only change
    how GMNB looks, but installing one is still running someone's script.
    Settings says so beside *Open themes folder*.
+6. **Media and sound** have their own list:
+   [Open points](theming-media.md#open-points).
