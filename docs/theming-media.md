@@ -1485,3 +1485,9 @@ Decided here, and worth a second look by the owner:
 5. **Video files wait.** Animated WebP stands in for them.
 6. **`gmnb.image` no longer goes through GTK's loaders.** Themes see no
    difference; the code behind it does.
+7. **The effects' defaults** (delay 0.25 s, feedback 0.35, mix 0.3; reverb
+   size 0.5, damp 0.5, mix 0.3; drive 0.5; crush 8 bits at 12 000) were
+   chosen while building the synthesiser.
+8. **The engine connects to the sound server when a theme with sounds is
+   loaded**, not at its first sound, so that Settings can say early that no
+   sound system was found.
