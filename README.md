@@ -21,15 +21,29 @@ function-for-function and is checked against the real C++ engine.
 ## GMNB: pointlessly beautiful
 
 <p align="center">
-  <img src="docs/screenshots/standard.png" width="49%" alt="GMNB Standard mode with history">
-  <img src="docs/screenshots/graphing.png" width="49%" alt="GMNB Graphing mode">
+  <img src="docs/screenshots/standard.png" width="49%" alt="GMNB Standard mode with history, in the Aurora theme">
+  <img src="docs/screenshots/graphing.png" width="49%" alt="GMNB Graphing mode, in the Swirls theme">
 </p>
 <p align="center">
-  <img src="docs/screenshots/scientific.png" width="24%" alt="GMNB Scientific, light">
-  <img src="docs/screenshots/programmer.png" width="24%" alt="GMNB Programmer, Ember palette">
-  <img src="docs/screenshots/currency.png" width="24%" alt="GMNB Currency, Abyss palette">
-  <img src="docs/screenshots/palettes.png" width="24%" alt="GMNB palette settings">
+  <img src="docs/screenshots/programmer.png" width="24%" alt="GMNB Programmer in the default look, light">
+  <img src="docs/screenshots/currency.png" width="24%" alt="GMNB Currency, in the Glazed theme">
+  <img src="docs/screenshots/scientific.png" width="24%" alt="GMNB Scientific, in the Glazed theme, dark">
+  <img src="docs/screenshots/themes.png" width="24%" alt="GMNB's theme settings">
 </p>
+
+Out of the box GMNB looks exactly like DGMNB, and can be made see-through
+(Settings → Window → Background opacity) with its text kept readable. Every
+other look is a **theme**: a small [Luau](https://luau.org) script in a
+folder of its own that restyles the calculator and can draw on it, with
+pictures, animations and sounds of its own, run in a sandbox with time and
+memory limits ([`docs/theming.md`](docs/theming.md)). Three are built in:
+
+- **Aurora**, the look GMNB was born with: a drifting aurora behind glass
+  keys, in seven palettes.
+- **Glazed**, an 8-bit doughnut shop: press = and your number comes out
+  glazed, with sprinkles and chip-tune sounds.
+- **Swirls**, the paint that flows behind s0y b0y,
+  under a calculator of dark glass; the keys stir it.
 
 ## DGMNB: don't glaze my numbers
 
@@ -49,9 +63,10 @@ shares one (kept readable), no GPU, no animations, no idle CPU.
 
 | App (760×700 at 1× scale, idle) | RSS | PSS | Idle CPU |
 | --- | --- | --- | --- |
-| GMNB, default (Vulkan) | 267 MiB | 202 MiB | 0.3% |
-| GMNB, software renderer (`GSK_RENDERER=cairo`) | 68 MiB | 40 MiB | 0% |
-| **DGMNB** | **12.6 MiB** | **8.6 MiB** | **0%** |
+| GMNB, default (Vulkan) | 329 MiB | 252 MiB | 0.1–0.3% |
+| GMNB, software renderer (`GSK_RENDERER=cairo`) | 70 MiB | 58 MiB | 0% |
+| GMNB with a built-in theme, software renderer, once it settles | 74–79 MiB | 62–67 MiB | 0% |
+| **DGMNB** | **11.7 MiB** | **8.6 MiB** | **0%** |
 | DGMNB, Graphing with three equations | 13.7 MiB | 9.5 MiB | 0% |
 | DGMNB at 2× scale (the window buffer quadruples) | 21.1 MiB | 12.8 MiB | 0% |
 | *KCalc 26.08.1, for reference (Qt 6)* | *79 MiB* | *36 MiB* | |
@@ -65,7 +80,7 @@ something changes. Its figure includes AccessKit's screen-reader bridge
 (idle when no screen reader is running), the Wayland clipboard, and live
 desktop colours.
 
-GMNB renders on the GPU so the aurora, blur and glow stay cheap on the CPU;
+GMNB renders on the GPU so a theme's blur, glow and animations stay cheap on the CPU;
 nearly all of its extra memory is the GPU driver (here NVIDIA's Vulkan
 stack) loaded into the process. To trade animation smoothness for memory,
 turn off **Settings → Window → Vulkan acceleration** (it applies from the
@@ -82,17 +97,21 @@ your compositor (most blur translucent windows only when told to, e.g. a
 window rule for GMNB's app ID).
 
 Measured with [`tools/bench/mem.sh`](tools/bench) on NixOS with an RTX 3070
-(NVIDIA driver 595.104.02), in a headless Wayland session (weston) at
+(NVIDIA driver 595.112.07), in a headless Wayland session (weston) at
 760×700, idle in Standard mode unless noted. RSS counts shared libraries in
 full; PSS splits them between the processes using them. Numbers will differ
 with other GPUs, drivers and fonts. The Vulkan row most of all: it is mostly
-the driver's own memory, and it has measured anywhere from 205 to 267 MiB
-RSS (121 to 202 MiB PSS) on this machine. It also takes a while to settle:
+the driver's own memory, and it has measured anywhere from 205 to 329 MiB
+RSS (121 to 252 MiB PSS) on this machine; measured side by side on the same
+day, 0.3's default look took 329 MiB where v0.2.0's took 393. It also takes a while to settle:
 measured 6 seconds after start (`mem.sh`'s default), GMNB on Vulkan has
 read 3–19% CPU and less memory while the GPU stack warms up; with
 `SETTLE=30` it reads the 0.2–0.3% idle and the range above. The other
 rows' RSS has held within a few percent; PSS moves more, since it depends
-on which other processes share the same libraries at the time.
+on which other processes share the same libraries at the time. The theme
+row is Aurora, Glazed and Swirls, measured 70 seconds after start, once
+their animations have settled; what each costs while it moves is in
+[`docs/theming.md`](docs/theming.md).
 
 ## Install
 

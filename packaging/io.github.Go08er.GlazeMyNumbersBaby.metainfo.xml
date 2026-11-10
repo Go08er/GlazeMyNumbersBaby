@@ -43,20 +43,24 @@
        change as main does (they resolve once the tag is pushed). -->
   <screenshots>
     <screenshot type="default">
-      <caption>Standard mode with history</caption>
-      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.2.0/docs/screenshots/standard.png</image>
+      <caption>Standard mode with history, in the Aurora theme</caption>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.3.0/docs/screenshots/standard.png</image>
     </screenshot>
     <screenshot>
-      <caption>Graphing: four equations, a variable slider and an inequality</caption>
-      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.2.0/docs/screenshots/graphing.png</image>
+      <caption>Graphing in the Swirls theme: four equations, a variable slider and an inequality</caption>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.3.0/docs/screenshots/graphing.png</image>
     </screenshot>
     <screenshot>
-      <caption>Programmer mode</caption>
-      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.2.0/docs/screenshots/programmer.png</image>
+      <caption>Programmer mode in the default look</caption>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.3.0/docs/screenshots/programmer.png</image>
     </screenshot>
     <screenshot>
-      <caption>Live currency conversion</caption>
-      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.2.0/docs/screenshots/currency.png</image>
+      <caption>Live currency conversion in the Glazed theme</caption>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.3.0/docs/screenshots/currency.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Settings: the built-in themes and their options</caption>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.3.0/docs/screenshots/themes.png</image>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1"/>
