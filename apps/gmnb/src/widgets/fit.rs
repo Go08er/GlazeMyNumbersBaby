@@ -543,7 +543,10 @@ impl MaxWidth {
 /// A page's FitLabels and the style path each takes its font from: a Text
 /// (its font and halo) or a Control (its font, and the raised halo).
 #[derive(Clone, Default)]
-pub struct Texts(Rc<RefCell<Vec<(glib::WeakRef<FitLabel>, &'static str, f32)>>>);
+pub struct Texts(Rc<RefCell<Vec<Entry>>>);
+
+/// A label, the path of its font, and the least size it shrinks to.
+type Entry = (glib::WeakRef<FitLabel>, &'static str, f32);
 
 impl Texts {
     /// `label` in `path`'s font, shrinking to fit down to `min` px.

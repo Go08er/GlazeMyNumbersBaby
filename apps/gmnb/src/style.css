@@ -1683,10 +1683,8 @@ window.gmnb spinbutton.wc-spin > button {
   border: none;
 }
 
-/* The calendar (widgets/day_grid.rs), in a popover card. */
-popover.wc-calendar-popover > contents {
-  padding: 0;
-}
+/* The calendar (widgets/day_grid.rs), in a popover card (the
+   toolkit's families, below). */
 
 /* text date.calendar.title label.wc-days-title */
 label.wc-days-title {
@@ -2026,6 +2024,11 @@ popover.wc-calendar-popover>contents {
   margin: var(--gmnb-popover-margin);
 }
 /* end surface */
+
+/* The calendar keeps DGMNB's own 10 px inside its card (day_grid.rs). */
+popover.wc-calendar-popover > contents {
+  padding: 0;
+}
 
 /* surface menu popover:not(.wc-flyout):not(.wc-calendar-popover)>contents scope=window.gmnb.own-menu */
 window.gmnb.own-menu popover:not(.wc-flyout):not(.wc-calendar-popover)>contents {

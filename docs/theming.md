@@ -748,7 +748,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `text_button` | Control | min_height 34; padding `{ 0, 6 }`; radius `shape.radius`; `text.caption`; `fg`; no background; `checked = { background accent, color on_accent }` | `button.wc-mem`: MC MR M+ M− MS M▾, DEG, F-E, the programmer bar |
 | `text_button_gap` | number | 2 | The rows' spacing (Rust) |
 | `flyout_button` | Control | as `text_button`, in `text.small`, min_height 30 (its row is 36 high, the button 3 px in from top and bottom), padding `{ 0, 6 }` | `button.wc-mem.wc-flyout-button`: Trigonometry ▾ and Function ▾ |
-| `button` | Control | background `surface2`; radius `shape.radius`; `text.body`; `fg`; min_height 34; padding `{ 0, 6 }`; `checked = { background accent, color on_accent }` | `window.gmnb.own-button button:not([class*="wc-"])` and dialog buttons |
+| `button` | Control | background `surface2`; radius `shape.radius`; `text.body`; `fg`; min_height 34; padding `{ 0, 6 }`; `checked = { background accent, color on_accent }` | `window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button)`: the dialogs' buttons (the toolkit has no attribute selectors, so "every button without a `wc-` class" can't be said; the app's own buttons have rules of their own) |
 | `segmented.gap` | number | 4 | `toggle-group { border-spacing }` (half of it: see [what the toolkit was found to support](#what-the-toolkit-was-found-to-support)) |
 | `segmented.item` | Control | min_height 36; padding `{ 0, 6 }`; radius `shape.radius`; `text.small`; `fg`; background `surface2`; `checked = { background accent, color on_accent }` | `window.gmnb.own-segmented toggle-group > toggle` |
 | `field` | Field | background `surface`; `fg`; border `{ 1, border }`; radius `shape.row_radius`; `text.body`; padding `{ 0, 10 }`; min_height 38; placeholder `fg_faint`; selection `accent` at 0.30; caret `fg`; `focus = { border { 2, accent_text } }`; `error = { border { 2, danger } }` | `window.gmnb.own-field entry, spinbutton` |
@@ -757,9 +757,10 @@ For a Control, the base states are these unless the row says otherwise:
 | `slider.track` | `{ height, color, radius }` | 4, `border`, 2 | `window.gmnb.own-slider scale trough` |
 | `slider.fill` | Color | `accent` | `scale highlight` |
 | `slider.knob` | `{ size, color, halo, halo_size }` | 16, `accent`, `accent` at 0.16, 24 | `scale slider`; the halo shows on hover and press |
-| `switch` | `{ width, height, off, on, knob, knob_on }` | 46, 24, `border`, `accent`, `surface`, `on_accent` | `window.gmnb.own-switch switch` |
+| `switch` | `{ width, height, knob_size, off, on, knob, knob_on }` | 46, 24, 18, `border`, `accent`, `surface`, `on_accent` | `window.gmnb.own-switch switch`; the knob is `switch > slider`, centred |
 | `scrollbar` | `{ width, color, radius }` | 3, `fg_faint`, 1.5 | `window.gmnb.own-scrollbar scrollbar slider` |
 | `card` | Surface | background `surface`; radius `shape.card_radius`; no border | `window.gmnb.own-card .card, list.boxed-list` (Settings) |
+| `card.heading` | Text | `text.strong`, `fg` | The headings over Settings' and About's cards (`preferencesgroup box.header label.heading`) |
 | `popover` | Surface | background `surface`; border `{ 1, border }`; radius `shape.card_radius`; padding 6; shadow: three rings, `{ spread 6, black 0.05 }, { spread 3, black 0.07 }, { spread 1, black 0.10 }` | `popover.wc-flyout > contents`, the calendar popover |
 | `menu` | Surface | as `popover`, radius 10 | `window.gmnb.own-menu popover:not(.wc-flyout) > contents` |
 | `toast` | `{ background, color, radius, font, min_height, padding }` | `fg` at 0.92; `bg`; 19; `text.body`; 38; `{ 0, 16 }` | `window.gmnb.own-toast toast` |
@@ -767,8 +768,8 @@ For a Control, the base states are these unless the row says otherwise:
 
 ### Display (the readout)
 
-Drawn by `widgets/display.rs` from `Style`. The same widget shows the
-converter's two values and the date page's results.
+Drawn by `widgets/display.rs` from `Style`. The converter's two values and
+the date page's results are lines of their own (`converter.value`, `date.result`).
 
 | Path | Kind | Base | Feeds |
 |---|---|---|---|
@@ -807,7 +808,7 @@ hook falls back to.
 | `keys.operator` | Control | background `surface2`; `accent_text`; `text.key` | `button.wc-key.wc-op` |
 | `keys.equals` | Control | background `accent`; `on_accent`; `text.key` | `button.wc-key.wc-eq` |
 | `keys.on` | State | `{ background accent, color on_accent }` | `button.wc-key.wc-on`, `button.wc-fn:checked` (2nd, hyp, … switched on) |
-| `keys.pad` | `{ gap, radius, min_height, font }` | 3, `shape.radius`, 0, the key classes' own | `.wc-graph-pad button.wc-pad-key` and its grid (the graphing page's keypad) |
+| `keys.pad` | `{ gap, radius, min_height, font }` | 3, `shape.radius`, 0, `keys.func`'s font | `.wc-graph-pad button.wc-pad-key` and its grid (the graphing page's keypad). The keys are set in their classes' own fonts (`keys.number`, `keys.func`) unless `font` differs from `keys.func`'s: then it is every pad key's (Rust). |
 
 The key classes are Controls but have no `checked`; a toggle that is on
 uses `keys.on`. A class takes `keys`' shared values (`radius`, `padding`,
@@ -856,13 +857,13 @@ are `popover`s.
 | Path | Kind | Base | Feeds |
 |---|---|---|---|
 | `date.label` | Text | `text.caption`, `fg_dim` | `.wc-section` on this page |
-| `date.field` | Control | min_height 38; radius `shape.radius`; background `surface2`; `text.body`; `fg`; padding `{ 0, 12 }` | `menubutton.wc-field > button` |
+| `date.field` | Control | min_height 38; radius `shape.radius`; background `surface2`; `text.body`; `fg`; padding `{ 0, 6 }`; `checked = { background accent, color on_accent }` (while its calendar is open) | `menubutton.wc-field > button.toggle`: "Tuesday, November 10, 2026  ▾", centred, at most 320 wide |
 | `date.result_panel` | Surface | nothing: no background, no padding | `.wc-result-panel` |
-| `date.result`, `date.add_result` | `{ size, font }` | 28, weight 400; the same | The page's readouts (Rust) |
+| `date.result`, `date.add_result` | `{ size, font }` | 28, weight 400; the same | The page's results (Rust, `widgets/fit.rs`), shrunk to fit down to 14; out of range, the error colour |
 | `date.subresult` | Text | `text.body`, `fg_dim` | `.wc-subresult` |
 | `date.calendar.title` | Text | `text.strong`, `fg` | `.wc-days-title` |
 | `date.calendar.weekday` | Text | `text.caption`, `fg_dim` | `.wc-days-weekday` |
-| `date.calendar.day` | Control | fills its cell (about 38×37: seven columns and six rows in the 300×316 popover, padding 10, gap 2); radius 999; `text.small` with `{ "tnum" }`; `fg`; `checked = { background accent, color on_accent }` | `button.wc-day`; `checked` is `.wc-day-selected` |
+| `date.calendar.day` | Control | fills its cell (about 38×37: seven columns and six rows in the 300×316 popover, padding 10, gap 2); radius 999; `text.small` (DGMNB's days are not tabular); `fg`; `checked = { background accent, color on_accent }` | `button.wc-day`; `checked` is `.wc-day-selected` |
 | `date.calendar.other_month` | Color | `fg_faint` | `.wc-day-other` |
 | `date.calendar.today` | Border or `false` | `{ 1, accent_text }` | `.wc-day-today` |
 | `date.calendar.focus` | FocusRing | `focus` | `button.wc-day:focus` (shown on plain focus: a popover isn't told of keyboard use) |
@@ -875,18 +876,18 @@ calendar sits in a `popover`; its arrows are `icon_button`s.
 | Path | Kind | Base | Feeds |
 |---|---|---|---|
 | `converter.field` | Control | no background; radius 0; padding 0; `checked` changes nothing | `.wc-conv-field`; `checked` is `.wc-active` (the field being typed into) |
-| `converter.marker` | `{ color, width, height }` or `false` | `{ accent, 36, 3 }` | A bar at the bottom-left of the active field: a sized background layer on `.wc-conv-field.wc-active` |
-| `converter.value` | `{ size, font, checked_weight, focus }` | 38; `fonts.display` weight 300 with `{ "tnum" }`; 500; `focus` | The two readouts (Rust); the ring is `.wc-conv-field calcdisplay:focus-visible` |
+| `converter.marker` | `{ color, width, height }` or `false` | `{ accent, 36, 3 }` | A bar at the bottom-left of the active field: a sized background layer on the field's inner box, `.wc-conv-field.wc-active > .wc-conv-marker` (so it never shares a layer list with the field's own background). `false` writes it as transparent and 0×0. |
+| `converter.value` | `{ size, font, checked_weight, focus }` | 38; `fonts.display` weight 300 with `{ "tnum" }`; 500; `focus` | The two values (Rust, `widgets/fit.rs`), shrunk to fit down to 14; the currency's symbol before a value in `converter.symbol`, 8 px from it; the ring is `.wc-conv-field fitlabel:focus-visible` |
 | `converter.symbol` | Text | 26 / 400, `fg_dim` | `.wc-currency-symbol` |
 | `converter.unit` | Control | min_height 34; radius `shape.radius`; background `surface2`; `text.body`; `fg`; `checked = { background accent, color on_accent }` | `dropdown.wc-unit-dropdown > button`; `checked` while its list is open. The list is a `menu`. |
 | `converter.swap` | Control | `icon_button` | `button.wc-swap` |
 | `converter.caption` | Text | `text.caption`, `fg_dim` | "About equal to" |
-| `converter.chip` | Control | min_height 28; radius 14; background `surface2`; `text.small`; `fg`; padding `{ 0, 10 }` | `.wc-chip` |
-| `converter.whimsy` | State | changes nothing | `.wc-chip-whimsy` (the playful comparison) |
+| `converter.whimsy` | State | changes nothing | `.wc-chip-whimsy` (the playful comparison): it is the chip's `checked` |
+| `converter.chip` | Control | min_height 28; radius 14; background `surface2`; `text.small`; `fg`; padding `{ 0, 10 }`; nothing under the pointer or pressed; `checked` is `converter.whimsy` | `.wc-chip`; `checked` is `.wc-chip-whimsy` |
 | `converter.whimsy_icon` | boolean | `false` | Rust: whether that chip shows its sparkle |
 | `converter.ratio` | Text | `text.small`, `fg` | `.wc-ratio` |
 | `converter.timestamp` | Text | `text.small`, `fg_dim` | `.wc-timestamp` |
-| `converter.link` | Control | `text.small`; `accent_text`; no background | `button.wc-link` |
+| `converter.link` | Control | `text.small`; `fg`; no background; padding `{ 0, 6 }` (DGMNB's "Update rates" is a plain button) | `button.wc-link`, 116 × 26 |
 
 ### Graphing
 
@@ -905,6 +906,7 @@ calendar sits in a `popover`; its arrows are `icon_button`s.
 | `graph.swatch.active_scale` | number | 1 | While pressed |
 | `graph.swatch.transition` | Transition | none | |
 | `graph.add` | Control | min_height 36; `text.body`; `fg`; no background; radius `shape.radius` | `button.wc-add-eq` |
+| `graph.variables` | Text | `text.strong`, `fg` | "Variables" (`.wc-var-header`) |
 | `graph.variable` | Text | 15 / 600, `fg` | `.wc-var-name`; its slider is a `slider`, its box a `field` |
 | `graph.analysis.title` | Text | 18 / 600, `fg` | `.wc-analysis-title` |
 | `graph.analysis.card` | Surface | no background; border `{ 1, border }`; radius 8; padding `{ 8, 12 }` | `.wc-kgf` |
@@ -1491,7 +1493,8 @@ colours. Disabled text is exempt, as in WCAG. The table covers: each key
 class and `keys.on`; `text_button` at rest and checked; the header title;
 the readout's value and expression; history expression and result;
 sidebar rows at rest and checked; `segmented` and `panel.tabs` items at
-rest and checked; `field` text and placeholder (placeholder: 3); chips
+rest and checked; `field` text and placeholder (placeholder: 2.45, see
+open point 8); chips
 and the whimsy chip; lit bits; radix names and values; calendar days at
 rest and checked; the toast; the graph's labels, axes and each series
 colour on the canvas.
@@ -1517,6 +1520,8 @@ must reach 4.5 (its scrim is computed to). Halos are not counted.
 | `GMNB_POINTER="x,y"` | A pointer position for the first keypad's layer, as now. |
 | `GMNB_BENCH="themes=base,aurora,mono,base;opacity"` | Measure: each theme switch, and an opacity drag from 1 to 0.1 and back, each to the end of the next painted frame; prints the figures and the hub's counters, then quits. |
 | `GMNB_THEME_STATS` | Print the hub's counters once the window has settled (Luau machines, `style` calls, provider loads and their property counts). |
+| `GMNB_DATE_TO=YYYY-MM-DD` | The date page's "To" date (the comparison's "Date with a result"). |
+| `GMNB_DATE_ADD` | Open the date page on "Add or subtract days". |
 
 `GMNB_DARK`, `GMNB_OPACITY`, `GMNB_SIZE`, `GMNB_MODE`, `GMNB_KEYS` and the
 rest keep working.
@@ -1620,3 +1625,15 @@ Decided here, and worth a second look by the owner:
    DGMNB's pixels.
 7. **Theme fonts stay loaded** until the app exits (Pango can add a font
    file to a font map but not take it out).
+8. **A placeholder needs 2.45:1**, not 3. DGMNB's light palette puts
+   `fg_faint` on `surface` at 2.49:1, and the base look is DGMNB's. The
+   alternative is to raise `fg_faint` in `appcore`, which changes DGMNB's
+   pixels.
+9. **The base look's text is set as DGMNB sets it** where the pages draw
+   it (`widgets/fit.rs`): unhinted, each glyph at the nearest quarter
+   pixel, the capitals centred on a whole pixel, a key's line about
+   DGMNB's fractional cell. The toolkit's own labels are hinted and
+   centred by their line height; on the date page, the converter and the
+   graph pad those missed the comparison's ink-colour and blur limits by
+   a little. The calculator's keypad (`widgets/keypad.rs`) still uses
+   the toolkit's labels.
