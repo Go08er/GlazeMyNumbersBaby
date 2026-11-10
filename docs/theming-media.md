@@ -684,12 +684,12 @@ Everything deferred can be added to API 1 later without breaking a theme
 ### Why video files are deferred
 
 Playing a WebM or MP4 means GStreamer, through GTK's `GtkMediaFile`. It
-was tried (GTK 4.22.4, GStreamer 1.28.7, a 2 s 854×480 VP9 loop, muted,
-on a private headless compositor):
+was tried (GTK 4.22.4, GStreamer 1.28.7, a 2 s 854×480 VP9 loop in WebM,
+muted, on a private headless compositor; AV1 and H.264 were not tried):
 
 | Finding | Detail |
 |---|---|
-| It can take the app down | With GTK's media backend present but GStreamer's base plug-ins missing, creating the `GtkMediaFile` ended the process: `GstPlay: 'playbin3' element not found` is a fatal error inside the library. GTK 4.22 has the backend built in (4.18 loads it as a module), so this is one missing package away. With no backend at all GTK is polite: the stream's `error` says "GTK could not find a media module". |
+| It can take the app down | With GTK's media backend present but GStreamer's base plug-ins missing, creating the `GtkMediaFile` ended the process: `GstPlay: 'playbin3' element not found` is a fatal error inside the library. In the builds examined (nixpkgs), GTK 4.22.4 has the backend linked into the library itself and 4.18.6 loads it as a module, so on 4.22 this is one missing package away. With no backend at all GTK is polite: the stream's `error` says "GTK could not find a media module". |
 | Looping was unreliable | With `loop` set, the clip restarted in one run of four. In the other three it reported `playing` with no error and showed no new frame after the first pass. When it did loop it was gapless: 300 frames in 10 s, longest gap 36.9 ms (at 44% of one core, much of it the software renderer scaling each frame: the test compositor has no graphics card). |
 | Memory and threads | With the GL renderer already up, playing added 102 MiB of resident memory and 31 threads. Pausing brought CPU to 0.2% of a core but freed neither; closing the file freed 17 threads and no memory. |
 | Start | 0.3 to 4.8 s from creating the file to its first frame (the longest with an empty plug-in cache). |
@@ -739,13 +739,14 @@ Rules these keep:
 ### Decoding stills
 
 `gdk::Texture::from_bytes` is not used for theme files. What it does was
-checked in the libraries themselves: on GTK 4.18.6 and 4.22.4 alike it
-hands PNG, JPEG and TIFF to libpng, libjpeg and libtiff, chosen by the
-file's first bytes, and **everything else to gdk-pixbuf**, that is to
-whichever loader modules the system has. Neither used glycin; the
-Flatpak runtime ships glycin, so there the answer may differ again. A
-theme's file would be parsed by C code the app did not choose, in formats
-it did not mean to accept.
+checked in the libraries themselves (nixpkgs' builds of GTK 4.18.6 and
+4.22.4, by the symbols they import): both hand PNG, JPEG and TIFF to
+libpng, libjpeg and libtiff, chosen by the file's first bytes, and
+**everything else to gdk-pixbuf**, that is to whichever loader modules the
+system has. Neither uses glycin; the Flatpak runtime (freedesktop 26.08)
+ships glycin, so there the answer may differ again. A theme's file would
+be parsed by C code the app did not choose, in formats it did not mean to
+accept.
 
 Instead:
 
