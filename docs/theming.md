@@ -813,8 +813,8 @@ applies to them.
 
 | Path | Kind | Base | Feeds |
 |---|---|---|---|
-| `display.background` | Fill | `base.text_scrim` | `calcdisplay` (CSS) |
-| `display.radius` | Radius | `shape.card_radius` | `calcdisplay` (CSS) |
+| `display.background` | Fill | `base.text_scrim` | `calcdisplay:not(.wc-line)` (CSS): the calculator's readout, not a page's line |
+| `display.radius` | Radius | `shape.card_radius` | `calcdisplay:not(.wc-line)` (CSS): the calculator's readout, not a page's line |
 | `display.padding_x` | number | 8 | Rust: space left and right of the text |
 | `display.heights` | per mode: number or `"auto"` | standard 116, scientific 104, programmer 84, compact 86 | Rust: the widget's height. `"auto"`: 1.6 × the expression's size + 1.28 × the mode's size + 12 |
 | `display.sizes` | per mode | 52, 52, 52, compact 40 | Rust: the value's largest size; it shrinks to fit the width |
