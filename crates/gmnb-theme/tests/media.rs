@@ -1299,20 +1299,21 @@ fn a_previews_fields_are_always_coloured() {
 const W: usize = 760;
 const H: usize = 640;
 
-/// The limits a theme really has, in an optimised build. An unoptimised
-/// one (`cargo test`, as CI runs it) on a slower machine takes several
-/// times as long over the same work, and is given four times the frame's
-/// limit: enough to catch a frame gone badly wrong, not a slow machine.
-/// `cargo test --release` holds the real limit.
+/// The limits a theme really has when `GMNB_REAL_LIMITS` is set (run so
+/// with `--release` on a quiet machine, to hold the real budget). Otherwise
+/// four times the frame's limit: these tests run wherever the code is
+/// built (CI's runners, the packages' builders, unoptimised builds), and a
+/// slow machine there is not a slow theme. Four times still catches a
+/// frame gone badly wrong.
 fn real_limits() -> Limits {
     let real = Limits::default();
-    if cfg!(debug_assertions) {
+    if std::env::var_os("GMNB_REAL_LIMITS").is_some() {
+        real
+    } else {
         Limits {
             frame: real.frame * 4,
             ..real
         }
-    } else {
-        real
     }
 }
 

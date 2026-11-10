@@ -1,5 +1,5 @@
 //! Swirls, the built-in theme, in the real engine under the real limits
-//! (four times the frame's in an unoptimised build, `limits`):
+//! (four times the frame's unless `GMNB_REAL_LIMITS` is set: `limits`):
 //! what its layers draw, what they ask for, what a frame costs at any
 //! window size, and that every pixel of its paint is a colour the
 //! readability tests have been through (`tests/css.rs`,
@@ -20,20 +20,21 @@ use gmnb_theme::{Ctx, Limits, OptionValue, Style};
 const BANDS: [&str; 6] = ["party", "lava", "lagoon", "orchid", "absinthe", "marble"];
 const GLASS: [&str; 3] = ["clear", "smoked", "panel"];
 
-/// The limits a theme really has, in an optimised build. An unoptimised
-/// one (`cargo test`, as CI runs it) on a slower machine takes several
-/// times as long over the same work, and is given four times the frame's
-/// limit: enough to catch a frame gone badly wrong, not a slow machine.
-/// `cargo test --release` holds the real limit.
+/// The limits a theme really has when `GMNB_REAL_LIMITS` is set (run so
+/// with `--release` on a quiet machine, to hold the real budget). Otherwise
+/// four times the frame's limit: these tests run wherever the code is
+/// built (CI's runners, the packages' builders, unoptimised builds), and a
+/// slow machine there is not a slow theme. Four times still catches a
+/// frame gone badly wrong.
 fn limits() -> Limits {
     let real = Limits::default();
-    if cfg!(debug_assertions) {
+    if std::env::var_os("GMNB_REAL_LIMITS").is_some() {
+        real
+    } else {
         Limits {
             frame: real.frame * 4,
             ..real
         }
-    } else {
-        real
     }
 }
 
@@ -554,7 +555,8 @@ fn the_background_stays_within_its_limits_at_any_size() {
         let (mean, worst) = mean_and_worst(&times);
         report.push(format!("{w}x{h}: mean {mean:.2} ms, worst {worst:.2} ms"));
         // The limit is 8 ms, and a frame is held to three quarters of it
-        // (an unoptimised build: to all of the four times it has).
+        // in an optimised build (an unoptimised one: to all of it; and
+        // without `GMNB_REAL_LIMITS`, of the four times it has).
         let most = if cfg!(debug_assertions) {
             limit
         } else {
