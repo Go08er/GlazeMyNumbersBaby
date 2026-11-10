@@ -233,6 +233,10 @@ struct ThemeSettings {
     tiles: RefCell<Vec<(Tile, OptionDef, String)>>,
     /// The `ctx` the tiles were drawn for: each is drawn once for each.
     tiles_ctx: RefCell<Option<gmnb_theme::Ctx>>,
+    /// The theme's load the tiles' options are of ([`Hub::epoch`]): after
+    /// another, they are the options of a theme that isn't loaded, and
+    /// are built again, not drawn.
+    tiles_epoch: std::cell::Cell<u64>,
     /// Set while the list or the options are being built: their widgets'
     /// signals then change nothing.
     building: std::cell::Cell<bool>,
@@ -288,6 +292,7 @@ impl ThemeSettings {
             rows: RefCell::default(),
             tiles: RefCell::default(),
             tiles_ctx: RefCell::default(),
+            tiles_epoch: std::cell::Cell::new(0),
             building: std::cell::Cell::new(false),
             pending: Rc::default(),
         });
@@ -451,7 +456,7 @@ impl ThemeSettings {
     /// `ctx` there is now), once for each `ctx`; not while the options
     /// are being built or changed in a batch (they are drawn after).
     fn draw_tiles(&self) {
-        if self.building.get() {
+        if self.building.get() || self.tiles_epoch.get() != self.ctx.hub.epoch() {
             return;
         }
         let ctx = self.ctx.hub.frame_ctx();
@@ -481,6 +486,7 @@ impl ThemeSettings {
         self.tiles.borrow_mut().clear();
         // Each tile is drawn as it is made, for this `ctx`.
         self.tiles_ctx.replace(Some(self.ctx.hub.frame_ctx()));
+        self.tiles_epoch.set(self.ctx.hub.epoch());
         let defs = self.ctx.hub.option_defs();
         let values = self.ctx.hub.option_values();
         self.options.set_visible(!defs.is_empty());

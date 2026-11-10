@@ -134,6 +134,9 @@ pub struct Hub {
     live: gtk::CssProvider,
     windows: RefCell<Vec<glib::WeakRef<gtk::Window>>>,
     fonts: RefCell<HashSet<PathBuf>>,
+    /// How many times a theme was loaded (or unloaded): what a theme's
+    /// hooks are good for, and its option tiles', lasts until then.
+    epoch: Cell<u64>,
     style_subscribers: RefCell<Vec<StyleSubscriber>>,
     /// How the user is told of a theme that failed (a toast).
     tell: RefCell<Option<Tell>>,
@@ -223,6 +226,7 @@ impl Hub {
             live: provider(gtk::STYLE_PROVIDER_PRIORITY_USER + 3),
             windows: RefCell::default(),
             fonts: RefCell::default(),
+            epoch: Cell::new(0),
             style_subscribers: RefCell::default(),
             tell: RefCell::new(None),
             untold: RefCell::default(),
@@ -430,6 +434,12 @@ impl Hub {
         credits(&self.sources())
     }
 
+    /// Counts the loads of a theme (and the unloads): a handle to one
+    /// theme's hooks (an option's `preview`) is not good for the next.
+    pub fn epoch(&self) -> u64 {
+        self.epoch.get()
+    }
+
     /// The theme chosen ("" for the base look), loaded or not.
     pub fn active(&self) -> String {
         self.active.borrow().clone()
@@ -489,6 +499,7 @@ impl Hub {
         self.styled.set(false);
         // Unload first: one machine at a time.
         self.theme.replace(None);
+        self.epoch.set(self.epoch.get() + 1);
         if !id.is_empty() {
             match self.sources().into_iter().find(|s| s.id == id) {
                 None => {
