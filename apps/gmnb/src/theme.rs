@@ -128,6 +128,8 @@ fn legacy_colors(style: &Style, scheme: &Scheme) -> String {
 /// Returns false once it should be dropped (its widget is gone).
 type Subscriber = Box<dyn Fn(&Scheme) -> bool>;
 type StyleSubscriber = Box<dyn Fn(&Rc<Style>) -> bool>;
+/// How the user is told something (a toast).
+type Tell = Box<dyn Fn(&str)>;
 
 /// What the hub starts with.
 pub struct Config {
@@ -173,8 +175,6 @@ pub struct Stats {
     /// Properties in each.
     pub main_properties: usize,
     pub live_properties: usize,
-    /// GLib timeouts and tick callbacks theming has installed: none, ever.
-    pub sources: u32,
 }
 
 pub struct Hub {
@@ -207,7 +207,7 @@ pub struct Hub {
     subscribers: RefCell<Vec<Subscriber>>,
     style_subscribers: RefCell<Vec<StyleSubscriber>>,
     /// How the user is told of a theme that failed (a toast).
-    tell: RefCell<Option<Box<dyn Fn(&str)>>>,
+    tell: RefCell<Option<Tell>>,
     stats: Cell<Stats>,
 }
 
@@ -368,10 +368,6 @@ impl Hub {
         self.portal_watch.replace(Some(sub));
     }
 
-    pub fn system_accent(&self) -> bool {
-        self.system_accent.get()
-    }
-
     /// "Use the desktop's accent colour".
     pub fn set_system_accent(&self, on: bool) {
         if self.system_accent.replace(on) != on {
@@ -385,10 +381,6 @@ impl Hub {
     pub fn set_opacity(&self, opacity: f32, drag: bool) {
         self.opacity.set(opacity);
         self.apply(drag);
-    }
-
-    pub fn opacity(&self) -> f32 {
-        self.opacity.get()
     }
 
     // ---- The theme ------------------------------------------------------------
@@ -947,6 +939,23 @@ mod tests {
                 ("living".to_string(), "false".to_string())
             ]
         );
+    }
+
+    /// Theming costs nothing at rest: the hub and the backdrop install no
+    /// timeout, no idle and no tick callback (the keypad's and the
+    /// display's are the transition's, and run only while an effect of a
+    /// theme with that layer plays).
+    #[test]
+    fn theming_installs_no_sources() {
+        for (name, source) in [
+            ("theme.rs", include_str!("theme.rs")),
+            ("widgets/backdrop.rs", include_str!("widgets/backdrop.rs")),
+        ] {
+            let code = source.split("#[cfg(test)]").next().unwrap_or("");
+            for call in ["timeout_add", "idle_add", "add_tick_callback", "source_new"] {
+                assert!(!code.contains(call), "{name} calls {call}");
+            }
+        }
     }
 
     /// TRANSITION: the legacy scheme follows the style, for the base look

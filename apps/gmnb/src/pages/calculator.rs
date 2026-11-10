@@ -313,6 +313,8 @@ impl CalculatorPage {
     fn memory_row(self: &Rc<Self>, full: bool) -> gtk::Box {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         row.set_homogeneous(full);
+        // Text straight on the backdrop: the scrim of a see-through window.
+        row.add_css_class("wc-plain");
         // Named as upstream's (ClearMemoryButton "Clear all memory", ...),
         // their tooltips read as descriptions.
         let all: &[(B, &str, &str, &str)] = &[
@@ -500,6 +502,7 @@ impl CalculatorPage {
 
         let radix_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         radix_box.add_css_class("wc-radix-list");
+        radix_box.add_css_class("wc-plain");
         for radix in Radix::ALL {
             let name = gtk::Label::new(Some(radix.label()));
             name.add_css_class("wc-radix-name");

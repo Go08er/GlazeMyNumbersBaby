@@ -27,7 +27,7 @@ Copyright: 2018 Lucas Timmins & Victor Berger (smithay-clipboard)
            2026 GMNB contributors (adaptation)
 License: MIT
 
-Files: apps/gmnb/assets/fonts/*
+Files: apps/gmnb/themes/aurora/fonts/*
 Copyright: 2021 The Outfit Project Authors (https://github.com/Outfitio/Outfit-Fonts)
 License: OFL-1.1
 

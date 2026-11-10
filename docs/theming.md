@@ -339,9 +339,9 @@ can skip to the [reference](#reference-tokens).
 | Piece | Where | What it holds |
 |---|---|---|
 | Structure stylesheet | `apps/gmnb/src/style.css`, static, loaded once | Selectors and layout. Every look property reads a custom property: `background-color: var(--gmnb-keys-number-background-color)`. No colour, size or font is written in it. |
-| Base values | `appcore` (colours: `Theme::new(dark, accent)`, moved from `apps/dgmnb/src/theme.rs` so both apps share it) and `crates/gmnb-theme` (everything else) | The value of every token and element for a `ctx`. |
+| Base values | `appcore` (colours: `palette::Palette::new(dark, accent)`; measurements: `metrics`; both apps share them) and `crates/gmnb-theme` (`schema.rs`: one table of every path, its kind and how its base derives from the tokens) | The value of every token and element for a `ctx`. |
 | Theme engine | `crates/gmnb-theme` (GMNB only; DGMNB never links it) | The Luau machine, the checks, the merge, the generated style. |
-| Generated style | one `GtkCssProvider`, reloaded when the resolved style changes | `:root { --gmnb-…: …; }`, the toolkit's own named colours, and nothing else. |
+| Generated style | two `GtkCssProvider`s: *main*, reloaded when the resolved style changes, and *live* above it, for the few properties a drag changes | `:root { --gmnb-…: …; }`, the toolkit's own named colours, and nothing else. |
 | `Style` struct | `gmnb_theme::Style`, handed to widgets that draw themselves | The same resolved values, typed, for the readout, the keypad, the graph, the icons and the layout. |
 
 ### Resolving a style
@@ -379,7 +379,9 @@ turning `_` into `-`, after `--gmnb-`:
 
 `keys.number.min_height` → `--gmnb-keys-number-min-height`
 
-Values that are tables expand into several properties:
+A font is named after the element it is the font of: `window.font` gives
+`--gmnb-window-font-size`. Values that are tables expand into several
+properties:
 
 | Value at path `P` | Properties emitted |
 |---|---|
@@ -413,12 +415,26 @@ emits the finished values:
   without a fallback, and **a property the stylesheet reads that the app
   does not emit is a bug** (there is a test for it).
 
-A full style is about three thousand properties, written in one
-`:root` block. Their names are the app's own business (a theme never sees
-them): if measuring shows the reload is too slow, the engine may write a
-control's state values as generated rules instead. Either way the
-structure stylesheet holds no literal colour, size or font, and every
-value in it or in the generated style comes from the checked `Style`.
+A full style is about three thousand properties, and reloading that many
+costs (measured: 3000 `:root` properties took 80 ms to restyle an 841-node
+tree on the software renderer, 220 ms on GL). So:
+
+- **Only the properties the structure stylesheet reads are written.** The
+  app parses the stylesheet for `var(--gmnb-…)` names once and writes those
+  (and the toolkit's own variables), in one `:root` block of the main
+  provider.
+- **A drag rewrites only what changes.** While the Background opacity
+  slider, an option's slider or the colour chooser is dragged, the
+  properties that differ from the main provider's go to the live provider
+  (at most 64; more reload main). When the drag rests and the setting is
+  saved (0.4 s after its last step), the live provider is folded back
+  into main. Theming installs no timer of its own for this.
+
+The properties' names are the app's own business (a theme never sees
+them). The structure stylesheet holds no literal colour, size or font,
+and every value in it or in the generated style comes from the checked
+`Style`. A control's rules there are written by
+`tools/theming/control_css.py`.
 
 **Covered is not disabled.** While the sidebar, a sheet or a dialog
 covers the page, what is under it is made insensitive so that assistive
@@ -428,11 +444,13 @@ properties only to what the app itself turned off: under `.wc-inert`,
 anything not marked `.wc-off` reads its resting properties, at full
 opacity and with no filter. (0.2's rules at the end of `style.css`.)
 
-Numbers are written with units by the app (`px`, `ms`, `deg`, `em`).
+Numbers are written with units by the app (`px`, `ms`, `deg`, `em`; a
+zero length too, so that the stylesheet can use it in `calc()`).
 Colours are written as `rgb()`/`rgba()`. Font family names are written as
 quoted strings with `"` and `\` escaped, after refusing control
-characters. Nothing a theme returns is ever copied into the stylesheet as
-text.
+characters; OpenType tags, ease names and gradient keywords are matched
+against what the API knows and written from that. Nothing a theme returns
+is ever copied into the stylesheet as text.
 
 ### What the toolkit was found to support
 
@@ -457,19 +475,32 @@ identical; the 41st is the `none` row below.
 Nothing needed designing around. Transitions were measured mid-flight
 (a 4 s change sampled at 0.4 s and 1.5 s matched the literal).
 
-**Not probed**, and to be confirmed while the stylesheet is written:
+Probed since, on GTK 4.18.6 / libadwaita 1.7.5 and 4.22.4 / 1.9.3 (the
+results are the same on both):
 
-- That `text-shadow` set on the window reaches every label by
-  inheritance. 0.2 set it on `label` directly. If it doesn't, the halo
-  goes on `window.gmnb label` and the raised containers' labels.
-- The converter's marker as a sized background layer (`background-size`,
-  `background-position`, `background-repeat`).
-- `border-spacing` for a segmented control's gap.
-- The names of the toolkit's own nodes in the Feeds columns below
-  (`toggle-group > toggle`, `scale trough`, `switch`, `toast`,
-  `tooltip`, `scrollbar slider`, `popover > contents`, `dropdown`,
-  `spinbutton`). They state the intent; check each against libadwaita
-  1.7's node tree.
+- `text-shadow` set on the window reaches every label by inheritance
+  (in buttons, toggles, list rows and `entry > text`).
+- The converter's marker works as a sized background layer through
+  `var()`: `background: var(--g) left bottom / 36px 3px no-repeat`.
+- `AdwToggleGroup` is `toggle-group > toggle`, with `separator` nodes
+  between the toggles. With the separators' size and margin zeroed, the
+  gap between two toggles is **twice** `border-spacing`, so the
+  stylesheet writes `calc(var(--gmnb-segmented-gap) / 2)`. Equal widths
+  across the full width need `homogeneous`, `hexpand` and `halign: fill`
+  on the group (structure, set in Rust from `panel.tabs.stretch`).
+- Node names: `scale > trough > highlight | slider`; `switch > slider`;
+  `toastoverlay > toast`; `scrollbar > range > trough > slider`;
+  `popover > contents`; `dropdown > button.toggle` and
+  `dropdown > popover.menu`; `spinbutton > text, button.up, button.down`;
+  `windowcontrols > button.minimize|maximize|close`;
+  `bottom-sheet > sheet.background`; `entry > text`. A tooltip can't be
+  made without a display server that shows it: its names are unverified.
+
+Read from libadwaita 1.9.3's own stylesheet while the rules were written
+(not probed on 1.7): it fades a disabled toggle's label itself
+(`toggle > label:disabled { filter }`), which the structure stylesheet
+undoes for the families the app draws; and `calc(var(--x) / 2)` needs
+the variable to carry a unit even when it is zero.
 
 ### Toolkit-drawn families: `native`
 
@@ -509,7 +540,10 @@ The base look's treatment, all of it switched off at opacity 1:
    `contrast(fg, B) ≥ 4.5`, `contrast(over(fg_dim, B), B) ≥ 3` and
    `contrast(accent_text, B) ≥ 3`. It goes under the header, the readout
    and every `plain` container. `k` is found by bisection in `appcore`
-   and has a unit test.
+   (`palette::text_scrim`) and has a unit test. `ctx.base.text_scrim` is
+   worked out from the base colours; the three elements' own base values
+   from the theme's colours, so a theme that only changes `colors` gets a
+   scrim of its own background.
 2. **A halo.** `window.text_halo` is `{ blur 3, bg at 0.9 }, { blur 10, bg
    at 0.75 }`, and the readout gets the same as `display.halo`.
 3. Keys, fields, panels, cards and popovers are opaque surfaces in the
@@ -519,7 +553,7 @@ The base look's treatment, all of it switched off at opacity 1:
 
 ### Colors
 
-`colors` — base values from `appcore`'s `Theme::new(ctx.dark, ctx.accent)`.
+`colors` — base values from `appcore`'s `palette::Palette::new(ctx.dark, ctx.accent)`.
 
 | Token | Dark | Light | Used for |
 |---|---|---|---|
@@ -600,9 +634,9 @@ through `Style` (not CSS).
 | `layout.calculator.margin` | `{ 4, 8, 4, 8 }` | `{ 0, 8, 8, 8 }` |
 | `layout.calculator.gap` | 0 | 6 |
 | `layout.calculator.panel_width` | 292 | 300 |
-| `layout.calculator.panel_margin` | `{ 0, 8, 0, 0 }` | `{ 0, 10, 10, 0 }` |
+| `layout.calculator.panel_margin` | `{ 4, 0, 4, 8 }` (the 8 px between the page and the panel is on the panel's left) | `{ 0, 10, 10, 0 }` |
 | `layout.converter.margin` | `{ 6, 12, 6, 12 }` | `{ 0, 12, 10, 12 }` |
-| `layout.converter.gap`, `.gap_wide` | 4, 4 | 10, 24 |
+| `layout.converter.gap`, `.gap_wide` | 6, 20 (between the values and the keypad: under them, and beside them in a wide window) | 10, 24 |
 | `layout.converter.keypad_width` | 300 | 300 |
 | `layout.date.margin` | `{ 8, 16, 8, 16 }` | `{ 4, 16, 16, 16 }` |
 | `layout.date.gap` | 8 | 14 |
@@ -698,12 +732,12 @@ For a Control, the base states are these unless the row says otherwise:
 |---|---|---|---|
 | `nav.background` | Fill | `bg` | `.wc-sidebar` |
 | `nav.shadow` | Shadow list | `{ inset, x −1, border }` (a line down the right edge) | `.wc-sidebar` |
-| `nav.width` | number | 280 | The split view's sidebar width (Rust); never more than 85% of the window |
+| `nav.width` | number | 280 | The split view's sidebar width (Rust); it always leaves 40 px of the window uncovered |
 | `nav.title` | Text | `text.title`, `fg` | `.wc-nav-title` *(new)*: the app's name beside the menu button |
 | `nav.show_title` | boolean | `true` | Rust: the label's visibility |
 | `nav.header` | Text | `text.caption`, `fg_dim`, margin `{ 8, 12, 4, 12 }` | `.wc-nav-header` |
 | `nav.uppercase_headers` | boolean | `false` | Rust: a Pango text transform on the label; what a screen reader hears doesn't change |
-| `nav.row` | Control | radius `shape.row_radius`; min_height 40; margin `{ 1, 8 }`; padding `{ 0, 12 }`; `text.body`; `fg`; icon `{ size 20 }`; `checked = { background accent at 0.16, color accent_text }` | `.wc-nav row`; `checked` is `:selected` |
+| `nav.row` | Control | radius `shape.row_radius`; min_height 40; margin `{ 1, 6 }`; padding `{ 0, 8 }` (the icon in a 28 px box, the label 44 px in); `text.body`; `fg`; icon `{ size 18 }`; `checked = { background accent at 0.16, color accent_text }` | `.wc-nav row`; `checked` is `:selected` |
 | `nav.settings` | Control | as `nav.row` | `button.wc-nav-settings` |
 
 ### Shared controls
@@ -713,9 +747,9 @@ For a Control, the base states are these unless the row says otherwise:
 | `icon_button` | Control | 36×36; radius 999; `fg`; icon `{ size 18 }`; `checked = { background accent at 0.18, color accent_text }` | `button.wc-icon-button` |
 | `text_button` | Control | min_height 34; padding `{ 0, 6 }`; radius `shape.radius`; `text.caption`; `fg`; no background; `checked = { background accent, color on_accent }` | `button.wc-mem`: MC MR M+ M− MS M▾, DEG, F-E, the programmer bar |
 | `text_button_gap` | number | 2 | The rows' spacing (Rust) |
-| `flyout_button` | Control | as `text_button`, in `text.small`, padding `{ 0, 10 }` | `button.wc-mem.wc-flyout-button`: Trigonometry ▾ and Function ▾ |
-| `button` | Control | background `surface2`; radius `shape.radius`; `text.body`; `fg`; min_height 34; padding `{ 0, 12 }`; `checked = { background accent, color on_accent }` | `window.gmnb.own-button button:not([class*="wc-"])` and dialog buttons |
-| `segmented.gap` | number | 4 | `toggle-group { border-spacing }` |
+| `flyout_button` | Control | as `text_button`, in `text.small`, min_height 30 (its row is 36 high, the button 3 px in from top and bottom), padding `{ 0, 6 }` | `button.wc-mem.wc-flyout-button`: Trigonometry ▾ and Function ▾ |
+| `button` | Control | background `surface2`; radius `shape.radius`; `text.body`; `fg`; min_height 34; padding `{ 0, 6 }`; `checked = { background accent, color on_accent }` | `window.gmnb.own-button button:not([class*="wc-"])` and dialog buttons |
+| `segmented.gap` | number | 4 | `toggle-group { border-spacing }` (half of it: see [what the toolkit was found to support](#what-the-toolkit-was-found-to-support)) |
 | `segmented.item` | Control | min_height 36; radius `shape.radius`; `text.small`; `fg`; background `surface2`; `checked = { background accent, color on_accent }` | `window.gmnb.own-segmented toggle-group > toggle` |
 | `field` | Field | background `surface`; `fg`; border `{ 1, border }`; radius `shape.row_radius`; `text.body`; padding `{ 0, 10 }`; min_height 38; placeholder `fg_faint`; selection `accent` at 0.30; caret `fg`; `focus = { border { 2, accent_text } }`; `error = { border { 2, danger } }` | `window.gmnb.own-field entry, spinbutton` |
 | `row` | Control | radius `shape.row_radius`; min_height 36; `checked = { background accent at 0.16 }` | Rows of menus, dropdown lists, the bit-shift list |
@@ -776,7 +810,9 @@ hook falls back to.
 | `keys.pad` | `{ gap, radius, min_height, font }` | 3, `shape.radius`, 0, the key classes' own | `.wc-graph-pad button.wc-pad-key` and its grid (the graphing page's keypad) |
 
 The key classes are Controls but have no `checked`; a toggle that is on
-uses `keys.on`. Superscripts and subscripts in key labels are 70% of the
+uses `keys.on`. A class takes `keys`' shared values (`radius`, `padding`,
+`min_width`, `min_height`, `transition`, `icon`, and the three states)
+as the theme set them, unless it gives its own. Superscripts and subscripts in key labels are 70% of the
 label's size (fixed).
 
 ### History and memory panel
@@ -789,12 +825,12 @@ label's size (fixed).
 | `panel.tabs.gap` | number | 0 | the switch's spacing |
 | `panel.tabs.item` | Control | min_height 34; radius `shape.radius`; `text.strong`; `fg`; no background; `checked = { background accent, color on_accent }` | `.wc-toggle-group.wc-panel-tabs > toggle` *(new class)* |
 | `panel.title` | Text | `text.strong`, `fg` | `.wc-panel-title` (Programmer has memory only) |
-| `panel.row` | Control | radius `shape.row_radius`; min_height 64; padding `{ 8, 12 }` | `.wc-panel-row` |
+| `panel.row` | Control | radius `shape.row_radius`; min_height 64 (a memory row, with its three buttons under the value: 70); padding `{ 6, 10 }` | `.wc-panel-row` |
 | `panel.expression` | Text | `text.small`, `fg_dim` | `.wc-hist-expr` |
 | `panel.result` | Text | 22 / 500 with `{ "tnum" }`, `fg` | `.wc-hist-result` (history results and memory values) |
 | `panel.delete` | Control | 22×22; radius 999; `fg`; the icon as DGMNB draws it | `button.wc-hist-delete` *(new)*: the × on each history row |
 | `panel.delete_reveal` | `"always"` or `"hover"` | `"always"` | `"hover"`: opacity 0 until the row is hovered or holds the keyboard focus. The button is always there for the keyboard and for screen readers. |
-| `panel.memory_button` | Control | background `surface2`; radius `shape.radius`; `text.caption`; `fg`; min_height 24; padding `{ 0, 8 }` | `button.wc-mem-small`: MC, M+, M− on a memory row |
+| `panel.memory_button` | Control | background `surface2`; radius `shape.radius`; `text.caption`; `fg`; min_height 26; padding `{ 0, 8 }` | `button.wc-mem-small`: MC, M+, M− on a memory row |
 | `panel.memory_reveal` | `"always"` or `"hover"` | `"always"` | `.wc-mem-actions`, as `delete_reveal` |
 | `panel.empty` | Text | `text.small`, `fg_dim` | `.wc-empty` |
 
@@ -826,7 +862,7 @@ are `popover`s.
 | `date.subresult` | Text | `text.body`, `fg_dim` | `.wc-subresult` |
 | `date.calendar.title` | Text | `text.strong`, `fg` | `.wc-days-title` |
 | `date.calendar.weekday` | Text | `text.caption`, `fg_dim` | `.wc-days-weekday` |
-| `date.calendar.day` | Control | 36×36; radius 999; `text.small` with `{ "tnum" }`; `fg`; `checked = { background accent, color on_accent }` | `button.wc-day`; `checked` is `.wc-day-selected` |
+| `date.calendar.day` | Control | fills its cell (about 38×37: seven columns and six rows in the 300×316 popover, padding 10, gap 2); radius 999; `text.small` with `{ "tnum" }`; `fg`; `checked = { background accent, color on_accent }` | `button.wc-day`; `checked` is `.wc-day-selected` |
 | `date.calendar.other_month` | Color | `fg_faint` | `.wc-day-other` |
 | `date.calendar.today` | Border or `false` | `{ 1, accent_text }` | `.wc-day-today` |
 | `date.calendar.focus` | FocusRing | `focus` | `button.wc-day:focus` (shown on plain focus: a popover isn't told of keyboard use) |
@@ -876,7 +912,7 @@ calendar sits in a `popover`; its arrows are `icon_button`s.
 | `graph.analysis.value` | Text | `text.body`, `fg` | `.wc-kgf-value` |
 | `graph.analysis.text` | Text | `text.small`, `fg` | `.wc-kgf-text` |
 | `graph.analysis.note` | Text | `text.caption`, `fg_dim` | `.wc-kgf-note` |
-| `graph.toolbar` | Surface | background `surface2` at 0.94; radius 10; padding 2 | `.wc-graph-tools` |
+| `graph.toolbar` | Surface | background `surface2` at 0.94; radius 10; padding `{ 4, 2, 6, 2 }`, and 2 px between its buttons | `.wc-graph-tools` |
 | `graph.toolbar_button` | Control | `icon_button` at 34×34 | its buttons |
 
 The canvas is drawn by `widgets/graph_view.rs` from `Style`, on screen and
@@ -1216,7 +1252,8 @@ left it. On loading a file with no `theme_options.aurora`:
 
 `active_theme` is left unset. The four old keys are kept and written
 back unchanged, so going back to 0.2 still finds the palette it had;
-0.3 never reads them again once `theme_options.aurora` exists.
+0.3 never reads them again once `theme_options.aurora` exists (the
+migration always makes it, with `living` at least).
 The existing test becomes: `{"theme":"dark","palette":"ember"}` loads with
 `theme == "dark"`, `active_theme == ""`,
 `theme_options.aurora.palette == "ember"`, opacity 1 and Vulkan on.
@@ -1263,7 +1300,7 @@ sandbox with hard limits, and it can only ever affect how GMNB looks.
 
 | Limit | Value |
 |---|---|
-| Memory of the theme's Luau machine | 8 MiB |
+| Memory of the theme's Luau machine | 8 MiB of the theme's own; the tables the app builds for a call (`ctx`, a frame) are counted apart, up to 1 MiB more |
 | Time: loading the file | 250 ms |
 | Time: `style` | 50 ms |
 | Time: one `draw` call; all `place` calls of one keypad frame | 8 ms; 2 ms |
@@ -1418,6 +1455,7 @@ Where 0.3's structure changed for the base look, Aurora follows it:
 | Thresholds and sizes not in `layout` (wide at 620 px, the new-window size) | 0.2's | DGMNB's |
 | The drift's phase | Starts at 0 s when animated | Starts from the still frame (37 s) |
 | Readability under see-through | Judged by eye | Any tint the [see-through test](#readability-rules) fails is raised until it passes, and the change is noted in the theme |
+| A toggle key that is on (2nd, hyp) | The equals key's gradient at 0.85: its small text fell to 2.5:1 in the light palettes | The gradient solid, deepened until the text reaches 4.5:1 |
 
 ## Readability rules
 
@@ -1446,7 +1484,8 @@ built-in theme, each of its palettes, light and dark, at opacity 1: for
 every pair in a fixed table of (text, the fills beneath it, bottom-most
 last) the text's contrast against the composited fill is at least 4.5,
 or 3 where the text is 24 px or larger (19 px if weight ≥ 700), is an
-icon, or is a graph line. Gradients are checked at both ends and the
+icon, a graph line, or an operator key's glyph (÷ × − +: a symbol, not
+text to read; DGMNB's own light palette puts them at 4.1 on `surface2`). Gradients are checked at both ends and the
 middle. A translucent stack is composited over `window.background`'s
 colours. Disabled text is exempt, as in WCAG. The table covers: each key
 class and `keys.on`; `text_button` at rest and checked; the header title;
@@ -1470,12 +1509,14 @@ must reach 4.5 (its scrim is computed to). Halos are not counted.
 | Variable | Effect |
 |---|---|
 | `GMNB_THEME=<id>` | Use this theme for the run without saving it. `base` is the base look. Also `--theme <id>`. |
-| `GMNB_THEME_DIR=<path>` | Load a theme from this folder, as id `dev`. |
+| `GMNB_THEME_DIR=<path>` | Load a theme from this folder, as id `dev`, and use it for the run (unless `GMNB_THEME` or `--theme` names another). |
 | `GMNB_THEME_OPTIONS='palette=ember;living=false'` | Option values for the run. |
 | `GMNB_PALETTE=<key>` | Kept for the old scripts: the same as `GMNB_THEME=aurora` and `palette=<key>`. |
 | `GMNB_ACCENT=<hex>` or `none` | What `ctx.accent` is. |
 | `GMNB_STILL` | Layers see `motion = false`: no events, no frames, no `place`. The toolkit's own animations are untouched, as now. |
 | `GMNB_POINTER="x,y"` | A pointer position for the first keypad's layer, as now. |
+| `GMNB_BENCH="themes=base,aurora,mono,base;opacity"` | Measure: each theme switch, and an opacity drag from 1 to 0.1 and back, each to the end of the next painted frame; prints the figures and the hub's counters, then quits. |
+| `GMNB_THEME_STATS` | Print the hub's counters once the window has settled (Luau machines, `style` calls, provider loads and their property counts). |
 
 `GMNB_DARK`, `GMNB_OPACITY`, `GMNB_SIZE`, `GMNB_MODE`, `GMNB_KEYS` and the
 rest keep working.
@@ -1507,7 +1548,9 @@ readout; it is not an event.
 - Built-in themes' font files are written to the cache directory and
   added to the app's own font map, as Outfit is in 0.2
   (`pango_font_map_add_font_file`); a user theme's are added from its
-  folder. They are removed again when the theme is unloaded.
+  folder. Pango has no call that takes a file out of a font map again, so
+  they stay known to the app until it exits; nothing uses them unless a
+  style names their family.
 - A font is found by the family name inside the file. The bundled Inter's
   is "Inter Variable" (`fc-scan`), not "Inter".
 - If the desktop has a font installed under the same family name, which
@@ -1570,3 +1613,10 @@ Decided here, and worth a second look by the owner:
 5. **Themes are code.** They are sandboxed, limited and can only change
    how GMNB looks, but installing one is still running someone's script.
    Settings says so beside *Open themes folder*.
+6. **Operator glyphs count as symbols** in the readability rules (3:1).
+   As text (4.5:1) the base look itself would fail: in the light palette
+   `accent_text` on `surface2`, where the operator keys put it, is 4.1:1.
+   The alternative is to move `accent_text` in `appcore`, which changes
+   DGMNB's pixels.
+7. **Theme fonts stay loaded** until the app exits (Pango can add a font
+   file to a font map but not take it out).

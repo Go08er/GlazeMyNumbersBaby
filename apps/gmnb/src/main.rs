@@ -1,4 +1,5 @@
 mod a11y;
+mod bench;
 mod inert;
 mod keymap;
 mod launch;
@@ -203,6 +204,16 @@ fn activate(app: &adw::Application) {
         let w = win.clone();
         glib::timeout_add_local_once(Duration::from_millis(400), move || {
             w.simulate_keys(&keys.replace("\\n", "\n"))
+        });
+    }
+    if let Ok(spec) = std::env::var("GMNB_BENCH") {
+        bench::run(&win, &spec);
+    }
+    if std::env::var_os("GMNB_THEME_STATS").is_some() {
+        // What theming holds once the window has settled.
+        let w = win.clone();
+        glib::timeout_add_local_once(Duration::from_millis(1200), move || {
+            eprintln!("theme: {:?}", w.ctx().hub.stats());
         });
     }
     if let Ok(path) = std::env::var("GMNB_SCREENSHOT") {

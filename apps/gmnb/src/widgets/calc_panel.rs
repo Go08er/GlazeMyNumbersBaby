@@ -60,6 +60,7 @@ type RowAction = Rc<dyn Fn(&gtk::ListBoxRow)>;
 fn empty_state(text: &str) -> gtk::Label {
     let l = gtk::Label::new(Some(text));
     l.add_css_class("wc-empty");
+    l.add_css_class("wc-plain");
     l.set_wrap(true);
     l.set_justify(gtk::Justification::Center);
     l.set_margin_top(24);

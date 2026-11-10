@@ -216,6 +216,7 @@ impl ConverterPage {
         currency_box.append(&status);
 
         let values = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        values.add_css_class("wc-plain");
         values.set_vexpand(true);
         values.set_valign(gtk::Align::Start);
         values.append(&f1.frame);
