@@ -429,7 +429,7 @@ that has one; `false` stops the search and plays nothing.
 | `backspace` | Backspace | `key`, `press` |
 | `memory` | MC, MR, M+, M−, MS, and the buttons on a stored value | `button`, `press` |
 | `button` | F-E, the converter's swap, a date picked, other buttons | `press` |
-| `result` | A calculation gave a value, on the Calculator page | |
+| `result` | A calculation gave a value, on the Calculator page: after `=`, after an operator, after a function key | |
 | `error` | It gave an error, on the Calculator page | |
 | `mode` | The page or the calculator's mode was changed | |
 
@@ -620,9 +620,58 @@ themes are reviewed for it.
   pitch, length and filter, rather than ten unrelated ones.
 - **Equals and result arrive together.** Give `equals` a short dry sound
   and `result` a `delay` of 40 to 80 ms, or silence one of them.
+- **A result is not only the equals key's.** The app reports a result
+  whenever a calculation gives a new value: after `=`, and also after `+`
+  once a number is in (the sum so far) and after `sin` or `√`. A chime in
+  `sounds.result` rings for every one of them, three times in
+  `1 + 2 + 3 =`. To chime for `=` alone, let `sound` remember the key
+  pressed last (the press comes first, then what it came to) and return
+  `false` for the rest. Aurora does.
+- **Panned is louder.** A sound in the middle plays at its `gain` in both
+  ears. Moved to one side it keeps its power, so it is louder there: 2.6 dB
+  at the 60% of `pan = "position"`, 3 dB all the way over.
 
 `GMNB_SOUND_DUMP=<folder>` writes every sound a theme makes to a WAV file
 there, to listen to and to look at in an editor.
+
+**Checking the levels.** Listen first, then measure. Three commands, none
+of which plays anything:
+
+```
+cargo run --release -p gmnb-sound --example render -- mytheme out
+python3 -I tools/theming/sound_check.py out
+python3 -I tools/theming/sound_sheet.py out sheet.png
+```
+
+The first writes a theme's sounds and events to WAV files in `out`: every
+sound by itself; every event eight times on keys across the window,
+decided as the app decides it (`sound` first, then the table), a result or
+an error after the equals key; each value of the theme's choices and
+toggles that `sound` answers; and `typing.wav`, twenty presses at eight a
+second with the results the app reports along the way. The second
+measures them and prints a table. The third draws them, a spectrogram
+each, on one page.
+
+`sound_check.py` holds every built-in theme to one budget. The numbers
+are at the top of the script, with how each is measured:
+
+| | Budget | Over it |
+|---|---|---|
+| A sound's loudest sample (its `gain`) | 0.5, which is −6 dBFS | fails |
+| An event's loudest sample as mixed: panned, and several plays together | 0.71, −3 dBFS: one sound at 0.5 panned hard over. The limiter starts at 0.75. | fails |
+| `digit`, `operator`, `func`, `backspace`: from the event to 60 dB under its peak, the longest of its eight takes | 80 ms | fails |
+| `equals`, `toggle`, `clear`, `memory`, `button` | 250 ms | fails |
+| `result`, `error`, `mode`, and what `sound` plays for an option | 2 s | fails |
+| Loudness, against the median of the theme's sounds, or of its events | within 12 LU | flagged |
+| Typing: twenty presses at eight a second | −20 LUFS at full volume, about speech on the radio | flagged |
+| Energy under 120 Hz | 20 dB under the whole | flagged |
+| DC offset | −40 dBFS | flagged |
+
+Loudness is measured as ITU-R BS.1770 does (K-weighted, the loudest
+400 ms; typing over 3 s), so a short sound counts for less than a long one
+at the same peak, as it does to the ear. A failure is a broken rule. A
+flag is a question to answer by listening: an error may well be meant to
+be the loudest thing a theme has.
 
 ## Events: what is new
 
@@ -1565,8 +1614,10 @@ from the desktop's setting on each desktop, and inside a Flatpak, is
 assumed here and to be confirmed when it is wired up.) Off by default would hide the feature from the
 people who picked a theme for it. **Why 50%.** The gain is the slider
 squared, so 50% is −12 dB. A sound's loudest sample is its `gain`, 0.5 at
-most in the built-in themes, so at the default nothing peaks above
-−18 dBFS: present on speakers, well under any music playing.
+most in the built-in themes, so at the default a sound in the middle peaks
+at −18 dBFS at most, and one panned hard to a side 3 dB above that (the
+mixer's pan keeps a sound's power, not its peak): present on speakers,
+well under any music playing.
 
 ### Environment hooks
 
@@ -1622,6 +1673,20 @@ most in the built-in themes, so at the default nothing peaks above
 10. **Sound and screen readers**: a press delivered with
     `via = "assistive"` reaches layers and makes no play.
 11. **DGMNB**: the widened `cargo tree` check.
+12. **A built-in theme's sounds** (`crates/gmnb-theme/tests/aurora_sound.rs`
+    for Aurora): they load with no note, each within the gain a built-in
+    theme may have; every event plays what the theme means it to, in every
+    palette, and nothing lasts longer than the budget of
+    [Designing sounds](#designing-sounds-a-few-rules-that-work) allows;
+    its `sound` function answers some 9000 events with no failure in the
+    2 ms it has (processor time: 14 µs a call measured, the stand-in's own
+    work included); and what bounds the making of its sounds (layer-seconds,
+    no reverb or delay without a `length`, the bytes) stays under a fifth
+    of what a theme may ask for. The events are made by the stand-in for
+    the app that the render example uses
+    (`crates/gmnb-sound/examples/support/stand_in.rs`) until the app has
+    its own path from an event to a play. The levels are measured outside
+    `cargo test`, by `tools/theming/sound_check.py` on the theme's render.
 
 **The pictures' tests, as built** (5 to 9). Ten small files by other
 programs' encoders are in `crates/gmnb-media/tests/fixtures`, 2 KiB in
