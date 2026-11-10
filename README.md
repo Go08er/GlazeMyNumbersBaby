@@ -911,7 +911,7 @@ CI also runs checks that need more than `cargo test --workspace`:
 ## Licences
 
 The code is MIT; see [LICENSE](LICENSE), which carries Microsoft's original
-notice. Both embed *Inter*, and DGMNB subsets of *Noto Sans*
+notice. Both embed *Inter* and subsets of *Noto Sans*
 (`apps/dgmnb/assets/fonts/`); GMNB's Aurora theme brings the *Outfit*
 typeface (`apps/gmnb/themes/aurora/fonts/`). All are under the SIL Open
 Font License. Exchange-rate data comes from Frankfurter

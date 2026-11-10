@@ -55,3 +55,7 @@ pub const SLIDERS: &str = "M4 7h9M17 7h3M4 17h3M11 17h9M15 4.5v5M9 14.5v5";
 pub const KEYBOARD: &str = "M3.5 6h17a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-17a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zM7 10h.01M11 10h.01M15 10h.01M18 10h.01M7 14h10";
 pub const BITS: &str = "M5 5h3v5H5zM5 14h3v5H5zM12 5v5M16 5h3v5h-3zM12 14v5M16 14v5";
 pub const SPARKLE: &str = "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z";
+/// The window controls, as DGMNB draws them (its `app.rs` `glyph` module).
+pub const WINDOW_MINIMIZE: &str = "M6 12.5h12";
+pub const WINDOW_MAXIMIZE: &str = "M6.5 6.5h11v11h-11z";
+pub const WINDOW_RESTORE: &str = "M6.5 9h8.5v8.5H6.5zM9 9V6.5h8.5V15H15";

@@ -7,7 +7,9 @@ use adw::prelude::*;
 use calcvm::HistoryEntry;
 use gtk::glib;
 
-use super::icon::{PathIcon, paths};
+use super::icon::paths;
+use crate::theme::Hub;
+use crate::window::{follow_icon, icon_button, scroller};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MemOp {
@@ -28,12 +30,14 @@ struct Handlers {
 
 pub struct CalcPanel {
     pub root: gtk::Box,
+    hub: Rc<Hub>,
     switcher: adw::ToggleGroup,
+    /// Programmer's switch: Memory alone, on, across the panel (DGMNB's).
+    memory_only: adw::ToggleGroup,
     stack: gtk::Stack,
     history_list: gtk::ListBox,
     memory_list: gtk::ListBox,
     trash: gtk::Button,
-    memory_title: gtk::Label,
     handlers: RefCell<Handlers>,
     history_len: std::cell::Cell<usize>,
     memory_len: std::cell::Cell<usize>,
@@ -57,14 +61,27 @@ pub struct CalcPanel {
 /// What activating a row does, given the row.
 type RowAction = Rc<dyn Fn(&gtk::ListBoxRow)>;
 
+/// One line of a row, right-aligned, `height` px high (the text centred in
+/// it as DGMNB centres it: style.css's line heights), cut at its start
+/// when it is too long.
+fn line_label(text: &str, class: &str, height: f32) -> gtk::Label {
+    let l = gtk::Label::new(Some(text));
+    l.add_css_class(class);
+    l.set_xalign(1.0);
+    l.set_ellipsize(gtk::pango::EllipsizeMode::Start);
+    l.set_height_request(height.round() as i32);
+    l
+}
+
+/// What an empty list says, in the middle of it (DGMNB's).
 fn empty_state(text: &str) -> gtk::Label {
     let l = gtk::Label::new(Some(text));
     l.add_css_class("wc-empty");
+    l.add_css_class("wc-plain");
     l.set_wrap(true);
     l.set_justify(gtk::Justification::Center);
-    l.set_margin_top(24);
-    l.set_margin_start(16);
-    l.set_margin_end(16);
+    l.set_valign(gtk::Align::Center);
+    l.set_vexpand(true);
     l
 }
 
@@ -79,16 +96,45 @@ impl CalcPanel {
     /// `panel.tabs.stretch`: the History / Memory switch fills the
     /// panel's width in equal halves, or hugs its labels at the start.
     pub fn set_stretch(&self, stretch: bool) {
-        self.switcher.set_homogeneous(stretch);
-        self.switcher.set_hexpand(stretch);
-        self.switcher.set_halign(if stretch {
-            gtk::Align::Fill
+        for group in [&self.switcher, &self.memory_only] {
+            group.set_homogeneous(stretch);
+            group.set_hexpand(stretch);
+            group.set_halign(if stretch {
+                gtk::Align::Fill
+            } else {
+                gtk::Align::Start
+            });
+        }
+    }
+
+    /// What the style says of the panel's structure: the switch's width,
+    /// whether the × and a memory item's buttons show only on hover, the
+    /// History ⇄ Memory slide.
+    fn apply_style(&self, style: &gmnb_theme::Style) {
+        self.set_stretch(style.flag("panel.tabs.stretch"));
+        let reveal = |path: &str, class: &str| {
+            let hover = matches!(
+                style.get(path),
+                Some(gmnb_theme::types::Value::Word("hover"))
+            );
+            if hover {
+                self.root.add_css_class(class);
+            } else {
+                self.root.remove_css_class(class);
+            }
+        };
+        reveal("panel.delete_reveal", "wc-delete-on-hover");
+        reveal("panel.memory_reveal", "wc-memory-on-hover");
+        let ms = style.number("motion.panel").round() as u32;
+        self.stack.set_transition_duration(ms);
+        self.stack.set_transition_type(if ms > 0 {
+            gtk::StackTransitionType::SlideLeftRight
         } else {
-            gtk::Align::Start
+            gtk::StackTransitionType::None
         });
     }
 
-    pub fn new() -> Rc<Self> {
+    pub fn new(hub: &Rc<Hub>) -> Rc<Self> {
         let switcher = adw::ToggleGroup::new();
         switcher.add(
             adw::Toggle::builder()
@@ -111,50 +157,72 @@ impl CalcPanel {
         switcher.set_homogeneous(true);
         switcher.set_hexpand(true);
         switcher.set_halign(gtk::Align::Fill);
+        let memory_only = adw::ToggleGroup::new();
+        memory_only.add(
+            adw::Toggle::builder()
+                .name("memory")
+                .label("Memory")
+                .build(),
+        );
+        memory_only.set_active_name(Some("memory"));
+        for class in ["wc-toggle-group", "wc-panel-tabs", "flat"] {
+            memory_only.add_css_class(class);
+        }
+        memory_only.set_visible(false);
+        // Stays on: it is the only one.
+        memory_only.connect_active_name_notify(|g| {
+            if g.active_name().is_none() {
+                g.set_active_name(Some("memory"));
+            }
+        });
 
         let history_list = list();
         let memory_list = list();
 
-        let scroll = |child: &gtk::ListBox| {
-            gtk::ScrolledWindow::builder()
-                .child(child)
-                .hscrollbar_policy(gtk::PolicyType::Never)
-                .vexpand(true)
-                .build()
-        };
         let stack = gtk::Stack::new();
-        stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
-        stack.set_transition_duration(220);
-        stack.add_named(&scroll(&history_list), Some("history"));
-        stack.add_named(&scroll(&memory_list), Some("memory"));
+        stack.add_named(&scroller(hub, &history_list), Some("history"));
+        stack.add_named(&scroller(hub, &memory_list), Some("memory"));
+        stack.set_vexpand(true);
 
-        let trash = gtk::Button::builder()
-            .child(&PathIcon::new(paths::TRASH, 18))
-            .css_classes(["flat", "wc-icon-button"])
-            .halign(gtk::Align::End)
-            .tooltip_text("Clear all history (Ctrl+Shift+D)")
-            .build();
+        // The bar under the list, with the trash button at its end (shown
+        // while there is something to clear, as DGMNB's).
+        use appcore::metrics::panel::{BAR_H, TRASH_INSET, TRASH_W};
+        let trash = icon_button(paths::TRASH, "Clear all history (Ctrl+Shift+D)");
+        trash.set_halign(gtk::Align::End);
+        trash.set_size_request(
+            (TRASH_W - 2.0 * TRASH_INSET) as i32,
+            (BAR_H - 2.0 * TRASH_INSET) as i32,
+        );
+        let inset = TRASH_INSET as i32;
+        trash.set_margin_top(inset);
+        trash.set_margin_bottom(inset);
+        trash.set_margin_end(inset);
+        trash.set_visible(false);
+        follow_icon(hub, &trash, "icon_button");
+        let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        bar.add_css_class("wc-panel-bar");
+        bar.set_height_request(BAR_H as i32);
+        bar.set_halign(gtk::Align::End);
+        bar.append(&trash);
 
-        let memory_title = gtk::Label::new(Some("Memory"));
-        memory_title.add_css_class("wc-panel-title");
-        memory_title.set_xalign(0.0);
-        memory_title.set_visible(false);
-
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        crate::window::exact_text(&switcher);
+        crate::window::exact_text(&memory_only);
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.add_css_class("wc-calc-panel");
         root.append(&switcher);
-        root.append(&memory_title);
+        root.append(&memory_only);
         root.append(&stack);
-        root.append(&trash);
+        root.append(&bar);
 
         let panel = Rc::new(CalcPanel {
             root,
+            hub: hub.clone(),
             switcher: switcher.clone(),
+            memory_only,
             stack: stack.clone(),
             history_list,
             memory_list,
             trash: trash.clone(),
-            memory_title,
             handlers: RefCell::default(),
             history_len: Default::default(),
             memory_len: Default::default(),
@@ -192,6 +260,12 @@ impl CalcPanel {
             }
         });
         let weak = Rc::downgrade(&panel);
+        hub.subscribe_style(&panel.root, move |_, style| {
+            if let Some(p) = weak.upgrade() {
+                p.apply_style(style);
+            }
+        });
+        let weak = Rc::downgrade(&panel);
         trash.connect_clicked(move |_| {
             let Some(p) = weak.upgrade() else { return };
             let h = p.handlers.borrow();
@@ -221,7 +295,9 @@ impl CalcPanel {
     /// docked pivot, where its focus goes when the History is emptied);
     /// false if they aren't shown or didn't take it.
     pub fn focus_tabs(&self) -> bool {
-        self.switcher.is_mapped() && self.switcher.grab_focus()
+        [&self.switcher, &self.memory_only]
+            .into_iter()
+            .any(|g| g.is_mapped() && g.grab_focus())
     }
 
     /// Where the keyboard focus is in `list`, if it is: the row's place
@@ -267,12 +343,13 @@ impl CalcPanel {
     /// removed and only Memory remains).
     pub fn set_history_available(&self, available: bool) {
         self.switcher.set_visible(available);
-        self.memory_title.set_visible(!available);
+        self.memory_only.set_visible(!available);
         if !available {
             self.show_tab("memory");
         }
     }
 
+    /// The trash button is there while its list has something in it.
     fn sync_trash(&self) {
         let hist = self.current_tab() == "history";
         let n = if hist {
@@ -280,12 +357,15 @@ impl CalcPanel {
         } else {
             self.memory_len.get()
         };
-        self.trash.set_sensitive(n > 0);
-        self.trash.set_tooltip_text(Some(if hist {
+        self.trash.set_visible(n > 0);
+        let name = if hist {
             "Clear all history (Ctrl+Shift+D)"
         } else {
             "Clear all memory (Ctrl+L)"
-        }));
+        };
+        self.trash.set_tooltip_text(Some(name));
+        self.trash
+            .update_property(&[gtk::accessible::Property::Label(name)]);
     }
 
     pub fn connect_history_recall(&self, f: impl Fn(usize) + 'static) {
@@ -369,23 +449,32 @@ impl CalcPanel {
         self.history_list.remove_all();
         self.history_actions.borrow_mut().clear();
         // remove_all() also drops the placeholder, so re-attach it.
-        self.history_list
-            .set_placeholder(Some(&empty_state("There's no history yet")));
+        let empty = empty_state("There's no history yet");
+        crate::window::exact_text(&empty);
+        self.history_list.set_placeholder(Some(&empty));
+        use appcore::metrics::panel as mp;
         for (i, item) in items.iter().enumerate() {
-            let expr = gtk::Label::new(Some(&item.expression));
-            expr.add_css_class("wc-hist-expr");
-            expr.set_xalign(1.0);
-            expr.set_wrap(true);
-            expr.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-            let res = gtk::Label::new(Some(&item.result));
-            res.add_css_class("wc-hist-result");
-            res.set_xalign(1.0);
-            res.set_wrap(true);
-            res.set_wrap_mode(gtk::pango::WrapMode::Char);
-            let b = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            // The expression on a line of its own, clear of the ×; the
+            // result in the rest of the row (DGMNB's).
+            let expr = line_label(&item.expression, "wc-hist-expr", mp::EXPRESSION_H);
+            expr.set_margin_end(mp::EXPRESSION_TRIM as i32);
+            let res = line_label(
+                &item.result,
+                "wc-hist-result",
+                mp::HISTORY_ROW_H - 2.0 * mp::ROW_PAD_Y - mp::EXPRESSION_H,
+            );
+            let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
             b.append(&expr);
             b.append(&res);
-            let row = self.make_row(&b, i == 0 && grew);
+            let delete = icon_button(paths::CLOSE, "Delete");
+            delete.remove_css_class("wc-icon-button");
+            delete.add_css_class("wc-hist-delete");
+            delete.set_halign(gtk::Align::End);
+            delete.set_valign(gtk::Align::Start);
+            delete.set_margin_top(mp::DELETE_TOP as i32);
+            delete.set_margin_end((mp::DELETE_RIGHT - mp::DELETE) as i32);
+            follow_icon(&self.hub, &delete, "panel.delete");
+            let row = self.make_row(&b, Some(&delete), i == 0 && grew);
             row.update_property(&[gtk::accessible::Property::Label(&format!(
                 "{} {}",
                 item.expression, item.result
@@ -411,6 +500,19 @@ impl CalcPanel {
             self.history_actions
                 .borrow_mut()
                 .push((row.clone(), recall));
+            {
+                let weak = Rc::downgrade(self);
+                let (row, item_id) = (row.downgrade(), id.clone());
+                delete.connect_clicked(move |_| {
+                    let (shown, i, entry) = &*item_id;
+                    if let (Some(p), Some(row)) = (weak.upgrade(), row.upgrade())
+                        && p.history_row_current(*shown, *i, entry, &row)
+                        && let Some(f) = &p.handlers.borrow().history_delete
+                    {
+                        f(*i);
+                    }
+                });
+            }
             // Context menu → delete.
             let click = gtk::GestureClick::builder().button(3).build();
             let weak = Rc::downgrade(self);
@@ -509,16 +611,16 @@ impl CalcPanel {
         self.memory_list.remove_all();
         self.memory_actions.borrow_mut().clear();
         let mut buttons = Vec::with_capacity(items.len());
-        self.memory_list
-            .set_placeholder(Some(&empty_state("There's nothing saved in memory")));
+        let empty = empty_state("There's nothing saved in memory");
+        crate::window::exact_text(&empty);
+        self.memory_list.set_placeholder(Some(&empty));
+        use appcore::metrics::panel as mp;
         for (i, value) in items.iter().enumerate() {
-            let label = gtk::Label::new(Some(value));
-            label.add_css_class("wc-hist-result");
-            label.set_xalign(1.0);
-            label.set_wrap(true);
-            label.set_wrap_mode(gtk::pango::WrapMode::Char);
-            let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+            let label = line_label(value, "wc-hist-result", mp::MEMORY_VALUE_H);
+            // DGMNB's three cells, to the fraction of a pixel.
+            let actions = super::width_bin::Cells::new(mp::MEMORY_BUTTONS_GAP);
             actions.set_halign(gtk::Align::End);
+            actions.set_width_request(mp::MEMORY_BUTTONS_W as i32);
             actions.add_css_class("wc-mem-actions");
             let mut own = Vec::with_capacity(3);
             for (text, op, tip) in [
@@ -527,9 +629,9 @@ impl CalcPanel {
                 ("M−", MemOp::Subtract, "Subtract from memory item"),
             ] {
                 let b = gtk::Button::with_label(text);
-                b.add_css_class("wc-mem");
                 b.add_css_class("wc-mem-small");
                 b.set_tooltip_text(Some(tip));
+                crate::a11y::name_button(&b, tip);
                 let weak = Rc::downgrade(self);
                 b.connect_clicked(move |_| {
                     if let Some(p) = weak.upgrade()
@@ -542,10 +644,10 @@ impl CalcPanel {
                 own.push(b);
             }
             buttons.push(own);
-            let b = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
             b.append(&label);
             b.append(&actions);
-            let row = self.make_row(&b, i == 0 && grew);
+            let row = self.make_row(&b, None, i == 0 && grew);
             row.add_css_class("wc-mem-row");
             row.update_property(&[gtk::accessible::Property::Label(value)]);
             let weak = Rc::downgrade(self);
@@ -582,25 +684,42 @@ impl CalcPanel {
         }
     }
 
-    fn make_row(&self, content: &gtk::Box, animate: bool) -> gtk::ListBoxRow {
-        content.set_margin_top(8);
-        content.set_margin_bottom(8);
-        content.set_margin_start(12);
-        content.set_margin_end(12);
-        let revealer = gtk::Revealer::builder()
-            .child(content)
-            .transition_type(gtk::RevealerTransitionType::SlideDown)
-            .transition_duration(280)
-            .reveal_child(!animate)
-            .build();
+    /// A list row, full width (its hover and press cover all of it), its
+    /// content inside the row's padding (`.wc-row-content`), and `corner`,
+    /// the History ×, over its top right. A new row slides in for
+    /// `motion.history_row` ms (none in the base look).
+    fn make_row(
+        &self,
+        content: &gtk::Box,
+        corner: Option<&gtk::Button>,
+        animate: bool,
+    ) -> gtk::ListBoxRow {
+        content.add_css_class("wc-row-content");
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(content));
+        if let Some(corner) = corner {
+            overlay.add_overlay(corner);
+        }
+        let ms = self.hub.style().number("motion.history_row").round() as u32;
+        let child: gtk::Widget = if animate && ms > 0 {
+            let revealer = gtk::Revealer::builder()
+                .child(&overlay)
+                .transition_type(gtk::RevealerTransitionType::SlideDown)
+                .transition_duration(ms)
+                .reveal_child(false)
+                .build();
+            let r = revealer.clone();
+            glib::idle_add_local_once(move || r.set_reveal_child(true));
+            revealer.upcast()
+        } else {
+            overlay.upcast()
+        };
         let row = gtk::ListBoxRow::builder()
-            .child(&revealer)
+            .child(&child)
             .activatable(true)
             .build();
         row.add_css_class("wc-panel-row");
-        if animate {
-            glib::idle_add_local_once(move || revealer.set_reveal_child(true));
-        }
+        crate::window::exact_text(&row);
         row
     }
 }

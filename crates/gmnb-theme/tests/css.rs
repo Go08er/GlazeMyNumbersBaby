@@ -629,9 +629,115 @@ fn pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fill>)>
     out
 }
 
+/// A Text's colour and the contrast it needs.
+fn text_of(style: &Style, path: &str) -> (Rgba, f32) {
+    match style.get(path) {
+        Some(Value::Text(t)) => (t.color, needed(&t.font)),
+        other => panic!("{path}: {other:?}"),
+    }
+}
+
+/// The chrome's pairs: the header, the sidebar, the calculator's rows, the
+/// History and Memory panel and the programmer's radix list and bits.
+///
+/// A selected row's label (the sidebar's current page, the current radix)
+/// is `accent_text` on the accent at .16: DGMNB's own colours give it
+/// 3.6:1 light and 4.4:1 dark, so it is held to 3, as a mark of the
+/// selection its tint shows too (docs/theming.md, open point 11; moving
+/// `accent_text` would change DGMNB's pixels).
+fn chrome_pairs(style: &Style) -> Vec<(String, Rgba, f32, Vec<Fill>)> {
+    let mut out = Vec::new();
+    let plain = &style.fill("plain.background");
+    let control = |path: &str| style.control(path).unwrap_or_else(|| panic!("no {path}"));
+    // A control's label at rest and in `states`, over `under` (topmost
+    // first) and its own background.
+    let mut states = |name: &str, path: &str, which: &[&[Which]], under: &[Fill]| {
+        let c = control(path);
+        for states in which {
+            let f = c.finished(states);
+            let mut fills = vec![f.background];
+            fills.extend(under.iter().cloned());
+            let state = if states.is_empty() { "" } else { " checked" };
+            let selection = !states.is_empty() && name == "nav.row";
+            let need = if selection {
+                UI_CONTRAST
+            } else {
+                needed(&c.font)
+            };
+            out.push((format!("{name}{state}"), f.color, need, fills));
+        }
+    };
+    let rest_and_on: &[&[Which]] = &[&[], &[Which::Checked]];
+    let header = style.fill("header.background");
+    let nav = style.fill("nav.background");
+    let panel = match style.get("panel") {
+        Some(Value::Surface(s)) => s.background.clone(),
+        other => panic!("panel: {other:?}"),
+    };
+    // On the backdrop's scrims.
+    states(
+        "text_button",
+        "text_button",
+        rest_and_on,
+        std::slice::from_ref(plain),
+    );
+    states(
+        "flyout_button",
+        "flyout_button",
+        rest_and_on,
+        std::slice::from_ref(plain),
+    );
+    states(
+        "programmer.bit",
+        "programmer.bit",
+        rest_and_on,
+        std::slice::from_ref(plain),
+    );
+    states(
+        "programmer.radix.row",
+        "programmer.radix.row",
+        rest_and_on,
+        std::slice::from_ref(plain),
+    );
+    // On the sidebar, and on the panel.
+    states(
+        "nav.row",
+        "nav.row",
+        rest_and_on,
+        std::slice::from_ref(&nav),
+    );
+    states(
+        "panel.memory_button",
+        "panel.memory_button",
+        &[&[]],
+        std::slice::from_ref(&panel),
+    );
+    let mut texts = |name: &str, under: Vec<Fill>| {
+        let (color, need) = text_of(style, name);
+        out.push((name.to_string(), color, need, under));
+    };
+    texts("header.title", vec![header.clone()]);
+    texts("nav.title", vec![nav.clone()]);
+    texts("nav.header", vec![nav.clone()]);
+    texts("panel.expression", vec![panel.clone()]);
+    texts("panel.result", vec![panel.clone()]);
+    texts("panel.empty", vec![panel.clone()]);
+    texts("programmer.radix.value", vec![plain.clone()]);
+    texts("programmer.radix.name", vec![plain.clone()]);
+    // The current radix: its name in its own colour, on the checked row.
+    let row = control("programmer.radix.row").finished(&[Which::Checked]);
+    out.push((
+        "programmer.radix.name checked".to_string(),
+        style.color("programmer.radix.name_checked"),
+        UI_CONTRAST,
+        vec![row.background, plain.clone()],
+    ));
+    out
+}
+
 /// What a field's placeholder needs: DGMNB's light palette puts `fg_faint`
 /// at 2.49:1 on `surface`, and the base look is DGMNB's (docs/theming.md,
-/// "Readability rules", open point 8).
+/// "Readability rules", open point 9).
 const PLACEHOLDER_CONTRAST: f32 = 2.45;
 
 /// The date page's, the converter's and graphing's texts, and the
@@ -868,7 +974,9 @@ fn unreadable(pages: impl Fn(&str) -> bool) -> Vec<String> {
             let behind = backdrop(&style, desktop);
             let plain_text = desktop.is_none() || base_look;
             let mut all = if pages(&name) {
-                page_pairs(&style, plain_text)
+                let mut all = page_pairs(&style, plain_text);
+                all.extend(chrome_pairs(&style));
+                all
             } else {
                 Vec::new()
             };
