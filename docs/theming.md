@@ -1506,7 +1506,7 @@ sounds.
 | Open pushes / saves at once | 32 each |
 | Path segments per frame | 16 384 |
 | Text per `draw:text` call; text calls per frame | 256 bytes; 64 |
-| Blur radius; shadow blur | 100 px |
+| Blur radius; shadow blur | 100 px (a `push_shadow`'s, of the layer's pixels with the scales in force) |
 | Images: file; decoded size; count; total decoded | 4 MiB; 2048×2048; 16; 32 MiB |
 | Noise: size; count | 512×512; 8 |
 | Fonts: file; count; total | 16 MiB; 8; 32 MiB |

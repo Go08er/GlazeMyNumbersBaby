@@ -574,7 +574,7 @@ fn scales_one_inside_another_stay_within_what_can_be_drawn() {
         ("draw:scale(10) draw:rect(-1e7, 0, 1, 1e7, '#fff')", true),
         ("draw:scale(100) draw:rect(-1e7, 0, 1, 1, '#fff')", false),
         (
-            "draw:scale(1e4) draw:push_shadow({ { blur = 4, color = '#000' } }) draw:rect(0, 0, 1e7, 1e7, '#fff') draw:pop()",
+            "draw:scale(10) draw:push_shadow({ { blur = 4, color = '#000' } }) draw:rect(5e6, 0, 1e7, 1, '#fff') draw:pop()",
             false,
         ),
         ("draw:scale(1e4) draw:circle(0, 0, 1e5, '#fff')", false),
@@ -609,6 +609,42 @@ fn scales_one_inside_another_stay_within_what_can_be_drawn() {
         assert_eq!(result.is_ok(), drawn, "{body}: {result:?}");
         if let Err(failure) = result {
             assert!(message(failure).contains("10^8"), "{body}");
+        }
+    }
+    // A shadow's blur is within the cap with the scales in force: blurred
+    // by a million pixels or so (a scale of 10^6 and a blur of 4, on a
+    // screen of twice the pixels), the shadow of a 1 × 1 rect crashed the
+    // software renderer.
+    for (body, drawn) in [
+        (
+            "draw:push_shadow({ { blur = 100, color = '#000' } }) draw:pop()",
+            true,
+        ),
+        (
+            "draw:scale(2) draw:push_shadow({ { blur = 50, color = '#000' } }) draw:pop()",
+            true,
+        ),
+        (
+            "draw:scale(1e4) draw:push_shadow({ { blur = 100, color = '#000' } }) draw:pop()",
+            false,
+        ),
+        (
+            "draw:scale(1e6) draw:push_shadow({ { x = 2, blur = 4, color = '#000' } }) draw:pop()",
+            false,
+        ),
+        (
+            "draw:save() draw:scale(1e6) draw:restore() draw:push_shadow({ { blur = 4, color = '#000' } }) draw:pop()",
+            true,
+        ),
+    ] {
+        let (theme, _d) = background("shadow-zoom", "", body);
+        let result = run(&theme);
+        assert_eq!(result.is_ok(), drawn, "{body}: {result:?}");
+        if let Err(failure) = result {
+            assert!(
+                message(failure).contains("with the scales in force"),
+                "{body}"
+            );
         }
     }
     // And one more after those three is refused, by itself: a hook that

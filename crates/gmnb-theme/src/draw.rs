@@ -1668,6 +1668,18 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             for i in 1..=n {
                 shadows.push(shadow(&mut rec, what, &list.raw_get::<Value>(i)?)?);
             }
+            // The blur cap is of the layer's pixels, with the scales in
+            // force: blurred by a million pixels or so, the shadow of
+            // anything, however small, crashed the toolkit's software
+            // renderer (at a scale of 10^4, a blur of 100; at 10^6, of 4
+            // on a screen of twice the pixels).
+            let cap = f64::from(rec.limits.blur);
+            if shadows.iter().any(|sh| f64::from(sh.blur) * rec.zoom > cap) {
+                return Err(rec.over(
+                    what,
+                    format!("a shadow blurred by more than {cap} px, with the scales in force"),
+                ));
+            }
             rec.open_push(what, Op::PushShadow(shadows), 1)
         })?,
     )?;
