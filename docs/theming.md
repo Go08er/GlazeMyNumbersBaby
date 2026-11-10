@@ -1188,6 +1188,13 @@ A **stroke** is a width, or `{ width, cap, join, dash, dash_offset }`
 (`GskPathBuilder`) with `move_to`, `line_to`, `quad_to`, `curve_to`,
 `close`, `rect`, `rounded_rect`, `circle`, each returning the path so
 calls chain; or from `gmnb.svg_path("M6 12.5h12")` (`gsk_path_parse`).
+A circle's radius, and a rounded rectangle's corners in a path, are taken
+up to 10^6 (as is `draw:circle`'s), and SVG data may reach no further than
+10^6 from the origin, every relative step counted, nor have an arc of a
+larger radius (else `gmnb.svg_path` is an error): the toolkit's circles,
+corners and arcs cost it more to draw the larger they are in the path's
+own units. Measured on its software renderer, a circle of radius 10^7
+took a tenth of a second, and an arc of radius 10^10 hung it.
 
 Pictures: `gmnb.image("images/stars.png")` loads a PNG, JPEG, WebP or GIF
 from the theme's folder (decoded by the app itself, not by the toolkit's

@@ -583,6 +583,38 @@ fn scales_one_inside_another_stay_within_what_can_be_drawn() {
     assert_eq!(ops_count(&theme), 3);
 }
 
+/// A circle, or a path's rounded corner, of radius 10^7 cost the toolkit
+/// a tenth of a second to draw, each (its software renderer; a path may
+/// hold 16 384): radii are taken up to 10^6, which cost nothing more than
+/// small ones. SVG data reaches no further (its own test, in `path.rs`).
+#[test]
+fn circles_and_rounded_corners_are_no_larger_than_draw_cheaply() {
+    let (theme, _d) = background(
+        "radius",
+        "local p = gmnb.path():circle(1, 2, 1e7):rounded_rect(0, 0, 4e7, 4e7, { 1e7, 5, 2e6, 0 })",
+        r##"
+        draw:circle(3, 4, 1e7, "#ffffff")
+        draw:fill(p, "#ffffff")
+        local ok, why = pcall(gmnb.svg_path, "M0 0 A1e12 1e12 0 1 1 10 10 Z")
+        assert(not ok and string.find(tostring(why), "past"), tostring(why))
+        "##,
+    );
+    let ops = ops(&theme);
+    assert!(
+        matches!(ops[0], Op::Circle { center: [3.0, 4.0], radius, .. } if radius == 1.0e6),
+        "{:?}",
+        ops[0]
+    );
+    let Op::Fill { path, .. } = &ops[1] else {
+        panic!("{:?}", ops[1]);
+    };
+    assert_eq!(path.segments[0], Segment::Circle(1.0, 2.0, 1.0e6));
+    assert_eq!(
+        path.segments[1],
+        Segment::RoundedRect(0.0, 0.0, 1.0e7, 1.0e7, Radius([1.0e6, 5.0, 1.0e6, 0.0]))
+    );
+}
+
 fn ops_count(theme: &Theme) -> usize {
     ops(theme).len()
 }

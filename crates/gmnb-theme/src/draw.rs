@@ -1245,7 +1245,7 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             let what = "circle";
             let op = Op::Circle {
                 center: [coord(what, x)?, coord(what, y)?],
-                radius: coord(what, r)?.max(0.0),
+                radius: coord(what, r)?.clamp(0.0, path::MAX_RADIUS),
                 paint: paint(&k, what, &p)?,
             };
             s.recorder.borrow_mut().push(what, op)

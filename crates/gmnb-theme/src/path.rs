@@ -233,16 +233,19 @@ pub(crate) fn read(v: &Value, room: usize) -> Result<(Path, usize), Problem> {
                 let w = "rounded_rect";
                 let (x, y, wd, h) = (n(w)?, n(w)?, n(w)?.max(0.0), n(w)?.max(0.0));
                 let r = [
-                    n(w)?.max(0.0),
-                    n(w)?.max(0.0),
-                    n(w)?.max(0.0),
-                    n(w)?.max(0.0),
+                    n(w)?.clamp(0.0, MAX_RADIUS),
+                    n(w)?.clamp(0.0, MAX_RADIUS),
+                    n(w)?.clamp(0.0, MAX_RADIUS),
+                    n(w)?.clamp(0.0, MAX_RADIUS),
                 ];
                 (Segment::RoundedRect(x, y, wd, h, Radius(r)), 1)
             }
             CIRCLE => {
                 let w = "circle";
-                (Segment::Circle(n(w)?, n(w)?, n(w)?.max(0.0)), 1)
+                (
+                    Segment::Circle(n(w)?, n(w)?, n(w)?.clamp(0.0, MAX_RADIUS)),
+                    1,
+                )
             }
             SVG => {
                 let Some(Value::String(d)) = values.get(at) else {
@@ -266,10 +269,22 @@ pub(crate) fn read(v: &Value, room: usize) -> Result<(Path, usize), Problem> {
     Ok((Path { segments }, used))
 }
 
+/// How far from the origin SVG path data may reach, and how large an
+/// arc's radius may be: far beyond any window.
+pub const SVG_REACH: f64 = 1.0e6;
+
+/// The largest radius of a circle or of a rounded rectangle's corner in a
+/// path (and of `draw:circle`): the toolkit's circles and corners cost it
+/// more the larger they are, in the path's own units (a tenth of a second
+/// each at 10^7, measured, where 10^6 cost nothing more than 10^3).
+pub const MAX_RADIUS: f32 = 1.0e6;
+
 /// Checks SVG path data and counts its segments: the commands of the SVG
 /// path grammar (`MmLlHhVvCcSsQqTtAaZz`), each with as many numbers as it
-/// takes, repeated or not. What passes here is what the toolkit's parser
-/// is given; anything else is refused before it gets there.
+/// takes, repeated or not, and no point further than [`SVG_REACH`] from
+/// the origin (counting every relative step) nor an arc's radius larger.
+/// What passes here is what the toolkit's parser is given; anything else
+/// is refused before it gets there.
 pub fn svg_segments(d: &str) -> Result<usize, String> {
     let b = d.as_bytes();
     let mut i = 0;
@@ -289,7 +304,7 @@ pub fn svg_segments(d: &str) -> Result<usize, String> {
         }
     };
     // One number: sign, digits, a fraction, an exponent.
-    let num = |i: &mut usize| -> bool {
+    let num = |i: &mut usize| -> Option<f64> {
         let start = *i;
         if *i < b.len() && (b[*i] == b'+' || b[*i] == b'-') {
             *i += 1;
@@ -308,7 +323,7 @@ pub fn svg_segments(d: &str) -> Result<usize, String> {
         }
         if digits == 0 {
             *i = start;
-            return false;
+            return None;
         }
         if *i < b.len() && (b[*i] == b'e' || b[*i] == b'E') {
             let mark = *i;
@@ -326,7 +341,8 @@ pub fn svg_segments(d: &str) -> Result<usize, String> {
             }
         }
         // A number the toolkit would read as infinite is no number.
-        d[start..*i].parse::<f32>().is_ok_and(f32::is_finite)
+        let n = d[start..*i].parse::<f32>().ok().filter(|n| n.is_finite())?;
+        Some(f64::from(n))
     };
     // An arc's flag: one `0` or `1`, which may run into what follows.
     let flag = |i: &mut usize| -> bool {
@@ -337,6 +353,15 @@ pub fn svg_segments(d: &str) -> Result<usize, String> {
             false
         }
     };
+    // How far from the origin a point of the path can be, at most: the
+    // largest absolute coordinate, and every relative step added up (a
+    // control point's on top of that), kept within [`SVG_REACH`]; and an
+    // arc's radii within it too. (The toolkit's arcs, and the arcs a
+    // radius too small for its two ends is grown to, cost it more the
+    // larger they are: 10^10 hung it; and a point near a float's
+    // largest made its GL renderer abort.)
+    let mut absolute = 0.0f64;
+    let mut steps = 0.0f64;
     skip(&mut i, false);
     while i < b.len() {
         let command = b[i];
@@ -377,17 +402,44 @@ pub fn svg_segments(d: &str) -> Result<usize, String> {
                 if k > 0 {
                     skip(&mut i, true);
                 }
-                let ok = if arity == 7 && (k == 3 || k == 4) {
-                    flag(&mut i)
-                } else {
-                    num(&mut i)
-                };
-                if !ok {
-                    return Err(format!(
+                let at = i;
+                let needs = || {
+                    format!(
                         "{:?} needs {arity} numbers (at byte {})",
                         command as char,
-                        i + 1
-                    ));
+                        at + 1
+                    )
+                };
+                if arity == 7 && (k == 3 || k == 4) {
+                    if !flag(&mut i) {
+                        return Err(needs());
+                    }
+                    continue;
+                }
+                let n = num(&mut i).ok_or_else(needs)?.abs();
+                let relative = command.is_ascii_lowercase();
+                // What the number is: an arc's radius or its rotation, a
+                // control point's coordinate, or the end's.
+                let (radius, control) = match (command.to_ascii_lowercase(), k) {
+                    (b'a', 0 | 1) => (true, false),
+                    (b'a', 2) => continue,
+                    (b'c', 0..=3) | (b's' | b'q', 0 | 1) => (false, true),
+                    _ => (false, false),
+                };
+                let reach = if radius {
+                    n
+                } else if !relative {
+                    absolute = absolute.max(n);
+                    absolute + steps
+                } else if control {
+                    absolute + steps + n
+                } else {
+                    steps += n;
+                    absolute + steps
+                };
+                if reach > SVG_REACH {
+                    let what = if radius { "an arc's radius" } else { "a point" };
+                    return Err(format!("{what} past {SVG_REACH:e} (at byte {})", at + 1));
                 }
             }
             sets += 1;
@@ -418,5 +470,39 @@ mod tests {
         assert!(svg_segments("M1 1 url(x)").is_err());
         assert!(svg_segments("M1 1 L 1e999 2").is_err());
         assert!(svg_segments("M10 10a5 5 0 2 1 3 3").is_err());
+    }
+
+    /// Each number finite was not enough: an arc of radius 10^12 hung the
+    /// toolkit on every renderer, and points near a float's largest (or
+    /// relative steps that add up past it) made its GL renderer abort.
+    #[test]
+    fn svg_data_reaches_no_further_than_the_toolkit_draws_cheaply() {
+        // Within reach: drawn.
+        assert_eq!(svg_segments("M-1e6 0 L1e6 0"), Ok(2));
+        assert_eq!(svg_segments("M0 0 A1e6 1e6 0 1 1 10 10"), Ok(2));
+        assert_eq!(svg_segments("m0 0 l5e5 0 5e5 0"), Ok(3));
+        assert_eq!(svg_segments("M0 0 c1e6 0 1e6 1e6 0 1e6"), Ok(2));
+        // An arc's rotation is an angle: any finite one.
+        assert_eq!(svg_segments("M0 0 A5 5 1e30 0 0 10 10"), Ok(2));
+        // Past it: refused.
+        for far in [
+            "M0 0 A1e12 1e12 0 1 1 10 10",
+            "M0 0 a3 3e38 0 1 1 10 10",
+            "M-3e38 -3e38 L3e38 -3e38 L3e38 3e38 Z",
+            "M0 0 L1.5e6 0",
+            "M0 0 C2e6 0 0 0 1 1",
+            // Relative steps, each within reach, adding up past it.
+            "m0 0 l6e5 0 6e5 0",
+            "m0 0 h4e5 v4e5 h4e5",
+            // An absolute point, then relative steps from it.
+            "M9e5 0 l2e5 0",
+            // A relative control point beyond where the path has got to.
+            "M9e5 0 q2e5 0 0 0",
+        ] {
+            let e = svg_segments(far).unwrap_err();
+            assert!(e.contains("past"), "{far}: {e}");
+        }
+        let long = format!("m0 0{}", " l3e38 3e38".repeat(8));
+        assert!(svg_segments(&long).is_err());
     }
 }
