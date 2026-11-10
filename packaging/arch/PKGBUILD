@@ -67,7 +67,7 @@ package_gmnb() {
   install -Dm644 "packaging/$app.desktop" -t "$pkgdir/usr/share/applications"
   install -Dm644 "packaging/$app.metainfo.xml" -t "$pkgdir/usr/share/metainfo"
   install -Dm644 "packaging/icons/$app.svg" -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
-  install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
+  install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/glazed/fonts/OFL-Jersey10.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
     -t "$pkgdir/usr/share/licenses/$pkgname"
 }
 

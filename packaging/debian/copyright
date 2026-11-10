@@ -31,6 +31,11 @@ Files: apps/gmnb/themes/aurora/fonts/*
 Copyright: 2021 The Outfit Project Authors (https://github.com/Outfitio/Outfit-Fonts)
 License: OFL-1.1
 
+Files: apps/gmnb/themes/glazed/fonts/*
+Copyright: 2023 The Soft Type Project Authors (https://github.com/scfried/soft-type-jersey)
+License: OFL-1.1
+Comment: Jersey 10, as its upstream ships it (commit d8446c4c, fonts/ttf/Jersey10-Regular.ttf).
+
 Files: apps/dgmnb/assets/fonts/*
 Copyright: 2016 The Inter Project Authors (https://github.com/rsms/inter)
            2022-2025 The Noto Project Authors (https://github.com/notofonts)
