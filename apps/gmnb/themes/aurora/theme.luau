@@ -341,6 +341,8 @@ type Scheme = {
 	-- The hot gradient deep enough for small text.
 	lit_a: Rgba,
 	lit_b: Rgba,
+	-- How strong the two veils of light over the aurora are.
+	veil_alpha: number,
 	-- How much of the desktop must be hidden under text, and under the
 	-- graph, on a see-through window (see `cover_for`).
 	cover: number,
@@ -372,9 +374,11 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 	end
 
 	-- What text lies on at full opacity: the background's two colours, the
-	-- body of each blob of the aurora, and any of those under glass.
+	-- body of each blob of the aurora, its veils, and any of those under
+	-- glass.
 	local glass = glass_for(p.dark)
-	local grounds = { top, bottom }
+	local veil_alpha = if p.dark then 0.16 else 0.10
+	local grounds = { top, bottom, over(alpha(hot_a, veil_alpha), bottom), over(alpha(hot_b, veil_alpha), bottom) }
 	for _, blob in p.blobs do
 		table.insert(grounds, over(alpha(blob, p.blob_alpha * 0.62), bottom))
 	end
@@ -443,6 +447,7 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 		danger = danger,
 		lit_a = lit_a,
 		lit_b = lit_b,
+		veil_alpha = veil_alpha,
 		cover = cover_for(bottom, checks, 1.05),
 		canvas_cover = cover_for(bottom, canvas_checks, 1.01),
 	}
@@ -457,17 +462,18 @@ local function colour(value: OptionValue?, fallback: string): Rgba
 end
 
 local function build(id: string, ctx: Ctx): Scheme
-	local primary: Rgba?, secondary: Rgba?
-	if id == "system" then
-		primary = ctx.accent or hex(FALLBACK_ACCENT)
-		secondary = gmnb.complement(primary)
-	elseif id == "custom" then
-		primary = colour(ctx.options.primary, DEFAULT_PRIMARY)
-		secondary = colour(ctx.options.secondary, DEFAULT_SECONDARY)
-	end
-	if primary and secondary then
+	local function generated(primary: Rgba, secondary: Rgba): Scheme
 		local hue = gmnb.to_hsl(primary)
 		return finish(generate(primary, secondary, ctx.dark), hsl(hue, 0.4, 0.10))
+	end
+	if id == "system" then
+		local primary = ctx.accent or hex(FALLBACK_ACCENT)
+		return generated(primary, gmnb.complement(primary))
+	elseif id == "custom" then
+		return generated(
+			colour(ctx.options.primary, DEFAULT_PRIMARY),
+			colour(ctx.options.secondary, DEFAULT_SECONDARY)
+		)
 	end
 	local make = BUILT_IN[id] or BUILT_IN.aurora
 	return finish(make(ctx.dark), nil)
@@ -616,12 +622,16 @@ local function style(ctx: Ctx): Style
 	local chosen: State = { background = alpha(accent, 0.12), color = accent_ink }
 
 	-- Shadows, listed topmost first: a highlight along the top edge, a
-	-- hairline rim, and a soft drop shadow underneath.
-	local key_shadow: { Shadow } = { highlight, rim, { y = 6, blur = 18, spread = -12, color = shade } }
+	-- hairline rim, a shade along the bottom edge that gives the glass its
+	-- thickness, and a soft drop shadow underneath.
+	local thickness: Shadow = { inset = true, y = -1, color = alpha(black, if dark then 0.22 else 0.05) }
+	local drop: Shadow = { y = 6, blur = 18, spread = -12, color = shade }
+	local key_shadow: { Shadow } = { highlight, rim, thickness, drop }
 	local operator_shadow: { Shadow } = {
 		highlight,
 		{ inset = true, spread = 1, color = alpha(accent, 0.22) },
-		{ y = 6, blur = 18, spread = -12, color = shade },
+		thickness,
+		drop,
 	}
 	-- The equals key glows in its own colours.
 	local equals_shadow: { Shadow } = {
@@ -820,6 +830,7 @@ local function style(ctx: Ctx): Style
 			min_height = 38,
 			padding = { 0, 2 },
 			icon = { size = 22, stroke = 1.9 * (0.6 + 0.4 * 22 / 24) },
+			-- (320 ms: the keypad layer's SPRING_BACK.)
 			transition = { background = 160, shadow = 220, transform = { ms = 320, ease = "spring" }, filter = 160 },
 			hover = { brightness = 1.12 },
 			active = { scale = 0.93, brightness = 1.22, transition = { transform = 70, filter = 70 } },
@@ -1127,6 +1138,7 @@ local function style(ctx: Ctx): Style
 			add = {
 				min_height = 40,
 				radius = 12,
+				font = outfit(15),
 				color = dim,
 				background = gmnb.transparent,
 				shadow = { { inset = true, spread = 1, color = alpha(fg, 0.12) } },
@@ -1182,8 +1194,12 @@ local function style(ctx: Ctx): Style
 end
 
 ---------------------------------------------------------------------------
--- 3. Background: the aurora
+-- 4. Background: the aurora
 ---------------------------------------------------------------------------
+--
+-- Bottom to top: the base gradient, four blobs of colour that wander, two
+-- veils of light arching over them, a pulse wherever something just
+-- happened, a vignette, and film grain.
 
 -- The blobs: where each rests (as fractions of the window), how far it
 -- wanders, how fast in x and in y (radians a second), where in its swing it
@@ -1194,6 +1210,20 @@ local BLOBS = {
 	{ x = 0.22, y = 0.98, wander = 0.18, speed_x = 0.059, speed_y = 0.043, phase = 3.1, size = 0.58 },
 	{ x = 0.88, y = 0.96, wander = 0.14, speed_x = 0.038, speed_y = 0.061, phase = 4.4, size = 0.46 },
 }
+
+-- The veils: each is a slice of a huge ring whose centre lies far below the
+-- window, so that what shows is an arc with a bright lower edge, fading
+-- upwards as an aurora's curtain does.
+--   x, y      the arc's highest point, as fractions of the window
+--   radius    of the ring, in window heights; `stretch` times that across
+--   sway      how far the arc's top wanders sideways, and `speed`, `phase`
+local VEILS = {
+	{ x = 0.28, y = 0.30, radius = 1.3, stretch = 1.15, sway = 0.10, speed = 0.043, phase = 0.6 },
+	{ x = 0.80, y = 0.42, radius = 1.6, stretch = 1.10, sway = 0.08, speed = 0.031, phase = 2.9 },
+}
+-- Where in the ring's gradient the bright edge is: the rest, out to 1, is
+-- the fade above it.
+local VEIL_EDGE = 0.76
 
 -- The blobs move about 5 px a second: 15 frames a second is smooth.
 local DRIFT_FRAME = 0.066
@@ -1209,19 +1239,76 @@ local grain_light = gmnb.noise({ size = GRAIN, seed = 0x9e3779b9, color = black,
 -- How far the aurora has drifted, in seconds. It starts at the frame 0.2
 -- showed when it stood still, and only moves on while "Living background"
 -- is on (`frame.dt` is 0 whenever the app isn't animating).
-local drift = 37.0
+local STILL = 37.0
+local drift = STILL
 
+-- A soft light: a radial gradient centred on (cx, cy), painted only where
+-- it reaches inside the window.
+local function light(
+	draw: Draw,
+	w: number,
+	h: number,
+	cx: number,
+	cy: number,
+	rx: number,
+	ry: number,
+	colors: { Rgba },
+	stops: { number }
+)
+	local left, top = math.max(cx - rx, 0), math.max(cy - ry, 0)
+	local right, bottom = math.min(cx + rx, w), math.min(cy + ry, h)
+	if right > left and bottom > top then
+		draw:rect(left, top, right - left, bottom - top, gmnb.radial({
+			center = { cx, cy },
+			radius = rx,
+			radius_y = ry,
+			colors = colors,
+			stops = stops,
+		}))
+	end
+end
+
+-- One veil at drift time `t`, `strength` being its opacity at the edge.
+local function veil_at(draw: Draw, w: number, h: number, veil: typeof(VEILS[1]), color: Rgba, strength: number, t: number)
+	local top_x = (veil.x + veil.sway * math.sin(t * veil.speed + veil.phase)) * w
+	local top_y = (veil.y + 0.03 * math.cos(t * veil.speed * 1.7 + veil.phase)) * h
+	-- The bright edge's own ellipse, and the gradient's, which ends above it.
+	local ry = veil.radius * h
+	local rx = ry * veil.stretch
+	local cx, cy = top_x, top_y + ry
+	local a = strength * (0.85 + 0.15 * math.sin(t * 0.09 + veil.phase))
+	-- Nothing of it shows below where its edge leaves the window.
+	local reach = math.max(top_x, w - top_x) / rx
+	local lowest = cy - ry * math.sqrt(math.max(1 - reach * reach, 0)) + 0.06 * ry
+	local top = math.max(cy - ry / VEIL_EDGE, 0)
+	local bottom = math.min(lowest, h)
+	if bottom > top then
+		draw:rect(0, top, w, bottom - top, gmnb.radial({
+			center = { cx, cy },
+			radius = rx / VEIL_EDGE,
+			radius_y = ry / VEIL_EDGE,
+			colors = { alpha(color, 0), alpha(color, 0), alpha(color, a), alpha(color, a * 0.45), alpha(color, 0) },
+			stops = { 0, VEIL_EDGE - 0.06, VEIL_EDGE, VEIL_EDGE + 0.08, 1 },
+		}))
+	end
+end
+
+-- A pulse: a bloom of light that swells from where something happened and
+-- fades. The strong ones (the equals key, a result, a new palette) also
+-- send a thin wavefront running ahead of it.
 local function pulse_at(draw: Draw, w: number, h: number, x: number, y: number, color: Rgba, strength: number, age: number)
 	local life = age / PULSE_LIFE
-	local grow = 1 - (1 - life) ^ 3
-	local radius = 40 + grow * 340
-	local a = (1 - life) ^ 1.6 * 0.30 * strength
-	draw:rect(0, 0, w, h, gmnb.radial({
-		center = { x, y },
-		radius = radius,
-		colors = { alpha(color, a * 0.6), alpha(color, a), alpha(color, 0) },
-		stops = { 0, 0.55, 1 },
-	}))
+	-- It comes up over three frames instead of popping in.
+	local rise = ease.out_quad(math.min(age / 0.05, 1))
+	local radius = 40 + ease.out_cubic(life) * 340
+	local a = (1 - life) ^ 1.6 * 0.30 * strength * rise
+	light(draw, w, h, x, y, radius, radius, { alpha(color, a * 0.6), alpha(color, a), alpha(color, 0) }, { 0, 0.55, 1 })
+	local front = life * 1.8
+	if strength >= 1 and front < 1 then
+		local reach = 60 + ease.out_quart(front) * 420
+		local b = (1 - front) ^ 2 * 0.16 * strength
+		light(draw, w, h, x, y, reach, reach, { alpha(color, 0), alpha(color, 0), alpha(color, b), alpha(color, 0) }, { 0, 0.82, 0.94, 1 })
+	end
 end
 
 -- The colour and strength of the pulse a press makes.
@@ -1240,6 +1327,7 @@ local function press_pulse(e: Event, s: Scheme): (Rgba, number)
 		elseif key.kind == "equals" then
 			return s.hot_a, 1.4
 		end
+		-- Each key has a blob's colour of its own.
 		return s.blobs[key.id * 7 % 4 + 1], 0.55
 	elseif e.source == "swap" then
 		return s.hot_a, 1.0
@@ -1274,16 +1362,15 @@ local function background(draw: Draw, frame: Frame): Again
 		local breathe = 1 + 0.08 * math.sin(t * 0.11 + (i - 1))
 		local r = span * b.size * breathe
 		local c, a = s.blobs[i], s.blob_alpha
-		draw:rect(0, 0, w, h, gmnb.radial({
-			center = { cx, cy },
-			radius = r,
-			radius_y = r * 0.82,
-			colors = { alpha(c, a), alpha(c, a * 0.62), alpha(c, a * 0.18), alpha(c, 0) },
-			stops = { 0, 0.3, 0.62, 1 },
-		}))
+		light(draw, w, h, cx, cy, r, r * 0.82,
+			{ alpha(c, a), alpha(c, a * 0.62), alpha(c, a * 0.18), alpha(c, 0) }, { 0, 0.3, 0.62, 1 })
 	end
 
-	-- Pulses: a soft bloom wherever something just happened.
+	-- Two veils in the hot colours.
+	veil_at(draw, w, h, VEILS[1], s.hot_a, s.veil_alpha, t)
+	veil_at(draw, w, h, VEILS[2], s.hot_b, s.veil_alpha * 0.8, t)
+
+	-- Pulses: a bloom wherever something just happened.
 	local pulsing = false
 	for _, e in frame.events do
 		if e.age < PULSE_LIFE then
@@ -1292,8 +1379,9 @@ local function background(draw: Draw, frame: Frame): Again
 				pulsing = true
 				pulse_at(draw, w, h, e.x, e.y, color, strength, e.age)
 			elseif (e.kind == "result" or e.kind == "error") and e.page == "calculator" then
+				-- From under the last digits of the readout.
 				pulsing = true
-				local color = if e.kind == "error" then s.hot_a else s.hot_b
+				local color = if e.kind == "error" then s.danger else s.hot_b
 				pulse_at(draw, w, h, e.rect.x + e.rect.w * 0.8, e.rect.y + e.rect.h * 0.65, color, 1.1, e.age)
 			elseif e.kind == "option" and e.id == "palette" then
 				-- A new palette introduces itself.
@@ -1316,6 +1404,8 @@ local function background(draw: Draw, frame: Frame): Again
 
 	draw:tile(if s.dark then grain_dark else grain_light, 0, 0, w, h)
 
+	-- Every frame while a pulse plays; fifteen a second while it only
+	-- drifts; and not at all when it stands still.
 	if pulsing then
 		return 0
 	elseif living then
@@ -1325,10 +1415,13 @@ local function background(draw: Draw, frame: Frame): Again
 end
 
 ---------------------------------------------------------------------------
--- 4. Keypad: ripples, the pointer's light, the cascade
+-- 5. Keypad: ripples, the pointer's light, the cascade
 ---------------------------------------------------------------------------
 
 local RIPPLE_LIFE = 0.55
+-- How long a pressed key takes to spring back to its size (`keys.transition`
+-- in the style), in seconds.
+local SPRING_BACK = 0.32
 -- The cascade: each diagonal starts this much later, and takes this long.
 local CASCADE_STEP = 0.022
 local CASCADE_TIME = 0.46
@@ -1363,9 +1456,10 @@ end
 local function keypad(draw: Draw, frame: Frame): Again
 	local s = scheme(frame.ctx)
 	local keys: { KeyCell } = frame.keys or {}
-	local light = if s.dark then white else s.accent
+	local glint = if s.dark then white else s.accent
 	local busy = false
 
+	-- `place` is moving keys for as long as the cascade runs.
 	local show = newest(frame.events, "show")
 	if show then
 		local last = 0
@@ -1375,28 +1469,32 @@ local function keypad(draw: Draw, frame: Frame): Again
 		busy = show.age <= last * CASCADE_STEP + CASCADE_TIME
 	end
 
-	-- Ripples spread from where a key was pressed, and stay inside it.
+	-- Ripples spread from where a key was pressed, and stay inside it: a
+	-- wash of light with a brighter rim.
+	local springing: { [number]: boolean } = {}
 	for _, e in frame.events do
 		if e.kind == "press" and e.source == "key" and e.key and e.page ~= "graphing" and e.age < RIPPLE_LIFE then
 			busy = true
+			-- (The style shrinks a pressed key and springs it back.)
+			springing[e.key.id] = e.age < SPRING_BACK
 			local life = e.age / RIPPLE_LIFE
 			local r = e.rect
 			local reach = math.sqrt(r.w * r.w + r.h * r.h) * 1.1
 			local a = (1 - life) ^ 1.4 * (if s.dark then 0.26 else 0.30)
-			local color = if e.key.kind == "equals" then s.on_hot else light
+			local color = if e.key.kind == "equals" then s.on_hot else glint
 			draw:push_clip(r.x, r.y, r.w, r.h, KEY_RADIUS)
 			draw:rect(r.x, r.y, r.w, r.h, gmnb.radial({
 				center = { e.x, e.y },
 				radius = 6 + ease.out_cubic(life) * reach,
-				colors = { alpha(color, a * 0.5), alpha(color, a), alpha(color, 0) },
-				stops = { 0, 0.8, 1 },
+				colors = { alpha(color, a * 0.4), alpha(color, a * 0.7), alpha(color, a), alpha(color, 0) },
+				stops = { 0, 0.6, 0.88, 1 },
 			}))
 			draw:pop()
 		end
 	end
 
-	-- Reveal: the borders of the keys near the pointer light up, and the
-	-- key under it glows.
+	-- Reveal: the borders of the keys near the pointer catch its light, and
+	-- the key under it glows.
 	local p = frame.pointer
 	if p then
 		local border = if s.dark then 0.55 else 0.75
@@ -1406,19 +1504,23 @@ local function keypad(draw: Draw, frame: Frame): Again
 			local nx = math.clamp(p.x, r.x, r.x + r.w)
 			local ny = math.clamp(p.y, r.y, r.y + r.h)
 			local away = math.sqrt((p.x - nx) ^ 2 + (p.y - ny) ^ 2)
-			if k.enabled and away <= REVEAL_RADIUS then
-				local edge = gmnb.path():rounded_rect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, KEY_RADIUS - 0.5)
-				draw:stroke(edge, 1.25, gmnb.radial({
+			-- (Not a key that is pressed or springing back: its border
+			-- would be drawn where the key, shrunk, no longer is.)
+			local shrunk = k.pressed or (k.id ~= nil and springing[k.id])
+			if k.enabled and not shrunk and away <= REVEAL_RADIUS then
+				local outline = gmnb.path():rounded_rect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, KEY_RADIUS - 0.5)
+				draw:stroke(outline, 1.25, gmnb.radial({
 					center = { p.x, p.y },
 					radius = REVEAL_RADIUS,
-					colors = { alpha(light, border), alpha(light, 0) },
+					colors = { alpha(glint, border), alpha(glint, border * 0.3), alpha(glint, 0) },
+					stops = { 0, 0.55, 1 },
 				}))
 				if away == 0 then
 					draw:push_clip(r.x, r.y, r.w, r.h, KEY_RADIUS)
 					draw:rect(r.x, r.y, r.w, r.h, gmnb.radial({
 						center = { p.x, p.y },
 						radius = math.max(r.w, r.h) * 0.95,
-						colors = { alpha(light, glow), alpha(light, 0) },
+						colors = { alpha(glint, glow), alpha(glint, 0) },
 					}))
 					draw:pop()
 				end
@@ -1430,8 +1532,12 @@ local function keypad(draw: Draw, frame: Frame): Again
 end
 
 ---------------------------------------------------------------------------
--- 5. Display: gradient digits, glow, and how a new value arrives
+-- 6. Display: gradient digits, glow, and how a new value arrives
 ---------------------------------------------------------------------------
+--
+-- The app lays the value out and hands over its glyphs; this paints them.
+-- The same hook paints the converter's two values and the date page's
+-- results (`frame.value.role` says which).
 
 -- How long each kind of change plays for, in seconds.
 local function change_time(kind: string, digits: number): number
@@ -1487,8 +1593,7 @@ local function display(draw: Draw, frame: Frame): Again
 		if kind == "typing" and g.index >= from then
 			-- New digits pop in with a little overshoot.
 			local p = math.min(t / 0.26, 1)
-			local back = 1 + 2.7 * (p - 1) ^ 3 + 1.7 * (p - 1) ^ 2
-			return 0, math.sqrt(p), 0.55 + 0.45 * back
+			return 0, math.sqrt(p), 0.55 + 0.45 * ease.out_back(p)
 		elseif kind == "result" then
 			-- The number rises in as a wave, left to right.
 			local p = math.clamp((t - (g.index - 1) * 0.028) / 0.5, 0, 1)
@@ -1516,17 +1621,18 @@ local function display(draw: Draw, frame: Frame): Again
 		end
 	end
 
-	-- A glow in the dark.
+	-- A glow in the dark: the digits again, blurred, in the accent (or in
+	-- the error's colour).
 	if s.dark and digits > 0 then
 		draw:push_blur(v.size * 0.30)
-		glyphs(alpha(s.accent, 0.42))
+		glyphs(alpha(if v.error then s.danger else s.accent, 0.42))
 		draw:pop()
 	end
 
 	-- The digits are a window onto a gradient: text colour at the top,
-	-- leaning to the accent at the bottom (or to the hot colour, in error).
+	-- leaning to the accent at the bottom (or to the error's, in error).
 	local top = if v.error then alpha(s.fg, 0.92) else s.fg
-	local bottom = if v.error then alpha(s.hot_a, 0.95) else mix(s.fg, s.accent, if s.dark then 0.55 else 0.45)
+	local bottom = if v.error then s.danger else mix(s.fg, s.accent, if s.dark then 0.55 else 0.45)
 	local band = v.band
 	draw:push_mask("alpha")
 	glyphs(white)
@@ -1555,11 +1661,11 @@ local function display(draw: Draw, frame: Frame): Again
 end
 
 ---------------------------------------------------------------------------
--- 6. Options
+-- 7. Options
 ---------------------------------------------------------------------------
 
--- A palette's tile in Settings: its background, its four blobs, and a dot
--- of its hot gradient.
+-- A palette's tile in Settings: its background, its four blobs, a veil
+-- and a dot of its hot gradient.
 local function tile(draw: Draw, frame: Preview, choice: string)
 	local s = scheme_for(choice, frame.ctx)
 	local w, h = frame.width, frame.height
@@ -1578,6 +1684,8 @@ local function tile(draw: Draw, frame: Preview, choice: string)
 			colors = { alpha(c, math.min(s.blob_alpha * 1.4, 1)), alpha(c, 0) },
 		}))
 	end
+	-- (A tile is small: the veil needs to be twice as strong to show.)
+	veil_at(draw, w, h, VEILS[1], s.hot_a, math.min(s.veil_alpha * 2, 1), STILL)
 	draw:circle(w - 20, h - 18, 9, gmnb.linear({
 		from = { w - 34, h - 26 },
 		to = { w - 10, h - 8 },
@@ -1664,7 +1772,7 @@ local options: { Option } = {
 local theme: Theme = {
 	api = 1,
 	name = "Aurora",
-	description = "A drifting aurora behind glass keys, in seven palettes. GMNB's look up to 0.2.",
+	description = "A drifting aurora behind glass keys, in seven palettes. GMNB's look up to 0.2, grown up.",
 	author = "GMNB contributors",
 	license = "MIT",
 	fonts = { "fonts/Outfit-Variable.ttf" },
@@ -1672,6 +1780,9 @@ local theme: Theme = {
 	options = options,
 	style = style,
 	layers = {
+		-- Which events each layer is told of, and for how many seconds it
+		-- keeps them. (A sound for each of these would hang from the same
+		-- events: see the header.)
 		background = { draw = background, events = { press = PULSE_LIFE, result = PULSE_LIFE, error = PULSE_LIFE, option = PULSE_LIFE } },
 		keypad = { draw = keypad, place = place, pointer = true, events = { press = RIPPLE_LIFE, show = 1.5 } },
 		display = { draw = display },
