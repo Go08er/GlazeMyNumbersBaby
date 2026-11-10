@@ -871,7 +871,7 @@ impl Hub {
         });
         self.layers.sync_drawn();
         if dead {
-            glib::idle_add_local_once(|| {
+            self.layers.after_frame(|| {
                 if let Some(hub) = Hub::current() {
                     hub.unload_dead();
                 }
@@ -881,7 +881,7 @@ impl Hub {
                 "Theme “{name}”: its {} drawing failed and was switched off",
                 kind.name()
             );
-            glib::idle_add_local_once(move || {
+            self.layers.after_frame(move || {
                 if let Some(hub) = Hub::current() {
                     hub.tell(&message);
                 }
@@ -1116,19 +1116,77 @@ mod tests {
         );
     }
 
-    /// Theming costs nothing at rest: the hub and the backdrop install no
-    /// timeout, no idle and no tick callback (the keypad's and the
-    /// display's are the transition's, and run only while an effect of a
-    /// theme with that layer plays).
+    /// The function of `code` that holds its byte `at`: the nearest `fn`
+    /// before it.
+    fn function_at(code: &str, at: usize) -> &str {
+        let from = code[..at].rfind("fn ").map_or(0, |i| i + 3);
+        code[from..]
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            .unwrap_or("")
+    }
+
+    /// Theming costs nothing at rest: no timeout, no idle and no frame
+    /// callback is installed by the hub, the backdrop, the readout, the
+    /// replay or a preview's tile at all. The layers' runtime makes them
+    /// in two places only: `arm`, for a hook that asked for another
+    /// frame (never for one that returned nil: `gmnb_theme::sched`), and
+    /// `after_frame`, once, for a hook that failed. The keypad's one
+    /// timer is the 110 ms flash of a key typed on the keyboard.
     #[test]
     fn theming_installs_no_sources() {
-        for (name, source) in [
-            ("theme.rs", include_str!("theme.rs")),
-            ("widgets/backdrop.rs", include_str!("widgets/backdrop.rs")),
+        const CALLS: [&str; 4] = ["timeout_add", "idle_add", "add_tick_callback", "source_new"];
+        for (name, source, allowed) in [
+            ("theme.rs", include_str!("theme.rs"), &[][..]),
+            (
+                "widgets/backdrop.rs",
+                include_str!("widgets/backdrop.rs"),
+                &[],
+            ),
+            (
+                "widgets/display.rs",
+                include_str!("widgets/display.rs"),
+                &[],
+            ),
+            ("layers/replay.rs", include_str!("layers/replay.rs"), &[]),
+            ("layers/tile.rs", include_str!("layers/tile.rs"), &[]),
+            (
+                "layers/mod.rs",
+                include_str!("layers/mod.rs"),
+                &[
+                    ("timeout_add", "arm"),
+                    ("add_tick_callback", "arm"),
+                    ("idle_add", "after_frame"),
+                ],
+            ),
+            (
+                "widgets/keypad.rs",
+                include_str!("widgets/keypad.rs"),
+                &[("timeout_add", "flash")],
+            ),
         ] {
             let code = source.split("#[cfg(test)]").next().unwrap_or("");
-            for call in ["timeout_add", "idle_add", "add_tick_callback", "source_new"] {
-                assert!(!code.contains(call), "{name} calls {call}");
+            for call in CALLS {
+                // The calls themselves: a name followed by its arguments
+                // or a longer name (`timeout_add_local_once(`).
+                for (at, _) in code.match_indices(call) {
+                    let rest = &code[at + call.len()..];
+                    if !rest.starts_with('(') && !rest.starts_with('_') {
+                        continue;
+                    }
+                    let inside = function_at(code, at);
+                    assert!(
+                        allowed.contains(&(call, inside)),
+                        "{name} calls {call} in `{inside}`"
+                    );
+                }
+            }
+            for (call, inside) in allowed {
+                let found = code
+                    .match_indices(call)
+                    .filter(|(at, _)| function_at(code, *at) == *inside)
+                    .count();
+                assert_eq!(found, 1, "{name}: {call} in `{inside}`");
             }
         }
     }

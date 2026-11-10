@@ -26,7 +26,8 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use gmnb_theme::draw::DisplayList;
-use gmnb_theme::events::{Action, Event, EventKind, KeyKind, Page, Ring, Source, Via};
+pub use gmnb_theme::events::{Action, Source};
+use gmnb_theme::events::{Event, EventKind, KeyKind, Page, Ring, Via};
 use gmnb_theme::layer::{DisplayValue, Drawn, Frame, Keys, LayerKind, Placement};
 use gmnb_theme::sched::{Change, Clock, Conditions, Fire, SETTLE, Wait};
 use gmnb_theme::{OptionValue, TextMeasure};
@@ -47,6 +48,8 @@ pub struct Picture {
     pub list: Rc<DisplayList>,
     /// Keypad: how `place` moves each cell (empty: none is moved).
     pub places: Rc<Vec<Option<Placement>>>,
+    /// What `draw` returned when it drew this: `None` for nil.
+    pub again: Option<f64>,
 }
 
 /// What the layers have cost, for the gates (`GMNB_THEME_STATS`).
@@ -160,6 +163,30 @@ pub struct Layers {
     listeners: RefCell<Vec<Listener>>,
     stats: Cell<Stats>,
     next_id: Cell<u64>,
+    /// When the pointer last pressed in the window, and when Space or
+    /// Enter last did: how a control that says it was used was used.
+    pointer_pressed: Cell<f64>,
+    key_activated: Cell<f64>,
+}
+
+/// The page a widget is on: the name its page has in the window's stack
+/// (a dialog's widgets are on none: Settings).
+pub fn page_of(widget: &gtk::Widget) -> Page {
+    let mut at = Some(widget.clone());
+    while let Some(w) = at {
+        let parent = w.parent();
+        if let Some(stack) = parent.as_ref().and_then(|p| p.downcast_ref::<gtk::Stack>()) {
+            match stack.page(&w).name().as_deref() {
+                Some("calculator") => return Page::Calculator,
+                Some("converter") => return Page::Converter,
+                Some("date") => return Page::Date,
+                Some("graphing") => return Page::Graphing,
+                _ => {}
+            }
+        }
+        at = parent;
+    }
+    Page::Settings
 }
 
 impl Layers {
@@ -177,6 +204,8 @@ impl Layers {
             listeners: RefCell::default(),
             stats: Cell::default(),
             next_id: Cell::new(1),
+            pointer_pressed: Cell::new(f64::NEG_INFINITY),
+            key_activated: Cell::new(f64::NEG_INFINITY),
         })
     }
 
@@ -319,6 +348,107 @@ impl Layers {
         }
     }
 
+    /// The pointer pressed somewhere in the window.
+    pub fn pointer_pressed(&self) {
+        self.pointer_pressed.set(now());
+    }
+
+    /// Space or Enter was pressed somewhere in the window: what activates
+    /// the control with the keyboard's focus.
+    pub fn key_activated(&self) {
+        self.key_activated.set(now());
+    }
+
+    /// How a control that has just said it was used was used: by the
+    /// pointer or the keyboard if either did something within the last
+    /// second, else through the accessibility interface.
+    fn via(&self) -> Via {
+        let now = now();
+        if now - self.pointer_pressed.get() < 1.0 {
+            Via::Pointer
+        } else if now - self.key_activated.get() < 1.0 {
+            Via::Keyboard
+        } else {
+            Via::Assistive
+        }
+    }
+
+    /// A keypad's key was used. `at`: the point of the click that did it,
+    /// in the keypad's coordinates; `None` for a key typed on the
+    /// keyboard, which presses the matching key on screen.
+    pub fn key_pressed(&self, pad: &Keypad, id: u32, at: Option<(f32, f32)>) {
+        let Some(button) = pad.button(id) else {
+            return;
+        };
+        let (kind, action) = pad.key_meaning(id);
+        let button = button.upcast::<gtk::Widget>();
+        let mut happened = Happened::new(EventKind::Press, page_of(&button), Some(&button));
+        happened.at = at
+            .and_then(|(x, y)| pad.compute_point(&button, &graphene::Point::new(x, y)))
+            .map(|p| (p.x(), p.y()));
+        happened.source = Some(Source::Key);
+        happened.via = Some(if at.is_some() {
+            self.via()
+        } else {
+            Via::Keyboard
+        });
+        happened.action = action;
+        happened.key = Some((Some(id), kind));
+        self.emit(&happened);
+    }
+
+    /// A control that isn't a keypad's own key was used: `source` says
+    /// what kind ([`Source::Key`]: a key the calculator doesn't number,
+    /// the graphing keypad's).
+    pub fn pressed(&self, widget: &impl IsA<gtk::Widget>, source: Source, action: Option<Action>) {
+        let widget = widget.upcast_ref::<gtk::Widget>();
+        let mut happened = Happened::new(EventKind::Press, page_of(widget), Some(widget));
+        happened.source = Some(source);
+        happened.via = Some(self.via());
+        happened.action = action;
+        if source == Source::Key {
+            happened.key = Some((None, KeyKind::Other));
+        }
+        self.emit(&happened);
+    }
+
+    /// A calculation produced a value in `readout`, or an error.
+    pub fn outcome(&self, readout: &impl IsA<gtk::Widget>, error: bool) {
+        let readout = readout.upcast_ref::<gtk::Widget>();
+        let kind = if error {
+            EventKind::Error
+        } else {
+            EventKind::Result
+        };
+        self.emit(&Happened::new(kind, page_of(readout), Some(readout)));
+    }
+
+    /// A keypad came into view.
+    pub fn shown(&self, pad: &Keypad) {
+        if !self.draws_any() {
+            return;
+        }
+        let pad = pad.upcast_ref::<gtk::Widget>();
+        self.emit(&Happened::new(EventKind::Show, page_of(pad), Some(pad)));
+    }
+
+    /// The user changed page or calculator mode: `page` is the widget of
+    /// the page now shown.
+    pub fn mode_changed(&self, page: &gtk::Widget) {
+        self.emit(&Happened::new(EventKind::Mode, page_of(page), Some(page)));
+    }
+
+    fn draws_any(&self) -> bool {
+        self.drawn.get().contains(&true) || !self.listeners.borrow().is_empty()
+    }
+
+    /// Runs `f` once the frame being painted is done: for what a hook's
+    /// failure asks for (telling the user, unloading the theme), which
+    /// must not happen inside a `snapshot`.
+    pub fn after_frame(&self, f: impl FnOnce() + 'static) {
+        glib::idle_add_local_once(f);
+    }
+
     /// Calls `f` for every event, in the window's coordinates, after the
     /// layers have been told (under reduced motion too, when layers are
     /// told nothing).
@@ -346,6 +476,9 @@ impl Layers {
             .flatten();
         let motion = self.motion();
         let at = now();
+        if !self.draws_any() {
+            return;
+        }
         if motion && self.drawn.get().contains(&true) {
             for instance in self.live() {
                 if !self.draws(instance.kind) {
@@ -685,6 +818,7 @@ impl Instance {
                 st.picture = Some(Picture {
                     list: Rc::new(list),
                     places: Rc::new(places),
+                    again,
                 });
                 let wait = st.clock.end(now, again, c);
                 self.arm(&mut st, wait);

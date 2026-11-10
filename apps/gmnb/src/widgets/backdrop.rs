@@ -184,16 +184,35 @@ impl Backdrop {
         self.add_controller(motion);
 
         // A key pressed anywhere in the window (never claimed here).
+        // Space and Enter are what use the control with the focus: a
+        // control that then says it was used was used by the keyboard.
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         {
             let all = all.clone();
-            keys.connect_key_pressed(move |_, _, _, _| {
+            keys.connect_key_pressed(move |_, key, _, _| {
                 all.poke();
+                use gtk::gdk::Key;
+                if matches!(
+                    key,
+                    Key::space | Key::Return | Key::KP_Enter | Key::ISO_Enter
+                ) {
+                    all.key_activated();
+                }
                 glib::Propagation::Proceed
             });
         }
         self.add_controller(keys);
+
+        // And a press of the pointer: by the pointer.
+        let click = gtk::GestureClick::new();
+        click.set_button(0);
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let all = all.clone();
+            click.connect_pressed(move |_, _, _, _| all.pointer_pressed());
+        }
+        self.add_controller(click);
 
         // The window being the one in use.
         let weak = Rc::downgrade(&all);

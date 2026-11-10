@@ -13,7 +13,7 @@ use gtk::{gdk, glib};
 use super::{Ctx, Page};
 use crate::widgets::bitflip::BitFlip;
 use crate::widgets::calc_panel::{CalcPanel, MemOp};
-use crate::widgets::display::{Change, Display};
+use crate::widgets::display::{Change, Display, Mode};
 use crate::widgets::icon::{PathIcon, icon_toggle, paths};
 use crate::widgets::keypad::Keypad;
 use crate::widgets::width_bin::WidthBin;
@@ -399,7 +399,8 @@ impl CalculatorPage {
         self.history_btn
             .set_visible(!on && !self.wide.get() && !self.programmer.get());
         self.side.set_visible(!on && self.wide.get());
-        self.display.set_max_size(if on { 44.0 } else { 64.0 });
+        self.display
+            .set_mode(if on { Mode::Compact } else { Mode::Standard });
         if let Some(pad) = self.keypads.borrow().get(&CalcMode::Standard) {
             pad.set_compact(on);
         }
@@ -795,19 +796,18 @@ impl CalculatorPage {
     // ------------------------------------------------------------- input
 
     fn press_from(self: &Rc<Self>, widget: &impl IsA<gtk::Widget>, b: B) {
-        let (w, h) = (widget.width() as f32, widget.height() as f32);
-        let s = self.ctx.hub.scheme();
-        self.ctx.pulse_at(widget, w / 2.0, h / 2.0, s.accent, 0.5);
+        use crate::layers::{Action as Does, Source};
+        let memory = (b != B::FToE).then_some(Does::Memory);
+        self.ctx
+            .hub
+            .layers()
+            .pressed(widget, Source::Button, memory);
         self.vm.borrow_mut().press(b);
         self.sync(None);
     }
 
     fn on_key(self: &Rc<Self>, pad: &Keypad, id: u32, x: f32, y: f32) {
-        let s = self.ctx.hub.scheme();
-        let hot = id == B::Equals.id();
-        let color = if hot { s.hot_a } else { s.accent };
-        self.ctx
-            .pulse_at(pad, x, y, color, if hot { 1.4 } else { 0.55 });
+        self.ctx.hub.layers().key_pressed(pad, id, Some((x, y)));
         match id {
             KEY_SECOND => {
                 self.second.set(!self.second.get());
@@ -1108,18 +1108,6 @@ impl CalculatorPage {
             );
         }
 
-        if matches!(change, Change::Result | Change::Error) {
-            let s = self.ctx.hub.scheme();
-            let (w, h) = (self.display.width() as f32, self.display.height() as f32);
-            let color = if change == Change::Error {
-                s.hot_a
-            } else {
-                s.hot_b
-            };
-            self.ctx
-                .pulse_at(&self.display, w * 0.8, h * 0.65, color, 1.1);
-        }
-
         self.focus_after_emptied(history_emptied, memory_emptied);
     }
 
@@ -1171,16 +1159,9 @@ impl CalculatorPage {
                 .unwrap_or(other.id()),
         };
         if let Some(pad) = self.keypads.borrow().get(&mode).cloned()
-            && let Some((x, y)) = pad.flash(id)
+            && pad.flash(id).is_some()
         {
-            let s = self.ctx.hub.scheme();
-            self.ctx.pulse_at(
-                &pad,
-                x,
-                y,
-                if b == B::Equals { s.hot_a } else { s.accent },
-                0.6,
-            );
+            self.ctx.hub.layers().key_pressed(&pad, id, None);
         }
     }
 }
@@ -1265,10 +1246,10 @@ impl CalculatorPage {
             CalcMode::Scientific => "scientific",
             CalcMode::Programmer => "programmer",
         });
-        self.display.set_max_size(match calc_mode {
-            CalcMode::Standard => 64.0,
-            CalcMode::Scientific => 54.0,
-            CalcMode::Programmer => 46.0,
+        self.display.set_mode(match calc_mode {
+            CalcMode::Standard => Mode::Standard,
+            CalcMode::Scientific => Mode::Scientific,
+            CalcMode::Programmer => Mode::Programmer,
         });
         if let Some(pad) = self.keypads.borrow().get(&calc_mode) {
             pad.cascade();

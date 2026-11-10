@@ -328,9 +328,8 @@ impl DatePage {
                 }
                 refresh(Change::Result);
                 button.popdown();
-                let s = ctx.hub.scheme();
-                let (w, h) = (button.width() as f32, button.height() as f32);
-                ctx.pulse_at(&button, w * 0.5, h * 0.5, s.hot_a, 0.9);
+                let picked = crate::layers::Source::Date;
+                ctx.hub.layers().pressed(&button, picked, None);
             });
         }
 

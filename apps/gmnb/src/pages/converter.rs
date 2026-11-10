@@ -281,8 +281,7 @@ impl ConverterPage {
         let weak = Rc::downgrade(&page);
         keypad.connect_pressed(move |id, x, y| {
             if let Some(p) = weak.upgrade() {
-                let s = p.ctx.hub.scheme();
-                p.ctx.pulse_at(&p.keypad, x, y, s.accent, 0.55);
+                p.ctx.hub.layers().key_pressed(&p.keypad, id, Some((x, y)));
                 p.press(id);
             }
         });
@@ -364,14 +363,8 @@ impl ConverterPage {
             swap.connect_clicked(move |b| {
                 if let Some(p) = weak.upgrade() {
                     p.vm.borrow_mut().swap_units();
-                    let s = p.ctx.hub.scheme();
-                    p.ctx.pulse_at(
-                        b,
-                        b.width() as f32 / 2.0,
-                        b.height() as f32 / 2.0,
-                        s.hot_a,
-                        1.0,
-                    );
+                    let swap = crate::layers::Source::Swap;
+                    p.ctx.hub.layers().pressed(b, swap, None);
                     p.sync(Change::Result, Change::Result);
                 }
             });
@@ -634,9 +627,8 @@ impl Page for ConverterHandle {
         {
             return true;
         }
-        if let Some((x, y)) = p.keypad.flash(id) {
-            let s = p.ctx.hub.scheme();
-            p.ctx.pulse_at(&p.keypad, x, y, s.accent, 0.5);
+        if p.keypad.flash(id).is_some() {
+            p.ctx.hub.layers().key_pressed(&p.keypad, id, None);
         }
         p.press(id);
         true

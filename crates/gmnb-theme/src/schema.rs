@@ -240,6 +240,19 @@ fn px(n: f32) -> Value {
     Value::Number(f64::from(n))
 }
 
+/// One number for each of the calculator's modes a readout is sized for.
+fn modes(standard: f32, scientific: f32, programmer: f32, compact: f32) -> Value {
+    Value::Record(
+        [
+            ("standard", px(standard)),
+            ("scientific", px(scientific)),
+            ("programmer", px(programmer)),
+            ("compact", px(compact)),
+        ]
+        .into(),
+    )
+}
+
 fn spacing(top: f32, right: f32, bottom: f32, left: f32) -> Value {
     Value::Spacing(Spacing::trbl(top, right, bottom, left))
 }
@@ -506,23 +519,62 @@ pub static ROWS: &[Row] = &[
     row("display.radius", Kind::Radius, |s| {
         Value::Radius(Radius::all(s.t.shape.card_radius))
     }),
-    todo("display.padding_x", SIZE),
-    todo("display.heights", MODES_HEIGHT),
-    todo("display.sizes", MODES_SIZE),
-    todo("display.min_size", FONT_SIZE),
-    todo("display.value.font", Kind::Font),
-    todo("display.value.color", Kind::Paint),
-    todo("display.value.error_color", Kind::Paint),
-    todo("display.value.error_scale", Kind::Num(0.1, 4.0)),
-    todo(
+    row("display.padding_x", SIZE, |_| {
+        px(metrics::calc::DISPLAY_PAD_X)
+    }),
+    row("display.heights", MODES_HEIGHT, |_| {
+        use metrics::calc::*;
+        modes(
+            DISPLAY_H_STANDARD,
+            DISPLAY_H_SCIENTIFIC,
+            DISPLAY_H_PROGRAMMER,
+            DISPLAY_H_COMPACT,
+        )
+    }),
+    row("display.sizes", MODES_SIZE, |_| {
+        let (full, compact) = (
+            metrics::text::DISPLAY_VALUE.size,
+            metrics::text::DISPLAY_VALUE_COMPACT.size,
+        );
+        modes(full, full, full, compact)
+    }),
+    row("display.min_size", FONT_SIZE, |_| {
+        px(metrics::text::DISPLAY_MIN_SIZE)
+    }),
+    row("display.value.font", Kind::Font, |s| {
+        let value = metrics::text::DISPLAY_VALUE;
+        Value::Font(
+            Font::new(&s.t.fonts.display, value.size, value.weight).with_features(&["tnum"]),
+        )
+    }),
+    row("display.value.color", Kind::Paint, |s| {
+        Value::Paint(Paint::Color(s.t.colors.fg))
+    }),
+    row("display.value.error_color", Kind::Paint, |s| {
+        Value::Paint(Paint::Color(s.t.colors.fg))
+    }),
+    row("display.value.error_scale", Kind::Num(0.1, 4.0), |_| {
+        px(1.0)
+    }),
+    row(
         "display.value.glow",
         Kind::Opt(&Kind::Record(&[
             ("color", Kind::Color),
             ("blur", Kind::Num(0.0, 4.0)),
         ])),
+        |_| Value::Absent,
     ),
-    todo("display.expression", Kind::Text),
-    todo("display.expression_min_size", FONT_SIZE),
+    row("display.expression", Kind::Text, |s| {
+        Value::Text(Text {
+            color: s.t.colors.fg_dim,
+            font: s.t.text.small.clone(),
+            shadow: Vec::new(),
+            margin: Spacing::default(),
+        })
+    }),
+    row("display.expression_min_size", FONT_SIZE, |_| {
+        px(metrics::text::EXPRESSION_MIN_SIZE)
+    }),
     row("display.halo", Kind::Shadows, |s| Value::Shadows(s.halo())),
     // -- Keys. The shared values first: the classes are built from them.
     row("keys.gap", SIZE, |_| px(metrics::calc::KEY_GAP)),
