@@ -73,6 +73,9 @@ fn every_style() -> Vec<(String, Style)> {
             out.push((format!("mono dark={dark} {opacity}"), style));
         }
     }
+    // Swirls in each set of bands under each glass (one look in light and
+    // in dark: `swirls_is_dark_in_both_modes`).
+    out.extend(swirls_styles());
     out
 }
 
@@ -976,7 +979,7 @@ fn page_pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fi
 #[test]
 fn every_text_reads_on_what_is_under_it() {
     let bad = unreadable(styles_where(|name| {
-        !name.starts_with("aurora") && !name.starts_with("glazed")
+        !name.starts_with("aurora") && !name.starts_with("glazed") && !name.starts_with("swirls")
     }));
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
