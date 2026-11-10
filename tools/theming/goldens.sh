@@ -45,6 +45,8 @@ if [ "$WHICH" = base ]; then
   #   network (the currency's rates and time are then live data).
   # - ONLY=REGEX captures and compares only the cases it matches
   #   (ONLY='date|currency'); the other pictures in OUT are kept.
+  # - least.map's pairs (the least window) are compared after base.map's
+  #   and reported; they are not in the exit status.
   export GSK_RENDERER=${GSK_RENDERER:-cairo}
   HERE=$(cd "$(dirname "$0")" && pwd)
   ONLY=${ONLY:-}
@@ -95,21 +97,29 @@ if [ "$WHICH" = base ]; then
   echo "$(grep -c '^screenshot:' "$OUT/log.txt") pictures, $(grep -c FAIL "$OUT/log.txt") failures"
   CMP=${COMPARE:-$HERE/target/release/compare}
   [ -x "$CMP" ] || cargo build --quiet --release --manifest-path "$HERE/Cargo.toml" || exit 2
-  map=$HERE/base.map
-  if [ -n "$ONLY" ]; then
-    map=$OUT/only.map
-    grep -v '^\s*#' "$HERE/base.map" | while read -r dn rest; do
-      [[ ${dn#dgmnb-} =~ $ONLY ]] && echo "$dn $rest"
-    done >"$map"
-  fi
-  "$CMP" --batch "$OUT" "$OUT" --map "$map" --report-dir "$OUT/report"
+  compare() { # MAP: the table, then every failing run of text
+    local map=$1
+    if [ -n "$ONLY" ]; then
+      map=$OUT/only-$(basename "$1")
+      grep -v '^\s*#' "$1" | while read -r dn rest; do
+        [[ ${dn#dgmnb-} =~ $ONLY ]] && echo "$dn $rest"
+      done >"$map"
+      [ -s "$map" ] || return 0
+    fi
+    "$CMP" --batch "$OUT" "$OUT" --map "$map" --report-dir "$OUT/report"
+    local status=$?
+    echo "== every failing run of text"
+    grep -v '^\s*#' "$map" | while read -r dn gn rest; do
+      [ -n "$dn" ] || continue
+      ex=(); for e in $rest; do ex+=(--exclude "${e#exclude=}"); done
+      "$CMP" "$OUT/$dn.png" "$OUT/$gn.png" --text "$OUT/$dn.json" "${ex[@]}" 2>&1 | grep '^  run ' | sed "s/^/$dn:/"
+    done
+    return $status
+  }
+  compare "$HERE/base.map"
   status=$?
-  echo "== every failing run of text"
-  grep -v '^\s*#' "$map" | while read -r dn gn rest; do
-    [ -n "$dn" ] || continue
-    ex=(); for e in $rest; do ex+=(--exclude "${e#exclude=}"); done
-    "$CMP" "$OUT/$dn.png" "$OUT/$gn.png" --text "$OUT/$dn.json" "${ex[@]}" 2>&1 | grep '^  run ' | sed "s/^/$dn:/"
-  done
+  echo "== beyond the contract's set (least.map; not in the exit status)"
+  compare "$HERE/least.map"
   exit $status
 fi
 if [ "$WHICH" = pages ]; then

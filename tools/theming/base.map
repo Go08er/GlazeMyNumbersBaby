@@ -8,8 +8,8 @@
 # said: the seven pages; Standard after '1234*56=789/3=' (-keys); the
 # sidebar open (nav); Programmer with the bit grid (bits); the compact
 # window after '123'; Date with a result and Date adding days; Graphing
-# with three equations (eqs); Standard at 360x600 (small); Scientific and
-# Programmer at the least window, 300x400 (-least).
+# with three equations (eqs); Standard at 360x600 (small). (Scientific and
+# Programmer at the least window are least.map's.)
 #
 # Captured offline (goldens.sh: unshare -rn), so the converter shows the
 # rates it is shipped with, and their time, in both apps: no live data.
@@ -33,10 +33,6 @@ dgmnb-bits-d0 gmnb-bits-d0
 dgmnb-bits-d1 gmnb-bits-d1
 dgmnb-compact-d0 gmnb-compact-d0
 dgmnb-compact-d1 gmnb-compact-d1
-dgmnb-scientific-least-d0 gmnb-scientific-least-d0
-dgmnb-scientific-least-d1 gmnb-scientific-least-d1
-dgmnb-programmer-least-d0 gmnb-programmer-least-d0
-dgmnb-programmer-least-d1 gmnb-programmer-least-d1
 dgmnb-date-d0 gmnb-date-d0
 dgmnb-date-d1 gmnb-date-d1
 dgmnb-date-result-d0 gmnb-date-result-d0
