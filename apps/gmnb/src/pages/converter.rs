@@ -1,42 +1,51 @@
 //! Unit / currency converter (upstream UnitConverter.xaml).
+//!
+//! Laid out as DGMNB's page (`apps/dgmnb/src/conv.rs`): the values from
+//! the top left, each part at the height and the distance
+//! `appcore::metrics::converter` gives it; the keypad on the right in a
+//! wide window, below in a narrow one.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use adw::prelude::*;
+use appcore::metrics::{controls as ctl, converter as mc, text as txt};
+use gmnb_theme::Style;
+use gmnb_theme::types::{Font, Spacing, Value};
 use gtk::{gio, glib};
 use unitconv::{ConverterMode, NetworkAccessBehavior, UnitConverterViewModel};
 
 use super::{Ctx, Page};
-use crate::widgets::display::{Change, Display};
+use crate::widgets::fit::{FitLabel, Prefix, SizeBin, pango_font};
 use crate::widgets::icon::{PathIcon, paths};
 use crate::widgets::keypad::Keypad;
-use crate::widgets::width_bin::WidthBin;
 use appcore::KeyPress;
 use appcore::input;
 use appcore::keys::{self, conv};
 use appcore::modes::ViewMode;
 
-const WIDE_PX: i32 = 700;
-
 struct Field {
+    /// The value's 58 px strip (`converter.field`; `checked` while it is
+    /// the one typed into), with the marker under its value.
     frame: gtk::Box,
-    display: Display,
+    /// The value, after the currency's symbol (its prefix) when there
+    /// is one.
+    value: FitLabel,
     dropdown: gtk::DropDown,
-    symbol: gtk::Label,
 }
 
 pub struct ConverterPage {
     ctx: Rc<Ctx>,
     vm: RefCell<UnitConverterViewModel>,
-    root: WidthBin,
+    root: SizeBin,
     layout: gtk::Box,
-    values: gtk::Box,
     f1: Field,
     f2: Field,
     supp: gtk::FlowBox,
     supp_header: gtk::Label,
+    /// The chips' sparkle (`converter.whimsy_icon`).
+    whimsy_icon: Cell<bool>,
     currency_box: gtk::Box,
     ratio: gtk::Label,
     timestamp: gtk::Label,
@@ -44,6 +53,8 @@ pub struct ConverterPage {
     refresh: gtk::Button,
     spinner: adw::Spinner,
     keypad: Keypad,
+    /// The style the page was last laid out for.
+    style: RefCell<Option<Rc<Style>>>,
     syncing: Cell<bool>,
     /// What the second value said when it was last told ([`Self::sync`]).
     told: RefCell<Option<String>>,
@@ -60,17 +71,19 @@ pub struct ConverterPage {
 fn field(label: &str) -> Field {
     // A control too: picked (pointer or assistive technology), it is the
     // field typed into.
-    let display = Display::button(44.0);
-    display.set_show_expression(false);
-    display.set_align_end(false);
-    display.set_weight(300);
-    let symbol = gtk::Label::new(None);
-    symbol.add_css_class("wc-currency-symbol");
-    symbol.set_valign(gtk::Align::Center);
-    symbol.set_visible(false);
-    let top = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    top.append(&symbol);
-    top.append(&display);
+    let value = FitLabel::button();
+    value.add_css_class("wc-conv-value");
+    value.set_hexpand(true);
+    // The marker: a bar at the bottom left, drawn as a sized background
+    // of the strip's inner box while the field is the one typed into.
+    let marker = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    marker.add_css_class("wc-conv-marker");
+    let inner = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    inner.set_margin_start(mc::FIELD_PAD_X as i32);
+    inner.set_margin_end(mc::FIELD_PAD_X as i32);
+    inner.set_hexpand(true);
+    inner.append(&value);
+    marker.append(&inner);
     let strings = gtk::StringList::new(&[]);
     let dropdown = gtk::DropDown::builder()
         .model(&strings)
@@ -84,29 +97,82 @@ fn field(label: &str) -> Field {
         .css_classes(["wc-unit-dropdown"])
         .build();
     dropdown.set_search_match_mode(gtk::StringFilterMatchMode::Substring);
+    dropdown.set_size_request(-1, mc::UNIT_H as i32);
     // GTK names the drop-down after the unit it shows (a labelled-by
     // relation, which outranks a label), as upstream's reads; which field
     // it is goes in its description.
     dropdown.update_property(&[gtk::accessible::Property::Description(label)]);
-    let frame = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    unit_button(&dropdown);
+    let frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
     frame.add_css_class("wc-conv-field");
-    frame.append(&top);
-    frame.append(&dropdown);
+    frame.set_size_request(-1, mc::FIELD_H as i32);
+    marker.set_vexpand(true);
+    frame.append(&marker);
     Field {
         frame,
-        display,
+        value,
         dropdown,
-        symbol,
+    }
+}
+
+/// The drop-down's button as DGMNB's unit button: "Centimeters ▾",
+/// centred (the toolkit's own list, with its marks, stays the popup's).
+/// The arrow is drawn, not read: the unit alone names it.
+fn unit_button(dropdown: &gtk::DropDown) {
+    if let Some(list) = dropdown.factory() {
+        dropdown.set_list_factory(Some(&list));
+    }
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let name = gtk::Label::new(None);
+        let arrow = gtk::Label::builder()
+            .label(" ▾")
+            .accessible_role(gtk::AccessibleRole::Presentation)
+            .build();
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        row.set_halign(gtk::Align::Center);
+        row.set_hexpand(true);
+        row.append(&name);
+        row.append(&arrow);
+        item.set_child(Some(&row));
+    });
+    factory.connect_bind(|_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let name = item
+            .child()
+            .and_then(|row| row.first_child())
+            .and_downcast::<gtk::Label>();
+        if let (Some(name), Some(unit)) = (name, item.item().and_downcast::<gtk::StringObject>()) {
+            name.set_text(&unit.string());
+        }
+    });
+    dropdown.set_factory(Some(&factory));
+    // And not the toolkit's arrow beside it.
+    let mut todo = vec![dropdown.clone().upcast::<gtk::Widget>()];
+    while let Some(w) = todo.pop() {
+        if w.css_name() == "arrow" && w.ancestor(gtk::Popover::static_type()).is_none() {
+            w.set_visible(false);
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            todo.push(c);
+        }
     }
 }
 
 /// Names each unit in `dropdown`'s list as upstream's does, by its spoken
 /// name (`spoken`): GTK's own list items have none. And its search field.
 fn name_units(dropdown: &gtk::DropDown, spoken: &Rc<RefCell<HashMap<String, String>>>) {
-    // GTK's own factory, which shows the unit and marks the chosen one;
-    // this runs after it binds each row.
+    // GTK's own factory, which shows the unit and marks the chosen one
+    // (the list's: `unit_button`); this runs after it binds each row.
     if let Some(factory) = dropdown
-        .factory()
+        .list_factory()
         .and_downcast::<gtk::SignalListItemFactory>()
     {
         let spoken = Rc::downgrade(spoken);
@@ -133,6 +199,7 @@ fn name_units(dropdown: &gtk::DropDown, spoken: &Rc<RefCell<HashMap<String, Stri
         todo.push(c);
     }
     let (mut search, mut popovers) = (None, Vec::new());
+    // DGMNB's list has no arrow pointing at its button.
     while let Some(w) = todo.pop() {
         if let Some(entry) = w.downcast_ref::<gtk::SearchEntry>() {
             w.update_property(&[gtk::accessible::Property::Label("Search units")]);
@@ -141,6 +208,7 @@ fn name_units(dropdown: &gtk::DropDown, spoken: &Rc<RefCell<HashMap<String, Stri
             search = Some(crate::undo::attach(entry));
         }
         if let Some(popover) = w.downcast_ref::<gtk::Popover>() {
+            popover.set_has_arrow(false);
             popovers.push(popover.clone());
         }
         let mut child = w.first_child();
@@ -171,86 +239,113 @@ impl ConverterPage {
 
         let f1 = field("Input unit");
         let f2 = field("Output unit");
+        let swap_icon = PathIcon::new(paths::SWAP, ctl::ICON_BUTTON_ICON as i32);
         let swap = gtk::Button::builder()
-            .child(&PathIcon::new(paths::SWAP, 18))
+            .child(&swap_icon)
             .tooltip_text("Swap units")
             .css_classes(["wc-swap"])
             .halign(gtk::Align::Start)
             .build();
+        crate::a11y::name_button(&swap, "Swap units");
+        let unit_gap = (mc::UNIT_STEP - mc::UNIT_H) as i32;
+        f1.frame
+            .set_margin_bottom((mc::FIELD_STEP - mc::FIELD_H) as i32);
+        f2.frame
+            .set_margin_bottom((mc::FIELD_STEP - mc::FIELD_H) as i32);
+        f1.dropdown.set_margin_bottom(unit_gap);
+        f2.dropdown.set_margin_bottom(unit_gap);
+        swap.set_margin_top(mc::SWAP_TOP as i32);
+        swap.set_margin_bottom((mc::SWAP_STEP - mc::SWAP_TOP - ctl::ICON_BUTTON) as i32);
 
         let supp_header = gtk::Label::new(Some("About equal to"));
-        supp_header.add_css_class("wc-section");
+        supp_header.add_css_class("wc-conv-caption");
         supp_header.set_xalign(0.0);
+        supp_header.set_size_request(-1, mc::CAPTION_H as i32);
+        supp_header.set_margin_bottom((mc::CAPTION_STEP - mc::CAPTION_H) as i32);
         let supp = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
-            .max_children_per_line(4)
-            .row_spacing(6)
-            .column_spacing(6)
+            .max_children_per_line(64)
+            .row_spacing((mc::CHIP_ROW_STEP - mc::CHIP_H) as u32)
+            .column_spacing(mc::CHIP_GAP as u32)
+            .halign(gtk::Align::Start)
             .css_classes(["wc-supp"])
             .build();
 
-        let ratio = gtk::Label::new(None);
-        ratio.add_css_class("wc-ratio");
-        ratio.set_xalign(0.0);
-        let timestamp = gtk::Label::new(None);
-        timestamp.add_css_class("wc-timestamp");
-        timestamp.set_xalign(0.0);
-        let status = gtk::Label::new(None);
-        status.add_css_class("wc-timestamp");
-        status.set_xalign(0.0);
-        status.set_wrap(true);
+        let line = |class: &str, height: f32| {
+            let l = gtk::Label::new(None);
+            l.add_css_class(class);
+            l.set_xalign(0.0);
+            l.set_size_request(-1, height as i32);
+            l
+        };
+        let ratio = line("wc-ratio", mc::RATIO_H);
+        let timestamp = line("wc-timestamp", mc::TIMESTAMP_H);
+        let status = line("wc-status", mc::STATUS_H);
+        status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        status.set_margin_bottom((mc::STATUS_STEP - mc::STATUS_H) as i32);
         let refresh = gtk::Button::builder()
             .label("Update rates")
-            .css_classes(["flat", "wc-link"])
+            .css_classes(["wc-link"])
             .halign(gtk::Align::Start)
             .build();
+        refresh.set_size_request(mc::REFRESH_W as i32, mc::TIMESTAMP_H as i32);
+        refresh.set_margin_start(mc::REFRESH_GAP as i32);
         let spinner = adw::Spinner::new();
         spinner.set_visible(false);
-        let ts_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        spinner.set_margin_start(mc::UPDATING_GAP as i32);
+        let ts_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         ts_row.append(&timestamp);
         ts_row.append(&refresh);
         ts_row.append(&spinner);
-        let currency_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        ts_row.set_margin_bottom((mc::TIMESTAMP_STEP - mc::TIMESTAMP_H) as i32);
+        let currency_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         currency_box.append(&ratio);
         currency_box.append(&ts_row);
         currency_box.append(&status);
 
-        let values = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        values.add_css_class("wc-plain");
-        values.set_vexpand(true);
-        values.set_valign(gtk::Align::Start);
-        values.append(&f1.frame);
-        values.append(&swap);
-        values.append(&f2.frame);
-        values.append(&currency_box);
-        values.append(&supp_header);
-        values.append(&supp);
+        let section = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        section.set_margin_top(mc::SECTION_GAP as i32);
+        section.set_margin_bottom(mc::BOTTOM_PAD as i32);
+        section.append(&currency_box);
+        section.append(&supp_header);
+        section.append(&supp);
+
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        column.add_css_class("wc-plain");
+        column.set_valign(gtk::Align::Start);
+        column.append(&f1.frame);
+        column.append(&f1.dropdown);
+        column.append(&swap);
+        column.append(&f2.frame);
+        column.append(&f2.dropdown);
+        column.append(&section);
+        let values = gtk::ScrolledWindow::builder()
+            .child(&column)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .hexpand(true)
+            .build();
 
         let keypad = Keypad::new();
         for (key, r, c, rs, cs) in keys::converter() {
             keypad.add(key, r, c, rs, cs);
         }
-        keypad.set_vexpand(true);
-        keypad.set_size_request(-1, 280);
 
-        let layout = gtk::Box::new(gtk::Orientation::Vertical, 10);
-        layout.set_margin_start(12);
-        layout.set_margin_end(12);
-        layout.set_margin_bottom(10);
+        let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
         layout.append(&values);
         layout.append(&keypad);
-        let root = WidthBin::new(&layout);
+        let root = SizeBin::new(&layout);
 
         let page = Rc::new(ConverterPage {
             ctx: ctx.clone(),
             vm: RefCell::new(vm),
             root: root.clone(),
             layout,
-            values,
             f1,
             f2,
             supp,
             supp_header,
+            whimsy_icon: Cell::new(false),
             currency_box,
             ratio,
             timestamp,
@@ -258,31 +353,47 @@ impl ConverterPage {
             refresh: refresh.clone(),
             spinner,
             keypad: keypad.clone(),
+            style: RefCell::new(None),
             syncing: Cell::new(false),
             told: RefCell::new(None),
             unit_ids: RefCell::default(),
             spoken: Rc::default(),
-            wide: Cell::new(false),
+            wide: Cell::new(true),
             showing: Cell::new(false),
         });
 
         {
+            // The keypad's own effects (TRANSITION: the layers' business).
             let weak = Rc::downgrade(&page);
             ctx.hub.subscribe(move |s| {
                 if let Some(p) = weak.upgrade() {
-                    p.f1.display.set_scheme(*s);
-                    p.f2.display.set_scheme(*s);
                     p.keypad.set_scheme(*s);
                 }
             });
             ctx.hub
                 .subscribe_style(&page.keypad, |pad, style| pad.set_style(style));
+            let weak = Rc::downgrade(&page);
+            let swap_icon = swap_icon.clone();
+            ctx.hub.subscribe_style(&page.root, move |_, style| {
+                if let Some(p) = weak.upgrade() {
+                    if let Some(icon) = style.control("converter.swap").map(|c| c.icon) {
+                        let stroke = icon.stroke.unwrap_or(style.icon_stroke(icon.size));
+                        swap_icon.set_style(icon.size, stroke);
+                    }
+                    p.whimsy_icon.set(style.flag("converter.whimsy_icon"));
+                    for f in [&p.f1, &p.f2] {
+                        f.value.set_halo(style.shadows("window.text_halo"));
+                    }
+                    p.style.replace(Some(style.clone()));
+                    p.lay_out();
+                    p.sync();
+                }
+            });
         }
         let weak = Rc::downgrade(&page);
         keypad.connect_pressed(move |id, x, y| {
             if let Some(p) = weak.upgrade() {
-                let s = p.ctx.hub.scheme();
-                p.ctx.pulse_at(&p.keypad, x, y, s.accent, 0.55);
+                p.ctx.pulse_at(&p.keypad, x, y, accent(&p.ctx), 0.55);
                 p.press(id);
             }
         });
@@ -301,7 +412,7 @@ impl ConverterPage {
                                 vm.activate_value2();
                             }
                         }
-                        p.sync(Change::None, Change::None);
+                        p.sync();
                     }
                 })
             };
@@ -310,7 +421,7 @@ impl ConverterPage {
                 let pick = pick.clone();
                 click.connect_released(move |_, _, _, _| pick());
             }
-            f.display.add_controller(click);
+            f.value.add_controller(click);
             // The same from the keyboard, once Tab has brought the focus
             // here: Space, as upstream's OnValueKeyDown, or Enter. (The
             // window lets both through: neither is a converter key.)
@@ -331,9 +442,9 @@ impl ConverterPage {
                     }
                 });
             }
-            f.display.add_controller(keys);
+            f.value.add_controller(keys);
             // And for assistive technology.
-            crate::a11y::operable(&f.display, "value", "activate", move |_| pick());
+            crate::a11y::operable(&f.value, "value", "activate", move |_| pick());
             let weak = Rc::downgrade(&page);
             f.dropdown.connect_selected_notify(move |d| {
                 let Some(p) = weak.upgrade() else { return };
@@ -342,7 +453,7 @@ impl ConverterPage {
                 }
                 if p.ctx.layers.covers(d) {
                     // Covered, the unit stays (R15-M-02): back to the VM's.
-                    p.sync(Change::None, Change::None);
+                    p.sync();
                     return;
                 }
                 let Some(&id) = p.unit_ids.borrow().get(d.selected() as usize) else {
@@ -356,7 +467,7 @@ impl ConverterPage {
                         vm.set_unit2(id);
                     }
                 }
-                p.sync(Change::Replace, Change::Result);
+                p.sync();
             });
         }
         {
@@ -364,15 +475,14 @@ impl ConverterPage {
             swap.connect_clicked(move |b| {
                 if let Some(p) = weak.upgrade() {
                     p.vm.borrow_mut().swap_units();
-                    let s = p.ctx.hub.scheme();
                     p.ctx.pulse_at(
                         b,
                         b.width() as f32 / 2.0,
                         b.height() as f32 / 2.0,
-                        s.hot_a,
+                        accent(&p.ctx),
                         1.0,
                     );
-                    p.sync(Change::Result, Change::Result);
+                    p.sync();
                 }
             });
         }
@@ -409,35 +519,61 @@ impl ConverterPage {
                         p.fetch_currency();
                     }
                 }
-                p.sync(Change::None, Change::None);
+                p.sync();
             });
         }
         {
             let weak = Rc::downgrade(&page);
-            root.connect_width(move |w| {
+            root.connect_size(move |_, _| {
                 if let Some(p) = weak.upgrade() {
-                    p.set_wide(w >= WIDE_PX);
+                    p.lay_out();
                 }
             });
         }
         page
     }
 
-    fn set_wide(&self, wide: bool) {
-        if wide == self.wide.get() {
+    /// DGMNB's layout for the page's size and the style's `layout`: wide,
+    /// the keypad on the right at its width; narrow, below, giving up
+    /// height (down to a least) before the values do.
+    fn lay_out(&self) {
+        let Some(style) = self.style.borrow().clone() else {
             return;
-        }
+        };
+        let (w, h) = self.root.size();
+        let m = match style.get("layout.converter.margin") {
+            Some(Value::Spacing(s)) => *s,
+            _ => Spacing::default(),
+        };
+        self.layout.set_margin_top(m.top.round() as i32);
+        self.layout.set_margin_end(m.right.round() as i32);
+        self.layout.set_margin_bottom(m.bottom.round() as i32);
+        self.layout.set_margin_start(m.left.round() as i32);
+        let wide = w as f32 >= mc::WIDE;
         self.wide.set(wide);
-        self.layout.set_orientation(if wide {
-            gtk::Orientation::Horizontal
+        if wide {
+            self.layout.set_orientation(gtk::Orientation::Horizontal);
+            self.layout
+                .set_spacing(style.number("layout.converter.gap_wide").round() as i32);
+            let pad_w = style.number("layout.converter.keypad_width").round() as i32;
+            self.keypad.set_size_request(pad_w, -1);
+            self.keypad.set_vexpand(true);
         } else {
-            gtk::Orientation::Vertical
-        });
-        self.layout.set_spacing(if wide { 24 } else { 10 });
-        self.values.set_hexpand(wide);
-        self.keypad.set_hexpand(wide);
-        self.keypad
-            .set_size_request(if wide { 300 } else { -1 }, 280);
+            self.layout.set_orientation(gtk::Orientation::Vertical);
+            self.layout
+                .set_spacing(style.number("layout.converter.gap").round() as i32);
+            let area = h as f32 - m.top - m.bottom;
+            let needed = if self.vm.borrow().is_currency_current_category() {
+                mc::NEEDED_CURRENCY
+            } else {
+                mc::NEEDED
+            };
+            let pad_h = (area - needed)
+                .min(area * mc::PAD_SHARE)
+                .clamp(mc::PAD_MIN_H, mc::PAD_MAX_H);
+            self.keypad.set_size_request(-1, pad_h.round() as i32);
+            self.keypad.set_vexpand(false);
+        }
     }
 
     fn press(self: &Rc<Self>, id: u32) {
@@ -445,7 +581,7 @@ impl ConverterPage {
             return;
         };
         self.vm.borrow_mut().button_pressed(cmd);
-        self.sync(Change::Typing, Change::Replace);
+        self.sync();
     }
 
     fn fetch_currency(self: &Rc<Self>) {
@@ -465,7 +601,7 @@ impl ConverterPage {
                 p.spinner.set_visible(false);
                 p.refresh.set_sensitive(true);
                 p.rebuild_units();
-                p.sync(Change::Replace, Change::Result);
+                p.sync();
             }
         });
     }
@@ -489,9 +625,14 @@ impl ConverterPage {
         self.syncing.set(false);
     }
 
-    /// Push VM state into widgets. `active`/`other` pick the animation for
-    /// the field being edited and the computed one.
-    fn sync(&self, active: Change, other: Change) {
+    /// Push VM state into widgets.
+    fn sync(&self) {
+        let style = self.style.borrow().clone();
+        let value_font = style.as_deref().and_then(value_font);
+        let unit_font = style
+            .as_deref()
+            .and_then(|s| s.control("converter.unit"))
+            .map(|c| c.font.clone());
         let vm = self.vm.borrow();
         self.syncing.set(true);
         let ids = self.unit_ids.borrow();
@@ -513,12 +654,33 @@ impl ConverterPage {
                 vm.value2_automation_name(),
             ),
         ] {
-            f.display
-                .set_value(value, if is_active { active } else { other }, false);
+            f.value.set_text(value);
+            if let Some((font, checked_weight)) = &value_font {
+                let font = Font {
+                    weight: if is_active {
+                        *checked_weight
+                    } else {
+                        font.weight
+                    },
+                    ..font.clone()
+                };
+                f.value.set_font(&font, txt::CONVERTER_VALUE_MIN_SIZE);
+            }
             if is_active {
                 f.frame.add_css_class("wc-active");
             } else {
                 f.frame.remove_css_class("wc-active");
+            }
+            // DGMNB's unit button: the unit's width and room for the arrow.
+            if let (Some(u), Some(font)) = (unit, &unit_font) {
+                let (fd, attrs) = pango_font(font, font.size);
+                let layout = f.dropdown.create_pango_layout(Some(&u.name));
+                layout.set_font_description(Some(&fd));
+                layout.set_attributes(Some(&attrs));
+                let (_, logical) = layout.extents();
+                let text = logical.width() as f32 / gtk::pango::SCALE as f32;
+                f.dropdown
+                    .set_size_request((text + mc::UNIT_ARROW).ceil() as i32, mc::UNIT_H as i32);
             }
             if let Some(u) = unit
                 && let Some(pos) = ids.iter().position(|&id| id == u.id)
@@ -529,9 +691,9 @@ impl ConverterPage {
             // Named as upstream's (and DGMNB's) fields, "Convert from 5
             // Centimeters", "Converts into 1.97 Inches"; selected while
             // it is the one typed into.
-            f.display
+            f.value
                 .update_property(&[gtk::accessible::Property::Label(&name)]);
-            f.display
+            f.value
                 .update_state(&[gtk::accessible::State::Selected(Some(is_active))]);
             // The second value is told when what it says changes, as
             // upstream's is a polite live region (Value2,
@@ -541,13 +703,24 @@ impl ConverterPage {
             if std::ptr::eq(f, &self.f2) {
                 let was = self.told.replace(Some(name.clone()));
                 if was.is_some_and(|was| was != name) {
-                    f.display
+                    f.value
                         .announce(&name, gtk::AccessibleAnnouncementPriority::Medium);
                 }
             }
-            f.symbol
-                .set_visible(vm.currency_symbol_visible() && !sym.is_empty());
-            f.symbol.set_text(sym);
+            // The symbol before the value, in its own text style, the
+            // value after its width and the gap (DGMNB's arithmetic).
+            let prefix = match style.as_deref().and_then(|s| s.get("converter.symbol")) {
+                Some(Value::Text(t)) if vm.currency_symbol_visible() && !sym.is_empty() => {
+                    Some(Prefix {
+                        text: sym.to_string(),
+                        font: t.font.clone(),
+                        color: t.color,
+                        gap: mc::SYMBOL_GAP,
+                    })
+                }
+                _ => None,
+            };
+            f.value.set_prefix(prefix);
         }
         drop(ids);
         self.syncing.set(false);
@@ -575,11 +748,15 @@ impl ConverterPage {
         for r in results {
             let chip = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             chip.add_css_class("wc-chip");
+            chip.set_size_request(-1, mc::CHIP_H as i32);
             if r.is_whimsical() {
                 chip.add_css_class("wc-chip-whimsy");
-                chip.append(&PathIcon::new(paths::SPARKLE, 14));
+                if self.whimsy_icon.get() {
+                    chip.append(&PathIcon::new(paths::SPARKLE, 14));
+                }
             }
             let l = gtk::Label::new(Some(&format!("{} {}", r.value, r.unit.abbreviation)));
+            l.set_hexpand(true);
             l.set_tooltip_text(Some(&r.localized_automation_name()));
             chip.append(&l);
             chip.update_property(&[gtk::accessible::Property::Label(
@@ -610,7 +787,8 @@ impl Page for ConverterHandle {
         p.showing.set(true);
         p.vm.borrow_mut().set_current_mode(cm);
         p.rebuild_units();
-        p.sync(Change::Replace, Change::Replace);
+        p.sync();
+        p.lay_out();
         p.keypad.cascade();
         if cm == ConverterMode::Currency {
             let started = p.vm.borrow_mut().start_automatic_currency_fetch();
@@ -635,8 +813,7 @@ impl Page for ConverterHandle {
             return true;
         }
         if let Some((x, y)) = p.keypad.flash(id) {
-            let s = p.ctx.hub.scheme();
-            p.ctx.pulse_at(&p.keypad, x, y, s.accent, 0.5);
+            p.ctx.pulse_at(&p.keypad, x, y, accent(&p.ctx), 0.5);
         }
         p.press(id);
         true
@@ -656,7 +833,7 @@ impl Page for ConverterHandle {
 
     fn paste(&self, text: &str) {
         appcore::converter::paste(&mut self.0.vm.borrow_mut(), text);
-        self.0.sync(Change::Replace, Change::Result);
+        self.0.sync();
     }
 
     fn save(&self) {
@@ -664,6 +841,30 @@ impl Page for ConverterHandle {
             self.0.ctx.store.set_page_state("converter", v);
         }
     }
+}
+
+/// The values' font at their largest, and its weight in the field typed
+/// into (`converter.value`).
+fn value_font(style: &Style) -> Option<(Font, f32)> {
+    let Some(Value::Record(r)) = style.get("converter.value") else {
+        return None;
+    };
+    let (Some(Value::Number(size)), Some(Value::Font(font)), Some(Value::Number(weight))) =
+        (r.get("size"), r.get("font"), r.get("checked_weight"))
+    else {
+        return None;
+    };
+    let font = Font {
+        size: *size as f32,
+        ..font.clone()
+    };
+    Some((font, *weight as f32))
+}
+
+/// The accent, for a press's event (the layers' business).
+fn accent(ctx: &Ctx) -> [f32; 3] {
+    let a = ctx.hub.style().tokens.colors.accent;
+    [a[0], a[1], a[2]]
 }
 
 impl ConverterPage {

@@ -426,6 +426,7 @@ impl DatePage {
                     if let Some(font) = sized_font(style, path) {
                         result.set_font(&font, txt::DATE_RESULT_MIN_SIZE);
                     }
+                    result.set_halo(style.shadows("window.text_halo"));
                 }
                 for g in &grids {
                     g.set_style(style);

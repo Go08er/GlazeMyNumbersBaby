@@ -442,6 +442,10 @@ pub fn emit(path: &str, kind: &Kind, value: &Value, out: &mut BTreeMap<String, S
         (Kind::Opt(inner), Value::Absent) => match inner {
             Kind::Color => put(out, path, "", "transparent".into()),
             Kind::Border => put(out, path, "", "none".into()),
+            // A table cleared with `false` (the converter's marker): its
+            // parts as nothing (transparent, zero), so the stylesheet can
+            // still name them.
+            Kind::Record(_) => emit(path, inner, &crate::schema::neutral(inner), out),
             _ => {}
         },
         (Kind::Opt(inner), present) => emit(path, inner, present, out),

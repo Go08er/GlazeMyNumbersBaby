@@ -983,6 +983,11 @@ pub static ROWS: &[Row] = &[
     row("converter.caption", Kind::Text, |s| {
         s.text(&s.t.text.caption, s.t.colors.fg_dim)
     }),
+    row("converter.whimsy", Kind::State, |_| {
+        Value::State(State::default())
+    }),
+    // A chip's `checked` is the whimsy (the playful comparison): the
+    // stylesheet reads it as the chip's checked state.
     row("converter.chip", Kind::Control, |s| {
         use metrics::converter::{CHIP_H, CHIP_PAD_X};
         Value::Control(Box::new(Control {
@@ -993,11 +998,9 @@ pub static ROWS: &[Row] = &[
             // A label: nothing under the pointer or pressed.
             hover: State::default(),
             active: State::default(),
+            checked: s.state("converter.whimsy"),
             ..s.control(&s.t.text.small)
         }))
-    }),
-    row("converter.whimsy", Kind::State, |_| {
-        Value::State(State::default())
     }),
     row("converter.whimsy_icon", Kind::Bool, |_| Value::Bool(false)),
     row("converter.ratio", Kind::Text, |s| {

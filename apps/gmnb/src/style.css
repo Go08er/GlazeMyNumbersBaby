@@ -2644,90 +2644,775 @@ button.wc-icon-button {
 
 /* ------------------------------------------------------- converter */
 
+/* Laid out in Rust as DGMNB's page (pages/converter.rs): no card round
+   the values; the field typed into has the marker under its value. */
+
+/* control converter.field .wc-conv-field checked=.wc-active */
 .wc-conv-field {
-  border-radius: 18px;
-  padding: 6px 4px 8px 4px;
-  transition: background-color 200ms ease-out, box-shadow 240ms ease-out;
+  background-color: var(--gmnb-converter-field-background-color);
+  background-image: var(--gmnb-converter-field-background-image);
+  color: var(--gmnb-converter-field-color);
+  box-shadow: var(--gmnb-converter-field-shadow);
+  opacity: var(--gmnb-converter-field-opacity);
+  filter: var(--gmnb-converter-field-filter);
+  transform: var(--gmnb-converter-field-transform);
+  transition: var(--gmnb-converter-field-transition);
+  border-radius: var(--gmnb-converter-field-radius);
+  padding: var(--gmnb-converter-field-padding);
+  margin: var(--gmnb-converter-field-margin);
+  min-width: var(--gmnb-converter-field-min-width);
+  min-height: var(--gmnb-converter-field-min-height);
+  font-family: var(--gmnb-converter-field-font-family);
+  font-size: var(--gmnb-converter-field-font-size);
+  font-weight: var(--gmnb-converter-field-font-weight);
+  font-style: var(--gmnb-converter-field-font-style);
+  letter-spacing: var(--gmnb-converter-field-letter-spacing);
+  font-feature-settings: var(--gmnb-converter-field-font-features);
+  font-variation-settings: var(--gmnb-converter-field-font-variations);
 }
-
+.wc-conv-field:hover {
+  background-color: var(--gmnb-converter-field-hover-background-color);
+  background-image: var(--gmnb-converter-field-hover-background-image);
+  color: var(--gmnb-converter-field-hover-color);
+  box-shadow: var(--gmnb-converter-field-hover-shadow);
+  opacity: var(--gmnb-converter-field-hover-opacity);
+  filter: var(--gmnb-converter-field-hover-filter);
+  transform: var(--gmnb-converter-field-hover-transform);
+  transition: var(--gmnb-converter-field-hover-transition);
+  font-weight: var(--gmnb-converter-field-hover-font-weight);
+}
+.wc-conv-field:active {
+  background-color: var(--gmnb-converter-field-active-background-color);
+  background-image: var(--gmnb-converter-field-active-background-image);
+  color: var(--gmnb-converter-field-active-color);
+  box-shadow: var(--gmnb-converter-field-active-shadow);
+  opacity: var(--gmnb-converter-field-active-opacity);
+  filter: var(--gmnb-converter-field-active-filter);
+  transform: var(--gmnb-converter-field-active-transform);
+  transition: var(--gmnb-converter-field-active-transition);
+  font-weight: var(--gmnb-converter-field-active-font-weight);
+}
 .wc-conv-field.wc-active {
-  background-image: linear-gradient(90deg, alpha(@wc_accent, 0.14), alpha(@wc_accent, 0.02));
-  box-shadow: inset 3px 0 @wc_accent;
+  background-color: var(--gmnb-converter-field-checked-background-color);
+  background-image: var(--gmnb-converter-field-checked-background-image);
+  color: var(--gmnb-converter-field-checked-color);
+  box-shadow: var(--gmnb-converter-field-checked-shadow);
+  opacity: var(--gmnb-converter-field-checked-opacity);
+  filter: var(--gmnb-converter-field-checked-filter);
+  transform: var(--gmnb-converter-field-checked-transform);
+  transition: var(--gmnb-converter-field-checked-transition);
+  font-weight: var(--gmnb-converter-field-checked-font-weight);
+}
+.wc-conv-field.wc-active:hover {
+  background-color: var(--gmnb-converter-field-checked-hover-background-color);
+  background-image: var(--gmnb-converter-field-checked-hover-background-image);
+  color: var(--gmnb-converter-field-checked-hover-color);
+  box-shadow: var(--gmnb-converter-field-checked-hover-shadow);
+  opacity: var(--gmnb-converter-field-checked-hover-opacity);
+  filter: var(--gmnb-converter-field-checked-hover-filter);
+  transform: var(--gmnb-converter-field-checked-hover-transform);
+  transition: var(--gmnb-converter-field-checked-hover-transition);
+  font-weight: var(--gmnb-converter-field-checked-hover-font-weight);
+}
+.wc-conv-field.wc-active:active {
+  background-color: var(--gmnb-converter-field-checked-active-background-color);
+  background-image: var(--gmnb-converter-field-checked-active-background-image);
+  color: var(--gmnb-converter-field-checked-active-color);
+  box-shadow: var(--gmnb-converter-field-checked-active-shadow);
+  opacity: var(--gmnb-converter-field-checked-active-opacity);
+  filter: var(--gmnb-converter-field-checked-active-filter);
+  transform: var(--gmnb-converter-field-checked-active-transform);
+  transition: var(--gmnb-converter-field-checked-active-transition);
+  font-weight: var(--gmnb-converter-field-checked-active-font-weight);
+}
+.wc-conv-field:disabled {
+  background-color: var(--gmnb-converter-field-disabled-background-color);
+  background-image: var(--gmnb-converter-field-disabled-background-image);
+  color: var(--gmnb-converter-field-disabled-color);
+  box-shadow: var(--gmnb-converter-field-disabled-shadow);
+  opacity: var(--gmnb-converter-field-disabled-opacity);
+  filter: var(--gmnb-converter-field-disabled-filter);
+  transform: var(--gmnb-converter-field-disabled-transform);
+  transition: var(--gmnb-converter-field-disabled-transition);
+  font-weight: var(--gmnb-converter-field-disabled-font-weight);
+}
+.wc-conv-field.wc-active:disabled {
+  background-color: var(--gmnb-converter-field-checked-disabled-background-color);
+  background-image: var(--gmnb-converter-field-checked-disabled-background-image);
+  color: var(--gmnb-converter-field-checked-disabled-color);
+  box-shadow: var(--gmnb-converter-field-checked-disabled-shadow);
+  opacity: var(--gmnb-converter-field-checked-disabled-opacity);
+  filter: var(--gmnb-converter-field-checked-disabled-filter);
+  transform: var(--gmnb-converter-field-checked-disabled-transform);
+  transition: var(--gmnb-converter-field-checked-disabled-transition);
+  font-weight: var(--gmnb-converter-field-checked-disabled-font-weight);
+}
+.wc-inert .wc-conv-field:disabled:not(.wc-off) {
+  background-color: var(--gmnb-converter-field-background-color);
+  background-image: var(--gmnb-converter-field-background-image);
+  color: var(--gmnb-converter-field-color);
+  box-shadow: var(--gmnb-converter-field-shadow);
+  opacity: var(--gmnb-converter-field-opacity);
+  filter: var(--gmnb-converter-field-filter);
+  transform: var(--gmnb-converter-field-transform);
+  transition: var(--gmnb-converter-field-transition);
+  font-weight: var(--gmnb-converter-field-font-weight);
+}
+.wc-inert .wc-conv-field.wc-active:disabled:not(.wc-off) {
+  background-color: var(--gmnb-converter-field-checked-background-color);
+  background-image: var(--gmnb-converter-field-checked-background-image);
+  color: var(--gmnb-converter-field-checked-color);
+  box-shadow: var(--gmnb-converter-field-checked-shadow);
+  opacity: var(--gmnb-converter-field-checked-opacity);
+  filter: var(--gmnb-converter-field-checked-filter);
+  transform: var(--gmnb-converter-field-checked-transform);
+  transition: var(--gmnb-converter-field-checked-transition);
+  font-weight: var(--gmnb-converter-field-checked-font-weight);
+}
+/* end control */
+
+.wc-conv-field.wc-active > .wc-conv-marker {
+  background-image: linear-gradient(var(--gmnb-converter-marker-color), var(--gmnb-converter-marker-color));
+  background-position: left bottom;
+  background-size: var(--gmnb-converter-marker-width) var(--gmnb-converter-marker-height);
+  background-repeat: no-repeat;
 }
 
-/* A value field the keyboard's focus is on (Tab; Space or Enter picks it). */
-.wc-conv-field calcdisplay:focus-visible {
-  outline: 2px solid alpha(@wc_accent, 0.9);
-  outline-offset: 2px;
-  border-radius: 12px;
+/* The values (widgets/fit.rs draws them at the style's font). */
+fitlabel.wc-conv-value {
+  color: var(--gmnb-window-color);
 }
 
-.wc-currency-symbol {
-  font-family: "Outfit";
-  font-size: 26px;
-  font-weight: 300;
-  color: alpha(@wc_fg, 0.6);
-  margin-left: 14px;
+/* A value the keyboard's focus is on (Tab; Space or Enter picks it). */
+.wc-conv-field fitlabel.wc-conv-value:focus-visible {
+  outline-style: solid;
+  outline-width: var(--gmnb-converter-value-focus-width);
+  outline-color: var(--gmnb-converter-value-focus-color);
+  outline-offset: var(--gmnb-converter-value-focus-offset);
 }
 
-dropdown.wc-unit-dropdown > button {
-  margin-left: 8px;
-  border-radius: 12px;
-  padding: 2px 10px;
-  font-family: "Outfit";
-  font-size: 15px;
-  background: alpha(@wc_fg, 0.05);
+/* The unit button: the drop-down's own, lit while its list is open. */
+/* control converter.unit dropdown.wc-unit-dropdown>button.toggle scope=window.gmnb */
+window.gmnb dropdown.wc-unit-dropdown>button.toggle {
+  background-color: var(--gmnb-converter-unit-background-color);
+  background-image: var(--gmnb-converter-unit-background-image);
+  color: var(--gmnb-converter-unit-color);
+  box-shadow: var(--gmnb-converter-unit-shadow);
+  opacity: var(--gmnb-converter-unit-opacity);
+  filter: var(--gmnb-converter-unit-filter);
+  transform: var(--gmnb-converter-unit-transform);
+  transition: var(--gmnb-converter-unit-transition);
+  border-radius: var(--gmnb-converter-unit-radius);
+  padding: var(--gmnb-converter-unit-padding);
+  margin: var(--gmnb-converter-unit-margin);
+  min-width: var(--gmnb-converter-unit-min-width);
+  min-height: var(--gmnb-converter-unit-min-height);
+  font-family: var(--gmnb-converter-unit-font-family);
+  font-size: var(--gmnb-converter-unit-font-size);
+  font-weight: var(--gmnb-converter-unit-font-weight);
+  font-style: var(--gmnb-converter-unit-font-style);
+  letter-spacing: var(--gmnb-converter-unit-letter-spacing);
+  font-feature-settings: var(--gmnb-converter-unit-font-features);
+  font-variation-settings: var(--gmnb-converter-unit-font-variations);
 }
-
-button.wc-swap {
-  margin-left: 12px;
-  min-width: 36px;
-  min-height: 36px;
-  border-radius: 999px;
-  background-image: linear-gradient(135deg, alpha(@wc_hot_a, 0.25), alpha(@wc_hot_b, 0.25));
-  box-shadow: inset 0 0 0 1px @wc_glass_border;
-  transition: transform 380ms cubic-bezier(0.34, 1.56, 0.64, 1);
+window.gmnb dropdown.wc-unit-dropdown>button.toggle:hover {
+  background-color: var(--gmnb-converter-unit-hover-background-color);
+  background-image: var(--gmnb-converter-unit-hover-background-image);
+  color: var(--gmnb-converter-unit-hover-color);
+  box-shadow: var(--gmnb-converter-unit-hover-shadow);
+  opacity: var(--gmnb-converter-unit-hover-opacity);
+  filter: var(--gmnb-converter-unit-hover-filter);
+  transform: var(--gmnb-converter-unit-hover-transform);
+  transition: var(--gmnb-converter-unit-hover-transition);
+  font-weight: var(--gmnb-converter-unit-hover-font-weight);
 }
-
-button.wc-swap:active {
-  transform: rotate(180deg) scale(0.92);
+window.gmnb dropdown.wc-unit-dropdown>button.toggle:active {
+  background-color: var(--gmnb-converter-unit-active-background-color);
+  background-image: var(--gmnb-converter-unit-active-background-image);
+  color: var(--gmnb-converter-unit-active-color);
+  box-shadow: var(--gmnb-converter-unit-active-shadow);
+  opacity: var(--gmnb-converter-unit-active-opacity);
+  filter: var(--gmnb-converter-unit-active-filter);
+  transform: var(--gmnb-converter-unit-active-transform);
+  transition: var(--gmnb-converter-unit-active-transition);
+  font-weight: var(--gmnb-converter-unit-active-font-weight);
 }
-
-.wc-supp {
-  margin: 0 8px;
+window.gmnb dropdown.wc-unit-dropdown>button.toggle:checked {
+  background-color: var(--gmnb-converter-unit-checked-background-color);
+  background-image: var(--gmnb-converter-unit-checked-background-image);
+  color: var(--gmnb-converter-unit-checked-color);
+  box-shadow: var(--gmnb-converter-unit-checked-shadow);
+  opacity: var(--gmnb-converter-unit-checked-opacity);
+  filter: var(--gmnb-converter-unit-checked-filter);
+  transform: var(--gmnb-converter-unit-checked-transform);
+  transition: var(--gmnb-converter-unit-checked-transition);
+  font-weight: var(--gmnb-converter-unit-checked-font-weight);
 }
-
-.wc-chip {
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-family: "Outfit";
-  font-size: 13px;
-  background: alpha(@wc_fg, 0.06);
-  box-shadow: inset 0 0 0 1px alpha(@wc_fg, 0.06);
+window.gmnb dropdown.wc-unit-dropdown>button.toggle:checked:hover {
+  background-color: var(--gmnb-converter-unit-checked-hover-background-color);
+  background-image: var(--gmnb-converter-unit-checked-hover-background-image);
+  color: var(--gmnb-converter-unit-checked-hover-color);
+  box-shadow: var(--gmnb-converter-unit-checked-hover-shadow);
+  opacity: var(--gmnb-converter-unit-checked-hover-opacity);
+  filter: var(--gmnb-converter-unit-checked-hover-filter);
+  transform: var(--gmnb-converter-unit-checked-hover-transform);
+  transition: var(--gmnb-converter-unit-checked-hover-transition);
+  font-weight: var(--gmnb-converter-unit-checked-hover-font-weight);
 }
-
-.wc-chip-whimsy {
-  color: @wc_on_hot;
-  background-image: linear-gradient(135deg, alpha(@wc_hot_a, 0.85), alpha(@wc_hot_b, 0.85));
+window.gmnb dropdown.wc-unit-dropdown>button.toggle:checked:active {
+  background-color: var(--gmnb-converter-unit-checked-active-background-color);
+  background-image: var(--gmnb-converter-unit-checked-active-background-image);
+  color: var(--gmnb-converter-unit-checked-active-color);
+  box-shadow: var(--gmnb-converter-unit-checked-active-shadow);
+  opacity: var(--gmnb-converter-unit-checked-active-opacity);
+  filter: var(--gmnb-converter-unit-checked-active-filter);
+  transform: var(--gmnb-converter-unit-checked-active-transform);
+  transition: var(--gmnb-converter-unit-checked-active-transition);
+  font-weight: var(--gmnb-converter-unit-checked-active-font-weight);
 }
-
-.wc-ratio {
-  font-family: "Outfit";
-  font-size: 15px;
-  margin: 4px 14px 0 14px;
+window.gmnb dropdown.wc-unit-dropdown>button.toggle:disabled {
+  background-color: var(--gmnb-converter-unit-disabled-background-color);
+  background-image: var(--gmnb-converter-unit-disabled-background-image);
+  color: var(--gmnb-converter-unit-disabled-color);
+  box-shadow: var(--gmnb-converter-unit-disabled-shadow);
+  opacity: var(--gmnb-converter-unit-disabled-opacity);
+  filter: var(--gmnb-converter-unit-disabled-filter);
+  transform: var(--gmnb-converter-unit-disabled-transform);
+  transition: var(--gmnb-converter-unit-disabled-transition);
+  font-weight: var(--gmnb-converter-unit-disabled-font-weight);
 }
-
-.wc-timestamp {
-  font-size: 12px;
-  color: alpha(@wc_fg, 0.6);
-  margin-left: 14px;
+window.gmnb dropdown.wc-unit-dropdown>button.toggle:checked:disabled {
+  background-color: var(--gmnb-converter-unit-checked-disabled-background-color);
+  background-image: var(--gmnb-converter-unit-checked-disabled-background-image);
+  color: var(--gmnb-converter-unit-checked-disabled-color);
+  box-shadow: var(--gmnb-converter-unit-checked-disabled-shadow);
+  opacity: var(--gmnb-converter-unit-checked-disabled-opacity);
+  filter: var(--gmnb-converter-unit-checked-disabled-filter);
+  transform: var(--gmnb-converter-unit-checked-disabled-transform);
+  transition: var(--gmnb-converter-unit-checked-disabled-transition);
+  font-weight: var(--gmnb-converter-unit-checked-disabled-font-weight);
 }
+window.gmnb .wc-inert dropdown.wc-unit-dropdown>button.toggle:disabled:not(.wc-off) {
+  background-color: var(--gmnb-converter-unit-background-color);
+  background-image: var(--gmnb-converter-unit-background-image);
+  color: var(--gmnb-converter-unit-color);
+  box-shadow: var(--gmnb-converter-unit-shadow);
+  opacity: var(--gmnb-converter-unit-opacity);
+  filter: var(--gmnb-converter-unit-filter);
+  transform: var(--gmnb-converter-unit-transform);
+  transition: var(--gmnb-converter-unit-transition);
+  font-weight: var(--gmnb-converter-unit-font-weight);
+}
+window.gmnb .wc-inert dropdown.wc-unit-dropdown>button.toggle:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-converter-unit-checked-background-color);
+  background-image: var(--gmnb-converter-unit-checked-background-image);
+  color: var(--gmnb-converter-unit-checked-color);
+  box-shadow: var(--gmnb-converter-unit-checked-shadow);
+  opacity: var(--gmnb-converter-unit-checked-opacity);
+  filter: var(--gmnb-converter-unit-checked-filter);
+  transform: var(--gmnb-converter-unit-checked-transform);
+  transition: var(--gmnb-converter-unit-checked-transition);
+  font-weight: var(--gmnb-converter-unit-checked-font-weight);
+}
+/* end control */
 
-button.wc-link {
-  font-size: 12px;
-  padding: 0 6px;
-  min-height: 22px;
-  color: @wc_accent;
+/* control converter.swap button.wc-swap scope=window.gmnb icon=pathicon */
+window.gmnb button.wc-swap {
+  background-color: var(--gmnb-converter-swap-background-color);
+  background-image: var(--gmnb-converter-swap-background-image);
+  color: var(--gmnb-converter-swap-color);
+  box-shadow: var(--gmnb-converter-swap-shadow);
+  opacity: var(--gmnb-converter-swap-opacity);
+  filter: var(--gmnb-converter-swap-filter);
+  transform: var(--gmnb-converter-swap-transform);
+  transition: var(--gmnb-converter-swap-transition);
+  border-radius: var(--gmnb-converter-swap-radius);
+  padding: var(--gmnb-converter-swap-padding);
+  margin: var(--gmnb-converter-swap-margin);
+  min-width: var(--gmnb-converter-swap-min-width);
+  min-height: var(--gmnb-converter-swap-min-height);
+  font-family: var(--gmnb-converter-swap-font-family);
+  font-size: var(--gmnb-converter-swap-font-size);
+  font-weight: var(--gmnb-converter-swap-font-weight);
+  font-style: var(--gmnb-converter-swap-font-style);
+  letter-spacing: var(--gmnb-converter-swap-letter-spacing);
+  font-feature-settings: var(--gmnb-converter-swap-font-features);
+  font-variation-settings: var(--gmnb-converter-swap-font-variations);
+}
+window.gmnb button.wc-swap pathicon {
+  color: var(--gmnb-converter-swap-icon-color);
+}
+window.gmnb button.wc-swap:hover {
+  background-color: var(--gmnb-converter-swap-hover-background-color);
+  background-image: var(--gmnb-converter-swap-hover-background-image);
+  color: var(--gmnb-converter-swap-hover-color);
+  box-shadow: var(--gmnb-converter-swap-hover-shadow);
+  opacity: var(--gmnb-converter-swap-hover-opacity);
+  filter: var(--gmnb-converter-swap-hover-filter);
+  transform: var(--gmnb-converter-swap-hover-transform);
+  transition: var(--gmnb-converter-swap-hover-transition);
+  font-weight: var(--gmnb-converter-swap-hover-font-weight);
+}
+window.gmnb button.wc-swap:hover pathicon {
+  color: var(--gmnb-converter-swap-hover-icon-color);
+}
+window.gmnb button.wc-swap:active {
+  background-color: var(--gmnb-converter-swap-active-background-color);
+  background-image: var(--gmnb-converter-swap-active-background-image);
+  color: var(--gmnb-converter-swap-active-color);
+  box-shadow: var(--gmnb-converter-swap-active-shadow);
+  opacity: var(--gmnb-converter-swap-active-opacity);
+  filter: var(--gmnb-converter-swap-active-filter);
+  transform: var(--gmnb-converter-swap-active-transform);
+  transition: var(--gmnb-converter-swap-active-transition);
+  font-weight: var(--gmnb-converter-swap-active-font-weight);
+}
+window.gmnb button.wc-swap:active pathicon {
+  color: var(--gmnb-converter-swap-active-icon-color);
+}
+window.gmnb button.wc-swap:checked {
+  background-color: var(--gmnb-converter-swap-checked-background-color);
+  background-image: var(--gmnb-converter-swap-checked-background-image);
+  color: var(--gmnb-converter-swap-checked-color);
+  box-shadow: var(--gmnb-converter-swap-checked-shadow);
+  opacity: var(--gmnb-converter-swap-checked-opacity);
+  filter: var(--gmnb-converter-swap-checked-filter);
+  transform: var(--gmnb-converter-swap-checked-transform);
+  transition: var(--gmnb-converter-swap-checked-transition);
+  font-weight: var(--gmnb-converter-swap-checked-font-weight);
+}
+window.gmnb button.wc-swap:checked pathicon {
+  color: var(--gmnb-converter-swap-checked-icon-color);
+}
+window.gmnb button.wc-swap:checked:hover {
+  background-color: var(--gmnb-converter-swap-checked-hover-background-color);
+  background-image: var(--gmnb-converter-swap-checked-hover-background-image);
+  color: var(--gmnb-converter-swap-checked-hover-color);
+  box-shadow: var(--gmnb-converter-swap-checked-hover-shadow);
+  opacity: var(--gmnb-converter-swap-checked-hover-opacity);
+  filter: var(--gmnb-converter-swap-checked-hover-filter);
+  transform: var(--gmnb-converter-swap-checked-hover-transform);
+  transition: var(--gmnb-converter-swap-checked-hover-transition);
+  font-weight: var(--gmnb-converter-swap-checked-hover-font-weight);
+}
+window.gmnb button.wc-swap:checked:hover pathicon {
+  color: var(--gmnb-converter-swap-checked-hover-icon-color);
+}
+window.gmnb button.wc-swap:checked:active {
+  background-color: var(--gmnb-converter-swap-checked-active-background-color);
+  background-image: var(--gmnb-converter-swap-checked-active-background-image);
+  color: var(--gmnb-converter-swap-checked-active-color);
+  box-shadow: var(--gmnb-converter-swap-checked-active-shadow);
+  opacity: var(--gmnb-converter-swap-checked-active-opacity);
+  filter: var(--gmnb-converter-swap-checked-active-filter);
+  transform: var(--gmnb-converter-swap-checked-active-transform);
+  transition: var(--gmnb-converter-swap-checked-active-transition);
+  font-weight: var(--gmnb-converter-swap-checked-active-font-weight);
+}
+window.gmnb button.wc-swap:checked:active pathicon {
+  color: var(--gmnb-converter-swap-checked-active-icon-color);
+}
+window.gmnb button.wc-swap:disabled {
+  background-color: var(--gmnb-converter-swap-disabled-background-color);
+  background-image: var(--gmnb-converter-swap-disabled-background-image);
+  color: var(--gmnb-converter-swap-disabled-color);
+  box-shadow: var(--gmnb-converter-swap-disabled-shadow);
+  opacity: var(--gmnb-converter-swap-disabled-opacity);
+  filter: var(--gmnb-converter-swap-disabled-filter);
+  transform: var(--gmnb-converter-swap-disabled-transform);
+  transition: var(--gmnb-converter-swap-disabled-transition);
+  font-weight: var(--gmnb-converter-swap-disabled-font-weight);
+}
+window.gmnb button.wc-swap:disabled pathicon {
+  color: var(--gmnb-converter-swap-disabled-icon-color);
+}
+window.gmnb button.wc-swap:checked:disabled {
+  background-color: var(--gmnb-converter-swap-checked-disabled-background-color);
+  background-image: var(--gmnb-converter-swap-checked-disabled-background-image);
+  color: var(--gmnb-converter-swap-checked-disabled-color);
+  box-shadow: var(--gmnb-converter-swap-checked-disabled-shadow);
+  opacity: var(--gmnb-converter-swap-checked-disabled-opacity);
+  filter: var(--gmnb-converter-swap-checked-disabled-filter);
+  transform: var(--gmnb-converter-swap-checked-disabled-transform);
+  transition: var(--gmnb-converter-swap-checked-disabled-transition);
+  font-weight: var(--gmnb-converter-swap-checked-disabled-font-weight);
+}
+window.gmnb button.wc-swap:checked:disabled pathicon {
+  color: var(--gmnb-converter-swap-checked-disabled-icon-color);
+}
+window.gmnb .wc-inert button.wc-swap:disabled:not(.wc-off) {
+  background-color: var(--gmnb-converter-swap-background-color);
+  background-image: var(--gmnb-converter-swap-background-image);
+  color: var(--gmnb-converter-swap-color);
+  box-shadow: var(--gmnb-converter-swap-shadow);
+  opacity: var(--gmnb-converter-swap-opacity);
+  filter: var(--gmnb-converter-swap-filter);
+  transform: var(--gmnb-converter-swap-transform);
+  transition: var(--gmnb-converter-swap-transition);
+  font-weight: var(--gmnb-converter-swap-font-weight);
+}
+window.gmnb .wc-inert button.wc-swap:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-converter-swap-icon-color);
+}
+window.gmnb .wc-inert button.wc-swap:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-converter-swap-checked-background-color);
+  background-image: var(--gmnb-converter-swap-checked-background-image);
+  color: var(--gmnb-converter-swap-checked-color);
+  box-shadow: var(--gmnb-converter-swap-checked-shadow);
+  opacity: var(--gmnb-converter-swap-checked-opacity);
+  filter: var(--gmnb-converter-swap-checked-filter);
+  transform: var(--gmnb-converter-swap-checked-transform);
+  transition: var(--gmnb-converter-swap-checked-transition);
+  font-weight: var(--gmnb-converter-swap-checked-font-weight);
+}
+window.gmnb .wc-inert button.wc-swap:checked:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-converter-swap-checked-icon-color);
+}
+/* end control */
+
+/* text converter.ratio label.wc-ratio */
+label.wc-ratio {
+  color: var(--gmnb-converter-ratio-color);
+  font-family: var(--gmnb-converter-ratio-font-family);
+  font-size: var(--gmnb-converter-ratio-font-size);
+  font-weight: var(--gmnb-converter-ratio-font-weight);
+  font-style: var(--gmnb-converter-ratio-font-style);
+  letter-spacing: var(--gmnb-converter-ratio-letter-spacing);
+  font-feature-settings: var(--gmnb-converter-ratio-font-features);
+  font-variation-settings: var(--gmnb-converter-ratio-font-variations);
+  text-shadow: var(--gmnb-converter-ratio-text-shadow);
+  margin: var(--gmnb-converter-ratio-margin);
+}
+/* end text */
+
+/* text converter.timestamp label.wc-timestamp */
+label.wc-timestamp {
+  color: var(--gmnb-converter-timestamp-color);
+  font-family: var(--gmnb-converter-timestamp-font-family);
+  font-size: var(--gmnb-converter-timestamp-font-size);
+  font-weight: var(--gmnb-converter-timestamp-font-weight);
+  font-style: var(--gmnb-converter-timestamp-font-style);
+  letter-spacing: var(--gmnb-converter-timestamp-letter-spacing);
+  font-feature-settings: var(--gmnb-converter-timestamp-font-features);
+  font-variation-settings: var(--gmnb-converter-timestamp-font-variations);
+  text-shadow: var(--gmnb-converter-timestamp-text-shadow);
+  margin: var(--gmnb-converter-timestamp-margin);
+}
+/* end text */
+
+/* text converter.caption label.wc-status */
+label.wc-status {
+  color: var(--gmnb-converter-caption-color);
+  font-family: var(--gmnb-converter-caption-font-family);
+  font-size: var(--gmnb-converter-caption-font-size);
+  font-weight: var(--gmnb-converter-caption-font-weight);
+  font-style: var(--gmnb-converter-caption-font-style);
+  letter-spacing: var(--gmnb-converter-caption-letter-spacing);
+  font-feature-settings: var(--gmnb-converter-caption-font-features);
+  font-variation-settings: var(--gmnb-converter-caption-font-variations);
+  text-shadow: var(--gmnb-converter-caption-text-shadow);
+  margin: var(--gmnb-converter-caption-margin);
+}
+/* end text */
+
+/* control converter.link button.wc-link scope=window.gmnb */
+window.gmnb button.wc-link {
+  background-color: var(--gmnb-converter-link-background-color);
+  background-image: var(--gmnb-converter-link-background-image);
+  color: var(--gmnb-converter-link-color);
+  box-shadow: var(--gmnb-converter-link-shadow);
+  opacity: var(--gmnb-converter-link-opacity);
+  filter: var(--gmnb-converter-link-filter);
+  transform: var(--gmnb-converter-link-transform);
+  transition: var(--gmnb-converter-link-transition);
+  border-radius: var(--gmnb-converter-link-radius);
+  padding: var(--gmnb-converter-link-padding);
+  margin: var(--gmnb-converter-link-margin);
+  min-width: var(--gmnb-converter-link-min-width);
+  min-height: var(--gmnb-converter-link-min-height);
+  font-family: var(--gmnb-converter-link-font-family);
+  font-size: var(--gmnb-converter-link-font-size);
+  font-weight: var(--gmnb-converter-link-font-weight);
+  font-style: var(--gmnb-converter-link-font-style);
+  letter-spacing: var(--gmnb-converter-link-letter-spacing);
+  font-feature-settings: var(--gmnb-converter-link-font-features);
+  font-variation-settings: var(--gmnb-converter-link-font-variations);
+}
+window.gmnb button.wc-link:hover {
+  background-color: var(--gmnb-converter-link-hover-background-color);
+  background-image: var(--gmnb-converter-link-hover-background-image);
+  color: var(--gmnb-converter-link-hover-color);
+  box-shadow: var(--gmnb-converter-link-hover-shadow);
+  opacity: var(--gmnb-converter-link-hover-opacity);
+  filter: var(--gmnb-converter-link-hover-filter);
+  transform: var(--gmnb-converter-link-hover-transform);
+  transition: var(--gmnb-converter-link-hover-transition);
+  font-weight: var(--gmnb-converter-link-hover-font-weight);
+}
+window.gmnb button.wc-link:active {
+  background-color: var(--gmnb-converter-link-active-background-color);
+  background-image: var(--gmnb-converter-link-active-background-image);
+  color: var(--gmnb-converter-link-active-color);
+  box-shadow: var(--gmnb-converter-link-active-shadow);
+  opacity: var(--gmnb-converter-link-active-opacity);
+  filter: var(--gmnb-converter-link-active-filter);
+  transform: var(--gmnb-converter-link-active-transform);
+  transition: var(--gmnb-converter-link-active-transition);
+  font-weight: var(--gmnb-converter-link-active-font-weight);
+}
+window.gmnb button.wc-link:checked {
+  background-color: var(--gmnb-converter-link-checked-background-color);
+  background-image: var(--gmnb-converter-link-checked-background-image);
+  color: var(--gmnb-converter-link-checked-color);
+  box-shadow: var(--gmnb-converter-link-checked-shadow);
+  opacity: var(--gmnb-converter-link-checked-opacity);
+  filter: var(--gmnb-converter-link-checked-filter);
+  transform: var(--gmnb-converter-link-checked-transform);
+  transition: var(--gmnb-converter-link-checked-transition);
+  font-weight: var(--gmnb-converter-link-checked-font-weight);
+}
+window.gmnb button.wc-link:checked:hover {
+  background-color: var(--gmnb-converter-link-checked-hover-background-color);
+  background-image: var(--gmnb-converter-link-checked-hover-background-image);
+  color: var(--gmnb-converter-link-checked-hover-color);
+  box-shadow: var(--gmnb-converter-link-checked-hover-shadow);
+  opacity: var(--gmnb-converter-link-checked-hover-opacity);
+  filter: var(--gmnb-converter-link-checked-hover-filter);
+  transform: var(--gmnb-converter-link-checked-hover-transform);
+  transition: var(--gmnb-converter-link-checked-hover-transition);
+  font-weight: var(--gmnb-converter-link-checked-hover-font-weight);
+}
+window.gmnb button.wc-link:checked:active {
+  background-color: var(--gmnb-converter-link-checked-active-background-color);
+  background-image: var(--gmnb-converter-link-checked-active-background-image);
+  color: var(--gmnb-converter-link-checked-active-color);
+  box-shadow: var(--gmnb-converter-link-checked-active-shadow);
+  opacity: var(--gmnb-converter-link-checked-active-opacity);
+  filter: var(--gmnb-converter-link-checked-active-filter);
+  transform: var(--gmnb-converter-link-checked-active-transform);
+  transition: var(--gmnb-converter-link-checked-active-transition);
+  font-weight: var(--gmnb-converter-link-checked-active-font-weight);
+}
+window.gmnb button.wc-link:disabled {
+  background-color: var(--gmnb-converter-link-disabled-background-color);
+  background-image: var(--gmnb-converter-link-disabled-background-image);
+  color: var(--gmnb-converter-link-disabled-color);
+  box-shadow: var(--gmnb-converter-link-disabled-shadow);
+  opacity: var(--gmnb-converter-link-disabled-opacity);
+  filter: var(--gmnb-converter-link-disabled-filter);
+  transform: var(--gmnb-converter-link-disabled-transform);
+  transition: var(--gmnb-converter-link-disabled-transition);
+  font-weight: var(--gmnb-converter-link-disabled-font-weight);
+}
+window.gmnb button.wc-link:checked:disabled {
+  background-color: var(--gmnb-converter-link-checked-disabled-background-color);
+  background-image: var(--gmnb-converter-link-checked-disabled-background-image);
+  color: var(--gmnb-converter-link-checked-disabled-color);
+  box-shadow: var(--gmnb-converter-link-checked-disabled-shadow);
+  opacity: var(--gmnb-converter-link-checked-disabled-opacity);
+  filter: var(--gmnb-converter-link-checked-disabled-filter);
+  transform: var(--gmnb-converter-link-checked-disabled-transform);
+  transition: var(--gmnb-converter-link-checked-disabled-transition);
+  font-weight: var(--gmnb-converter-link-checked-disabled-font-weight);
+}
+window.gmnb .wc-inert button.wc-link:disabled:not(.wc-off) {
+  background-color: var(--gmnb-converter-link-background-color);
+  background-image: var(--gmnb-converter-link-background-image);
+  color: var(--gmnb-converter-link-color);
+  box-shadow: var(--gmnb-converter-link-shadow);
+  opacity: var(--gmnb-converter-link-opacity);
+  filter: var(--gmnb-converter-link-filter);
+  transform: var(--gmnb-converter-link-transform);
+  transition: var(--gmnb-converter-link-transition);
+  font-weight: var(--gmnb-converter-link-font-weight);
+}
+window.gmnb .wc-inert button.wc-link:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-converter-link-checked-background-color);
+  background-image: var(--gmnb-converter-link-checked-background-image);
+  color: var(--gmnb-converter-link-checked-color);
+  box-shadow: var(--gmnb-converter-link-checked-shadow);
+  opacity: var(--gmnb-converter-link-checked-opacity);
+  filter: var(--gmnb-converter-link-checked-filter);
+  transform: var(--gmnb-converter-link-checked-transform);
+  transition: var(--gmnb-converter-link-checked-transition);
+  font-weight: var(--gmnb-converter-link-checked-font-weight);
+}
+/* end control */
+
+/* text converter.caption label.wc-conv-caption */
+label.wc-conv-caption {
+  color: var(--gmnb-converter-caption-color);
+  font-family: var(--gmnb-converter-caption-font-family);
+  font-size: var(--gmnb-converter-caption-font-size);
+  font-weight: var(--gmnb-converter-caption-font-weight);
+  font-style: var(--gmnb-converter-caption-font-style);
+  letter-spacing: var(--gmnb-converter-caption-letter-spacing);
+  font-feature-settings: var(--gmnb-converter-caption-font-features);
+  font-variation-settings: var(--gmnb-converter-caption-font-variations);
+  text-shadow: var(--gmnb-converter-caption-text-shadow);
+  margin: var(--gmnb-converter-caption-margin);
+}
+/* end text */
+
+/* The chips: the whimsy (the playful comparison) is their checked state. */
+/* control converter.chip box.wc-chip checked=.wc-chip-whimsy icon=pathicon */
+box.wc-chip {
+  background-color: var(--gmnb-converter-chip-background-color);
+  background-image: var(--gmnb-converter-chip-background-image);
+  color: var(--gmnb-converter-chip-color);
+  box-shadow: var(--gmnb-converter-chip-shadow);
+  opacity: var(--gmnb-converter-chip-opacity);
+  filter: var(--gmnb-converter-chip-filter);
+  transform: var(--gmnb-converter-chip-transform);
+  transition: var(--gmnb-converter-chip-transition);
+  border-radius: var(--gmnb-converter-chip-radius);
+  padding: var(--gmnb-converter-chip-padding);
+  margin: var(--gmnb-converter-chip-margin);
+  min-width: var(--gmnb-converter-chip-min-width);
+  min-height: var(--gmnb-converter-chip-min-height);
+  font-family: var(--gmnb-converter-chip-font-family);
+  font-size: var(--gmnb-converter-chip-font-size);
+  font-weight: var(--gmnb-converter-chip-font-weight);
+  font-style: var(--gmnb-converter-chip-font-style);
+  letter-spacing: var(--gmnb-converter-chip-letter-spacing);
+  font-feature-settings: var(--gmnb-converter-chip-font-features);
+  font-variation-settings: var(--gmnb-converter-chip-font-variations);
+}
+box.wc-chip pathicon {
+  color: var(--gmnb-converter-chip-icon-color);
+}
+box.wc-chip:hover {
+  background-color: var(--gmnb-converter-chip-hover-background-color);
+  background-image: var(--gmnb-converter-chip-hover-background-image);
+  color: var(--gmnb-converter-chip-hover-color);
+  box-shadow: var(--gmnb-converter-chip-hover-shadow);
+  opacity: var(--gmnb-converter-chip-hover-opacity);
+  filter: var(--gmnb-converter-chip-hover-filter);
+  transform: var(--gmnb-converter-chip-hover-transform);
+  transition: var(--gmnb-converter-chip-hover-transition);
+  font-weight: var(--gmnb-converter-chip-hover-font-weight);
+}
+box.wc-chip:hover pathicon {
+  color: var(--gmnb-converter-chip-hover-icon-color);
+}
+box.wc-chip:active {
+  background-color: var(--gmnb-converter-chip-active-background-color);
+  background-image: var(--gmnb-converter-chip-active-background-image);
+  color: var(--gmnb-converter-chip-active-color);
+  box-shadow: var(--gmnb-converter-chip-active-shadow);
+  opacity: var(--gmnb-converter-chip-active-opacity);
+  filter: var(--gmnb-converter-chip-active-filter);
+  transform: var(--gmnb-converter-chip-active-transform);
+  transition: var(--gmnb-converter-chip-active-transition);
+  font-weight: var(--gmnb-converter-chip-active-font-weight);
+}
+box.wc-chip:active pathicon {
+  color: var(--gmnb-converter-chip-active-icon-color);
+}
+box.wc-chip.wc-chip-whimsy {
+  background-color: var(--gmnb-converter-chip-checked-background-color);
+  background-image: var(--gmnb-converter-chip-checked-background-image);
+  color: var(--gmnb-converter-chip-checked-color);
+  box-shadow: var(--gmnb-converter-chip-checked-shadow);
+  opacity: var(--gmnb-converter-chip-checked-opacity);
+  filter: var(--gmnb-converter-chip-checked-filter);
+  transform: var(--gmnb-converter-chip-checked-transform);
+  transition: var(--gmnb-converter-chip-checked-transition);
+  font-weight: var(--gmnb-converter-chip-checked-font-weight);
+}
+box.wc-chip.wc-chip-whimsy pathicon {
+  color: var(--gmnb-converter-chip-checked-icon-color);
+}
+box.wc-chip.wc-chip-whimsy:hover {
+  background-color: var(--gmnb-converter-chip-checked-hover-background-color);
+  background-image: var(--gmnb-converter-chip-checked-hover-background-image);
+  color: var(--gmnb-converter-chip-checked-hover-color);
+  box-shadow: var(--gmnb-converter-chip-checked-hover-shadow);
+  opacity: var(--gmnb-converter-chip-checked-hover-opacity);
+  filter: var(--gmnb-converter-chip-checked-hover-filter);
+  transform: var(--gmnb-converter-chip-checked-hover-transform);
+  transition: var(--gmnb-converter-chip-checked-hover-transition);
+  font-weight: var(--gmnb-converter-chip-checked-hover-font-weight);
+}
+box.wc-chip.wc-chip-whimsy:hover pathicon {
+  color: var(--gmnb-converter-chip-checked-hover-icon-color);
+}
+box.wc-chip.wc-chip-whimsy:active {
+  background-color: var(--gmnb-converter-chip-checked-active-background-color);
+  background-image: var(--gmnb-converter-chip-checked-active-background-image);
+  color: var(--gmnb-converter-chip-checked-active-color);
+  box-shadow: var(--gmnb-converter-chip-checked-active-shadow);
+  opacity: var(--gmnb-converter-chip-checked-active-opacity);
+  filter: var(--gmnb-converter-chip-checked-active-filter);
+  transform: var(--gmnb-converter-chip-checked-active-transform);
+  transition: var(--gmnb-converter-chip-checked-active-transition);
+  font-weight: var(--gmnb-converter-chip-checked-active-font-weight);
+}
+box.wc-chip.wc-chip-whimsy:active pathicon {
+  color: var(--gmnb-converter-chip-checked-active-icon-color);
+}
+box.wc-chip:disabled {
+  background-color: var(--gmnb-converter-chip-disabled-background-color);
+  background-image: var(--gmnb-converter-chip-disabled-background-image);
+  color: var(--gmnb-converter-chip-disabled-color);
+  box-shadow: var(--gmnb-converter-chip-disabled-shadow);
+  opacity: var(--gmnb-converter-chip-disabled-opacity);
+  filter: var(--gmnb-converter-chip-disabled-filter);
+  transform: var(--gmnb-converter-chip-disabled-transform);
+  transition: var(--gmnb-converter-chip-disabled-transition);
+  font-weight: var(--gmnb-converter-chip-disabled-font-weight);
+}
+box.wc-chip:disabled pathicon {
+  color: var(--gmnb-converter-chip-disabled-icon-color);
+}
+box.wc-chip.wc-chip-whimsy:disabled {
+  background-color: var(--gmnb-converter-chip-checked-disabled-background-color);
+  background-image: var(--gmnb-converter-chip-checked-disabled-background-image);
+  color: var(--gmnb-converter-chip-checked-disabled-color);
+  box-shadow: var(--gmnb-converter-chip-checked-disabled-shadow);
+  opacity: var(--gmnb-converter-chip-checked-disabled-opacity);
+  filter: var(--gmnb-converter-chip-checked-disabled-filter);
+  transform: var(--gmnb-converter-chip-checked-disabled-transform);
+  transition: var(--gmnb-converter-chip-checked-disabled-transition);
+  font-weight: var(--gmnb-converter-chip-checked-disabled-font-weight);
+}
+box.wc-chip.wc-chip-whimsy:disabled pathicon {
+  color: var(--gmnb-converter-chip-checked-disabled-icon-color);
+}
+.wc-inert box.wc-chip:disabled:not(.wc-off) {
+  background-color: var(--gmnb-converter-chip-background-color);
+  background-image: var(--gmnb-converter-chip-background-image);
+  color: var(--gmnb-converter-chip-color);
+  box-shadow: var(--gmnb-converter-chip-shadow);
+  opacity: var(--gmnb-converter-chip-opacity);
+  filter: var(--gmnb-converter-chip-filter);
+  transform: var(--gmnb-converter-chip-transform);
+  transition: var(--gmnb-converter-chip-transition);
+  font-weight: var(--gmnb-converter-chip-font-weight);
+}
+.wc-inert box.wc-chip:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-converter-chip-icon-color);
+}
+.wc-inert box.wc-chip.wc-chip-whimsy:disabled:not(.wc-off) {
+  background-color: var(--gmnb-converter-chip-checked-background-color);
+  background-image: var(--gmnb-converter-chip-checked-background-image);
+  color: var(--gmnb-converter-chip-checked-color);
+  box-shadow: var(--gmnb-converter-chip-checked-shadow);
+  opacity: var(--gmnb-converter-chip-checked-opacity);
+  filter: var(--gmnb-converter-chip-checked-filter);
+  transform: var(--gmnb-converter-chip-checked-transform);
+  transition: var(--gmnb-converter-chip-checked-transition);
+  font-weight: var(--gmnb-converter-chip-checked-font-weight);
+}
+.wc-inert box.wc-chip.wc-chip-whimsy:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-converter-chip-checked-icon-color);
+}
+/* end control */
+
+.wc-supp > flowboxchild {
+  padding: 0;
+  margin: 0;
+  background: none;
 }
 
 /* -------------------------------------------------------- graphing */
