@@ -708,6 +708,7 @@ impl Window {
         hub.attach(&win);
 
         let backdrop = Backdrop::default();
+        backdrop.set_hub(&hub);
         apply_backdrop(
             &win,
             &backdrop,
@@ -1172,6 +1173,10 @@ impl Window {
         self.title.set_text(mode.title());
         page.activate(mode);
         self.stack.set_visible_child_name(mode.page().key());
+        // The theme's layers hear of every change after the first page.
+        if self.page_generation.get() > 1 {
+            self.ctx.hub.layers().mode_changed(&page.widget());
+        }
 
         while let Some(c) = self.header_end.first_child() {
             self.header_end.remove(&c);

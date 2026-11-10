@@ -77,20 +77,6 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    /// TRANSITION: where 0.2 bloomed a pulse in its aurora. Each call
-    /// becomes an event for the theme's layers (`press`, `result`,
-    /// `error`; docs/theming.md, "Where events come from"); until the
-    /// layers are drawn, nothing happens.
-    pub fn pulse_at(
-        &self,
-        _widget: &impl IsA<gtk::Widget>,
-        _x: f32,
-        _y: f32,
-        _color: [f32; 3],
-        _strength: f32,
-    ) {
-    }
-
     /// A flyout of the page's own keys, an autohide popover, which holds
     /// a grab: its keys go the window's way (Enter on a key is "=", what
     /// is typed is the calculator's), and a click in it draws no focus

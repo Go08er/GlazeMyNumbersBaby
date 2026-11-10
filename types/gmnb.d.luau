@@ -769,8 +769,9 @@ export type FieldSpec = {
 	quality: number?,
 }
 
--- One character of the display's value, laid out by the app.
-export type Glyph = { index: number, x: number, y: number, w: number, h: number }
+-- One character of the display's value, laid out by the app. A glyph of
+-- the value before a change (frame.value.previous) carries previous = true.
+export type Glyph = { index: number, x: number, y: number, w: number, h: number, previous: boolean? }
 
 export type Draw = {
 	-- Shapes.
@@ -782,8 +783,9 @@ export type Draw = {
 	border: (self: Draw, x: number, y: number, w: number, h: number, radius: Radius, width: number, color: Color) -> (),
 	shadow: (self: Draw, x: number, y: number, w: number, h: number, radius: Radius, shadow: Shadow) -> (),
 	-- Text and pictures.
-	text: (self: Draw, text: string, x: number, y: number, font: Font, paint: Paint) -> (),
-	text_size: (self: Draw, text: string, font: Font) -> (number, number),
+	-- The font is laid onto the style's body text; nil is that font.
+	text: (self: Draw, text: string, x: number, y: number, font: Font?, paint: Paint) -> (),
+	text_size: (self: Draw, text: string, font: Font?) -> (number, number),
 	glyph: (self: Draw, glyph: Glyph, paint: Paint) -> (),
 	image: (self: Draw, image: Picture, x: number, y: number, w: number, h: number, options: ImageOptions?) -> (),
 	tile: (self: Draw, image: Picture, x: number, y: number, w: number, h: number) -> (),
@@ -819,6 +821,8 @@ export type Event = {
 	kind: "press" | "result" | "error" | "show" | "option" | "mode",
 	-- Seconds since it happened.
 	age: number,
+	-- (An option change comes from nowhere in particular: its rect is the
+	-- layer's own area.)
 	-- Where: the press point, or the middle of `rect`. In the layer's
 	-- coordinates, like `rect` (the control, the display, the keypad).
 	x: number,

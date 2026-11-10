@@ -23,9 +23,14 @@ like: the same as DGMNB.
 ## What is drawn so far
 
 The style pipeline is in: a theme's `style` restyles the window, the keys,
-segmented controls and the History/Memory switch, and its options show in
-Settings. The other elements are accepted (a theme returning them is
-checked) but still drawn the old way from the theme's tokens, and the draw
-layers (`background`, `keypad`, `display`, `overlay`) are kept but not
-drawn yet: Aurora shows its glass keys over a plain backdrop until they
-are.
+segmented controls, the History/Memory switch and the readout, and its
+options show in Settings, a choice with a `preview` as tiles the theme
+draws. The other elements are accepted (a theme returning them is checked)
+but still drawn the old way from the theme's tokens.
+
+The draw layers are in: `background`, `keypad`, `display` and `overlay`
+run from the theme's Luau, on the app's frame clock and events. Aurora's
+drift, grain, pulses, ripples, pointer light, key cascade and every
+effect of its readout are in its `theme.luau`. Pictures from files
+(`gmnb.image`) are sized and counted but not drawn yet: decoding them
+comes with the media chapter's code.

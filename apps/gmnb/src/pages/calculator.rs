@@ -13,7 +13,7 @@ use gtk::{gdk, glib};
 use super::{Ctx, Page};
 use crate::widgets::bitflip::BitFlip;
 use crate::widgets::calc_panel::{CalcPanel, MemOp};
-use crate::widgets::display::{Change, Display};
+use crate::widgets::display::{Change, Display, Mode};
 use crate::widgets::icon::{PathIcon, icon_toggle, paths};
 use crate::widgets::keypad::Keypad;
 use crate::widgets::width_bin::{Cells, FixedBin, Strip, WidthBin};
@@ -45,9 +45,6 @@ pub struct CalculatorPage {
     mem_toggles: RefCell<Vec<gtk::Button>>,
     /// The programmer bar's M▾, shown wide or narrow.
     prog_mem_toggle: RefCell<Option<gtk::Button>>,
-    /// The keys whose labels have scripts, and their labels as given
-    /// (`label_key`).
-    key_labels: RefCell<Vec<(Keypad, u32, String)>>,
     angle_btn: RefCell<Option<gtk::Button>>,
     fe_btn: RefCell<Option<gtk::ToggleButton>>,
     second: Cell<bool>,
@@ -76,13 +73,6 @@ pub struct CalculatorPage {
     left: Cell<bool>,
 }
 
-/// What a press's pulse is drawn in (`CalculatorPage::pulse_colors`).
-struct Pulse {
-    accent: [f32; 3],
-    hot_a: [f32; 3],
-    error: [f32; 3],
-}
-
 fn text_button(label: &str, tip: &str) -> gtk::Button {
     let b = gtk::Button::with_label(label);
     b.add_css_class("wc-mem");
@@ -96,7 +86,8 @@ fn text_button(label: &str, tip: &str) -> gtk::Button {
 /// (the programmer bar's, `text_button`).
 fn chevron_menu(ctx: &Ctx, label: &str, class: &str, popover: &gtk::Popover) -> gtk::MenuButton {
     // The arrow (from a fallback font) in a line box of its own, a pixel
-    // high: the label's line keeps Inter's height (`script_markup`).
+    // high: the label's line keeps Inter's height (Pango reads a
+    // `line_height` above 1024 as Pango units).
     let text = gtk::Label::new(None);
     text.set_markup(&format!(
         "{} <span line_height=\"1025\">▾</span>",
@@ -198,7 +189,6 @@ impl CalculatorPage {
             mem_buttons: RefCell::default(),
             mem_toggles: RefCell::default(),
             prog_mem_toggle: RefCell::default(),
-            key_labels: RefCell::default(),
             angle_btn: RefCell::default(),
             fe_btn: RefCell::default(),
             second: Cell::new(false),
@@ -266,21 +256,6 @@ impl CalculatorPage {
             }
         });
 
-        {
-            let weak = Rc::downgrade(&page);
-            ctx.hub.subscribe(move |s| {
-                if let Some(p) = weak.upgrade() {
-                    p.display.set_scheme(*s);
-                    for k in p.keypads.borrow().values() {
-                        k.set_scheme(*s);
-                    }
-                    for k in p.flyouts.borrow().iter() {
-                        k.set_scheme(*s);
-                    }
-                }
-            });
-        }
-
         if let Some(state) = ctx
             .store
             .page_state(appcore::settings::CALCULATOR_PAGE)
@@ -311,37 +286,23 @@ impl CalculatorPage {
             row.set_gap(gap);
         }
         self.sync_display();
-        self.relabel_scripts();
     }
 
-    /// The readout's height and its value's largest size for the mode
-    /// shown (`display.heights`, `display.sizes`).
+    /// The readout's mode, the one shown: the readout takes its value's
+    /// largest size and its height from the style by it (`display.sizes`,
+    /// `display.heights`), and its bin holds it at that height.
     fn sync_display(&self) {
-        let style = self.ctx.hub.style();
-        let key = if self.compact.get() {
-            "compact"
+        let mode = if self.compact.get() {
+            Mode::Compact
         } else {
             match self.vm.try_borrow().map(|vm| vm.mode()) {
-                Ok(CalcMode::Scientific) => "scientific",
-                Ok(CalcMode::Programmer) => "programmer",
-                _ => "standard",
+                Ok(CalcMode::Scientific) => Mode::Scientific,
+                Ok(CalcMode::Programmer) => Mode::Programmer,
+                _ => Mode::Standard,
             }
         };
-        let part = |path: &str| match style.get(path) {
-            Some(Value::Record(r)) => r.get(key).cloned(),
-            _ => None,
-        };
-        let size = match part("display.sizes") {
-            Some(Value::Number(n)) => n as f32,
-            _ => appcore::metrics::text::DISPLAY_VALUE.size,
-        };
-        let height = match part("display.heights") {
-            Some(Value::Number(n)) => n as f32,
-            // "auto": room for the expression's line and the value.
-            _ => 1.6 * style.tokens.text.small.size + 1.28 * size + 12.0,
-        };
-        self.display_bin.set_height(height.round() as i32);
-        self.display.set_max_size(size);
+        self.display.set_mode(mode);
+        self.display_bin.set_height(self.display.height_wanted());
     }
 
     /// The narrow window's sheet, DGMNB's: its share of the page's height,
@@ -360,15 +321,8 @@ impl CalculatorPage {
 
     fn add_keypad(self: &Rc<Self>, layout: keys::Layout, main_for: Option<CalcMode>) -> Keypad {
         let pad = Keypad::new();
-        let mut scripted = Vec::new();
         for (key, r, c) in layout {
-            if key.label.contains("<s") {
-                scripted.push((key.id, key.label.clone()));
-            }
             pad.add(key, r, c, 1, 1);
-        }
-        for (id, label) in scripted {
-            self.label_key(&pad, id, &label);
         }
         let weak = Rc::downgrade(self);
         let pad_ = pad.clone();
@@ -383,47 +337,10 @@ impl CalculatorPage {
             }
             None => self.flyouts.borrow_mut().push(pad.clone()),
         }
-        pad.set_scheme(self.ctx.hub.scheme());
         self.ctx
             .hub
             .subscribe_style(&pad, |pad, style| pad.set_style(style));
         pad
-    }
-
-    /// Sets key `id`'s label from `label` (the keys' `<sup>`/`<sub>`
-    /// markup) in the key's own size (`script_markup`), and keeps it to be
-    /// set again when the style's sizes change.
-    fn label_key(&self, pad: &Keypad, id: u32, label: &str) {
-        let Some(button) = pad.button(id) else {
-            return;
-        };
-        let path = if button.has_css_class("wc-num") {
-            "keys.number"
-        } else if button.has_css_class("wc-op") {
-            "keys.operator"
-        } else if button.has_css_class("wc-eq") {
-            "keys.equals"
-        } else {
-            "keys.func"
-        };
-        let style = self.ctx.hub.style();
-        let size = style
-            .control(path)
-            .map_or(appcore::metrics::text::KEY.size, |c| c.font.size);
-        pad.set_key_label(id, &script_markup(label, size));
-        let mut labels = self.key_labels.borrow_mut();
-        labels.retain(|(p, i, _)| !(p == pad && *i == id));
-        if label.contains("<s") {
-            labels.push((pad.clone(), id, label.to_string()));
-        }
-    }
-
-    /// The scripted labels again, in the style's sizes.
-    fn relabel_scripts(&self) {
-        let labels: Vec<(Keypad, u32, String)> = self.key_labels.borrow().clone();
-        for (pad, id, label) in labels {
-            self.label_key(&pad, id, &label);
-        }
     }
 
     /// Upstream's OpenParenthesisButton_GotFocus (Scientific and
@@ -978,36 +895,19 @@ impl CalculatorPage {
 
     // ------------------------------------------------------------- input
 
-    /// The colours a press's pulse is drawn in, from the style.
-    fn pulse_colors(&self) -> Pulse {
-        let style = self.ctx.hub.style();
-        let c = &style.tokens.colors;
-        let rgb = |c: gmnb_theme::types::Rgba| [c[0], c[1], c[2]];
-        let equals = style
-            .control("keys.equals")
-            .and_then(|e| e.background.0.first().map(|p| p.samples()[0]))
-            .unwrap_or(c.accent);
-        Pulse {
-            accent: rgb(c.accent_text),
-            hot_a: rgb(equals),
-            error: rgb(c.danger),
-        }
-    }
-
     fn press_from(self: &Rc<Self>, widget: &impl IsA<gtk::Widget>, b: B) {
-        let (w, h) = (widget.width() as f32, widget.height() as f32);
-        let s = self.pulse_colors();
-        self.ctx.pulse_at(widget, w / 2.0, h / 2.0, s.accent, 0.5);
+        use crate::layers::{Action as Does, Source};
+        let memory = (b != B::FToE).then_some(Does::Memory);
+        self.ctx
+            .hub
+            .layers()
+            .pressed(widget, Source::Button, memory);
         self.vm.borrow_mut().press(b);
         self.sync(None);
     }
 
     fn on_key(self: &Rc<Self>, pad: &Keypad, id: u32, x: f32, y: f32) {
-        let s = self.pulse_colors();
-        let hot = id == B::Equals.id();
-        let color = if hot { s.hot_a } else { s.accent };
-        self.ctx
-            .pulse_at(pad, x, y, color, if hot { 1.4 } else { 0.55 });
+        self.ctx.hub.layers().key_pressed(pad, id, Some((x, y)));
         match id {
             KEY_SECOND => {
                 self.second.set(!self.second.get());
@@ -1118,7 +1018,6 @@ impl CalculatorPage {
             let second = self.second.get();
             for f in &keys::SECOND_FLIPS {
                 pad.set_key(f.normal.id(), f.label(second), f.tip(second));
-                self.label_key(pad, f.normal.id(), f.label(second));
             }
             if let Some(b) = pad.button(KEY_SECOND) {
                 set_on(&b, self.second.get());
@@ -1129,7 +1028,6 @@ impl CalculatorPage {
             for t in keys::TRIG {
                 let label = keys::trig_label(t.4, inv, hyp);
                 trig.set_key(t.0.id(), &label, &keys::trig_tip(t.4, inv, hyp));
-                self.label_key(trig, t.0.id(), &label);
             }
             if let Some(b) = trig.button(KEY_TRIG_SECOND) {
                 set_on(&b, self.trig_inv.get());
@@ -1222,7 +1120,7 @@ impl CalculatorPage {
             } else {
                 "(".to_string()
             };
-            self.label_key(pad, B::OpenParenthesis.id(), &open);
+            pad.set_key_label(B::OpenParenthesis.id(), &open);
         }
         // Upstream enablement rules (radix digits, decimal, operators while
         // an error is shown, …) for every engine key, flyouts included.
@@ -1308,18 +1206,6 @@ impl CalculatorPage {
             );
         }
 
-        if matches!(change, Change::Result | Change::Error) {
-            let s = self.pulse_colors();
-            let (w, h) = (self.display.width() as f32, self.display.height() as f32);
-            let color = if change == Change::Error {
-                s.error
-            } else {
-                s.hot_a
-            };
-            self.ctx
-                .pulse_at(&self.display, w * 0.8, h * 0.65, color, 1.1);
-        }
-
         self.focus_after_emptied(history_emptied, memory_emptied);
     }
 
@@ -1371,46 +1257,11 @@ impl CalculatorPage {
                 .unwrap_or(other.id()),
         };
         if let Some(pad) = self.keypads.borrow().get(&mode).cloned()
-            && let Some((x, y)) = pad.flash(id)
+            && pad.flash(id).is_some()
         {
-            let s = self.pulse_colors();
-            self.ctx.pulse_at(
-                &pad,
-                x,
-                y,
-                if b == B::Equals { s.hot_a } else { s.accent },
-                0.6,
-            );
+            self.ctx.hub.layers().key_pressed(&pad, id, None);
         }
     }
-}
-
-/// A key's label as DGMNB sets it (`text.rs` `layout_markup`): what
-/// `<sup>` and `<sub>` hold at 62% of the label's size (`size` px), raised
-/// 0.36 of it or lowered 0.16. Each script sits in a line box of its own,
-/// a pixel high, so the label's line keeps its plain text's height and
-/// the toolkit centres the label by that, as DGMNB centres it by its
-/// capitals (docs/theming.md, "Text in its place"). (Pango reads a
-/// `line_height` above 1024 as Pango units, and one up to 1024 as a
-/// factor.)
-pub fn script_markup(label: &str, size: f32) -> String {
-    /// What a script is of its label's size.
-    const SCRIPT_SCALE: f32 = 0.62;
-    let units = |em: f32| (em * size * gtk::pango::SCALE as f32).round() as i32;
-    // At its own optical size, as DGMNB sets it (the label's is its own).
-    let (low, high) = gmnb_theme::types::OPSZ_RANGE;
-    let opsz = (size * SCRIPT_SCALE).clamp(low, high);
-    let open = |rise: i32| {
-        format!(
-            "<span size=\"62%\" rise=\"{rise}\" line_height=\"1025\" font=\"@opsz={}\">",
-            gmnb_theme::css::num(opsz)
-        )
-    };
-    label
-        .replace("<sup>", &open(units(0.36)))
-        .replace("<sub>", &open(-units(0.16)))
-        .replace("</sup>", "</span>")
-        .replace("</sub>", "</span>")
 }
 
 /// A button's label, set anew (GTK makes a new label for it) and laid

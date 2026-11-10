@@ -9,8 +9,10 @@ use adw::prelude::*;
 use std::cell::RefCell;
 
 use gmnb_theme::OptionValue;
+use gmnb_theme::layer::PREVIEW_SIZE;
 use gmnb_theme::theme::{OptionDef, OptionKind};
 
+use crate::layers::tile::Tile;
 use crate::pages::Ctx;
 use crate::settings::Persist;
 use crate::theme::{parse_hex, rgba, to_hex};
@@ -221,6 +223,9 @@ struct ThemeSettings {
     options_box: gtk::Box,
     /// Each option row and its option, to show or hide as `visible` says.
     rows: RefCell<Vec<(gtk::Widget, OptionDef)>>,
+    /// Each tile a `preview` drew, with its option and its choice: they
+    /// are drawn again when `ctx` changes.
+    tiles: RefCell<Vec<(Tile, OptionDef, String)>>,
     /// Set while the list or the options are being built: their widgets'
     /// signals then change nothing.
     building: std::cell::Cell<bool>,
@@ -274,6 +279,7 @@ impl ThemeSettings {
             options,
             options_box,
             rows: RefCell::default(),
+            tiles: RefCell::default(),
             building: std::cell::Cell::new(false),
             pending: Rc::default(),
         });
@@ -416,7 +422,16 @@ impl ThemeSettings {
             self.ctx.store.persist();
         }
         self.sync_visible();
+        self.draw_tiles();
         self.sync_report();
+    }
+
+    /// Has the theme draw every tile again (still pictures, for the
+    /// `ctx` there is now).
+    fn draw_tiles(&self) {
+        for (tile, option, choice) in self.tiles.borrow().iter() {
+            tile.set_list(self.ctx.hub.preview(option, choice));
+        }
     }
 
     fn sync_visible(&self) {
@@ -433,6 +448,7 @@ impl ThemeSettings {
             self.options_box.remove(&child);
         }
         self.rows.borrow_mut().clear();
+        self.tiles.borrow_mut().clear();
         let defs = self.ctx.hub.option_defs();
         let values = self.ctx.hub.option_values();
         self.options.set_visible(!defs.is_empty());
@@ -506,8 +522,94 @@ impl ThemeSettings {
                 });
                 row.upcast()
             }
-            // With a preview a choice becomes a grid of drawn tiles; until
-            // previews are drawn, it is a list of its labels like any other.
+            // With a preview a choice is a grid of tiles the theme draws,
+            // each captioned and named by its label, one selected.
+            OptionKind::Choice {
+                choices,
+                preview: Some(_),
+            } => {
+                let ids: Vec<String> = choices.iter().map(|c| c.id.clone()).collect();
+                let flow = gtk::FlowBox::builder()
+                    .selection_mode(gtk::SelectionMode::Single)
+                    .max_children_per_line(5)
+                    .min_children_per_line(3)
+                    .homogeneous(true)
+                    .row_spacing(10)
+                    .column_spacing(10)
+                    .css_classes(["wc-palettes"])
+                    .build();
+                flow.update_property(&[gtk::accessible::Property::Label(&def.label)]);
+                let (w, h) = PREVIEW_SIZE;
+                for choice in choices {
+                    let tile = Tile::new(w, h);
+                    tile.set_halign(gtk::Align::Center);
+                    tile.set_list(self.ctx.hub.preview(def, &choice.id));
+                    self.tiles
+                        .borrow_mut()
+                        .push((tile.clone(), def.clone(), choice.id.clone()));
+                    let label = gtk::Label::new(Some(&choice.label));
+                    label.add_css_class("caption");
+                    let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
+                    b.append(&tile);
+                    b.append(&label);
+                    let child = gtk::FlowBoxChild::builder().child(&b).build();
+                    child.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
+                    flow.append(&child);
+                    if matches!(value, Some(OptionValue::Text(v)) if *v == choice.id) {
+                        flow.select_child(&child);
+                    }
+                }
+                flow.connect_selected_children_changed(move |f| {
+                    let Some(t) = weak.upgrade() else { return };
+                    if t.building.get() {
+                        return;
+                    }
+                    // GTK carries out an assistive technology's Selection
+                    // request whether or not the grid is covered
+                    // (crate::inert), and a single-selection grid can be
+                    // left with none. Covered, or left empty, it shows the
+                    // saved choice again and nothing is applied (R15-M-02).
+                    let saved = match t.ctx.hub.option_values().get(&id) {
+                        Some(OptionValue::Text(v)) => ids.iter().position(|c| c == v),
+                        _ => None,
+                    };
+                    let chosen = f
+                        .selected_children()
+                        .first()
+                        .map(|c| c.index() as usize)
+                        .filter(|at| *at < ids.len());
+                    let allowed = chosen.filter(|at| Some(*at) == saved || !t.ctx.layers.covers(f));
+                    let Some(at) = allowed else {
+                        if let Some(child) = saved.and_then(|i| f.child_at_index(i as i32)) {
+                            f.select_child(&child);
+                        }
+                        return;
+                    };
+                    if saved != Some(at) {
+                        t.changed(&id, OptionValue::Text(ids[at].clone()), false);
+                    }
+                });
+                // The desktop's accent, light and dark: the tiles follow.
+                let weak = Rc::downgrade(self);
+                self.ctx.hub.subscribe_style(&flow, move |_, _| {
+                    if let Some(t) = weak.upgrade() {
+                        t.draw_tiles();
+                    }
+                });
+                let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
+                if let Some(description) = def.description.as_deref().filter(|d| !d.is_empty()) {
+                    column.append(
+                        &gtk::Label::builder()
+                            .label(description)
+                            .wrap(true)
+                            .xalign(0.0)
+                            .css_classes(["caption", "dim-label"])
+                            .build(),
+                    );
+                }
+                column.append(&flow);
+                column.upcast()
+            }
             OptionKind::Choice { choices, .. } => {
                 let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
                 let ids: Vec<String> = choices.iter().map(|c| c.id.clone()).collect();
