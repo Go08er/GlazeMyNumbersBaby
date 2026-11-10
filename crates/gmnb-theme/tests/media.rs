@@ -1299,10 +1299,26 @@ fn a_previews_fields_are_always_coloured() {
 const W: usize = 760;
 const H: usize = 640;
 
+/// The limits a theme really has, in an optimised build. An unoptimised
+/// one (`cargo test`, as CI runs it) on a slower machine takes several
+/// times as long over the same work, and is given four times the frame's
+/// limit: enough to catch a frame gone badly wrong, not a slow machine.
+/// `cargo test --release` holds the real limit.
+fn real_limits() -> Limits {
+    let real = Limits::default();
+    if cfg!(debug_assertions) {
+        Limits {
+            frame: real.frame * 4,
+            ..real
+        }
+    } else {
+        real
+    }
+}
+
 fn swirls() -> Theme {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/themes/swirls");
-    // The limits a theme really has.
-    match Theme::load(Source::folder("swirls", &dir), Limits::default()) {
+    match Theme::load(Source::folder("swirls", &dir), real_limits()) {
         Ok(theme) => theme,
         Err(e) => panic!("{e}"),
     }
@@ -1465,7 +1481,7 @@ fn the_swirl_computes_its_field_ten_times_a_second_and_glides_between() {
     let now = clock(&theme, 1000.0);
     let ctx = swirl_ctx("12", "background");
     // A second at thirty frames a second, under the limits a theme has
-    // (8 ms of processor time a frame).
+    // (8 ms of processor time a frame; see `real_limits`).
     let mut seen = std::collections::HashSet::new();
     for i in 0..=30 {
         now.set(1000.0 + f64::from(i) / 30.0);

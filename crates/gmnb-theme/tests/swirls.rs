@@ -1,4 +1,5 @@
-//! Swirls, the built-in theme, in the real engine under the real limits:
+//! Swirls, the built-in theme, in the real engine under the real limits
+//! (four times the frame's in an unoptimised build, `limits`):
 //! what its layers draw, what they ask for, what a frame costs at any
 //! window size, and that every pixel of its paint is a colour the
 //! readability tests have been through (`tests/css.rs`,
@@ -19,9 +20,26 @@ use gmnb_theme::{Ctx, Limits, OptionValue, Style};
 const BANDS: [&str; 6] = ["party", "lava", "lagoon", "orchid", "absinthe", "marble"];
 const GLASS: [&str; 3] = ["clear", "smoked", "panel"];
 
-/// Swirls, with the limits a theme really has.
+/// The limits a theme really has, in an optimised build. An unoptimised
+/// one (`cargo test`, as CI runs it) on a slower machine takes several
+/// times as long over the same work, and is given four times the frame's
+/// limit: enough to catch a frame gone badly wrong, not a slow machine.
+/// `cargo test --release` holds the real limit.
+fn limits() -> Limits {
+    let real = Limits::default();
+    if cfg!(debug_assertions) {
+        Limits {
+            frame: real.frame * 4,
+            ..real
+        }
+    } else {
+        real
+    }
+}
+
+/// Swirls, with the limits a theme really has (`limits`).
 fn swirls() -> Theme {
-    let theme = Theme::load(Source::built_in("swirls").unwrap(), Limits::default())
+    let theme = Theme::load(Source::built_in("swirls").unwrap(), limits())
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(theme.notes.is_empty(), "{:#?}", theme.notes);
     theme
@@ -469,7 +487,7 @@ fn every_pixel_of_the_paint_is_one_of_its_ramps_colours() {
 /// eight times over), and nothing is refused.
 #[test]
 fn the_background_stays_within_its_limits_at_any_size() {
-    let limit = Limits::default().frame.as_secs_f64() * 1000.0;
+    let limit = limits().frame.as_secs_f64() * 1000.0;
     let mut report = Vec::new();
     for (w, h) in [
         (300.0, 400.0),
@@ -535,7 +553,8 @@ fn the_background_stays_within_its_limits_at_any_size() {
         }
         let (mean, worst) = mean_and_worst(&times);
         report.push(format!("{w}x{h}: mean {mean:.2} ms, worst {worst:.2} ms"));
-        // The limit is 8 ms; an unoptimised build is given all of it.
+        // The limit is 8 ms, and a frame is held to three quarters of it
+        // (an unoptimised build: to all of the four times it has).
         let most = if cfg!(debug_assertions) {
             limit
         } else {
@@ -675,7 +694,7 @@ fn what_a_frame_costs() {
     // average on the machine this was written on, and with six stirs and
     // a ripple alive at once a quarter; here they are held to a quarter
     // and a half, for a machine that is busy or slower.
-    let limit = Limits::default().frame.as_secs_f64() * 1000.0;
+    let limit = limits().frame.as_secs_f64() * 1000.0;
     for (times, share) in [
         (&flowing, 4.0),
         (&typing, 2.0),
