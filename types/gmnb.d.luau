@@ -254,8 +254,6 @@ export type Layout = {
 	converter: { margin: Spacing?, gap: number?, gap_wide: number?, keypad_width: number? }?,
 	date: { margin: Spacing?, gap: number?, max_width: number? }?,
 	graph: { margin: Spacing?, gap: number?, side_width: number?, pad_height: number? }?,
-	-- A new window's size, and the smallest it can be made.
-	window: { width: number?, height: number?, min_width: number?, min_height: number? }?,
 }
 
 -- Milliseconds; 0 = no animation. The base look has them all at 0.
@@ -361,6 +359,9 @@ export type DisplayStyle = {
 		glow: (Glow | false)?,
 	}?,
 	expression: Text?,
+	-- An expression too long for its line shrinks down to this size before
+	-- it is cut short at its start.
+	expression_min_size: number?,
 	-- Shadows around the whole readout (see-through windows).
 	halo: { Shadow }?,
 }
@@ -476,8 +477,10 @@ export type CanvasStyle = {
 	-- A blurred copy under each curve: `width` times the line's width.
 	glow: ({ blur: number, width: number, opacity: number } | false)?,
 	trace: {
-		-- The dashed cross-hair: the curve's colour at this opacity.
+		-- The cross-hair: the curve's colour at this opacity, dashed if
+		-- `hair_dash` gives the lengths of dash and gap.
 		hair_opacity: number?,
+		hair_dash: ({ number } | false)?,
 		-- A disc behind the dot, `grow` pixels larger: a colour, or
 		-- "series" for the curve's colour at `opacity`.
 		halo: ({ grow: number, color: Color | "series", opacity: number? } | false)?,

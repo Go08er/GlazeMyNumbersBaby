@@ -430,7 +430,6 @@ local function style(ctx: Ctx): Style
 			converter = { margin = { 0, 12, 10, 12 }, gap = 10, gap_wide = 24 },
 			date = { margin = { 4, 16, 16, 16 }, gap = 14 },
 			graph = { margin = { 0, 10, 10, 10 }, gap = 10, side_width = 340 },
-			window = { width = 380, height = 640, min_width = 320, min_height = 480 },
 		},
 		-- Drawn by the toolkit, as in 0.2, in the `stock` colours.
 		native = { "segmented", "slider", "switch", "scrollbar", "menu", "toast", "tooltip", "button", "card", "focus" },
@@ -528,6 +527,7 @@ local function style(ctx: Ctx): Style
 				glow = false,
 			},
 			expression = { font = outfit(15), color = alpha(fg, if see then 0.8 else 0.55) },
+			expression_min_size = 15,
 			halo = if see
 				then { { blur = 3, color = alpha(display_base, 0.9) }, { blur = 10, color = alpha(display_base, 0.75) } }
 				else {},
@@ -894,6 +894,7 @@ local function style(ctx: Ctx): Style
 				glow = if dark then { blur = 6, width = 3.2, opacity = 0.55 } else false,
 				trace = {
 					hair_opacity = 0.45,
+					hair_dash = { 4, 4 },
 					halo = { grow = 3, color = "series", opacity = 0.25 },
 					ring = { width = 1.5, color = alpha(white, 0.9) },
 					bubble = {
