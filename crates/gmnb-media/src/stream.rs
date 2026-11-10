@@ -634,6 +634,30 @@ impl Stream {
         premultiply(&mut out);
         Ok((out, decoded))
     }
+
+    /// One frame on the way to frame `index` ([`Stream::seek`] a frame at
+    /// a time): `Some` with the frame, premultiplied, and how many frames
+    /// this step decoded (0 or 1) once there; `None` after decoding a
+    /// frame on the way.
+    pub fn step(&mut self, index: u32) -> Result<Option<(Vec<u8>, u32)>, Error> {
+        if self.place.is_some_and(|p| p > index) {
+            self.rewind();
+        }
+        let mut decoded = 0;
+        if self.place != Some(index) {
+            if let Err(e) = self.advance() {
+                self.rewind();
+                return Err(e);
+            }
+            decoded = 1;
+            if self.place != Some(index) {
+                return Ok(None);
+            }
+        }
+        let mut out = self.canvas.clone();
+        premultiply(&mut out);
+        Ok(Some((out, decoded)))
+    }
 }
 
 #[cfg(test)]

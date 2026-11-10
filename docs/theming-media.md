@@ -1062,7 +1062,14 @@ frame, as a still is.
 decode and composite (the thread's own, `CLOCK_THREAD_CPUTIME_ID`: a
 machine busy with other things doesn't make an animation rest longer),
 the thread does not start another for `3d`. One thread serves all the
-theme's animations in turn, so the cap covers them together.
+theme's animations in turn, so the cap covers them together. The frames
+decoded and dropped on the way to one far ahead, or from the start again
+to one behind, are frames like any other: the thread rests after each
+(the first build decoded them back to back, a whole core for as long as
+that took: seconds, for a long file a theme's own clock plays
+backwards). It hears what is asked meanwhile, goes on to a later frame of
+the same animation if that is asked for, and ends at once if its player
+has gone, between two frames.
 
 **Too heavy.** The player keeps the mean processor time a frame of each
 animation takes: of the frames decoded so far and, once there are as
