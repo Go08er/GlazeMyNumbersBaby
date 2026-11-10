@@ -165,6 +165,57 @@ impl Settings {
         if let Value::Object(saved) = entry {
             saved.insert(id.to_string(), value);
         }
+        self.fit_theme_options(theme, id);
+    }
+
+    /// Keeps `theme_options` within the budget of a preference
+    /// (`appcore::settings::FIELD_BUDGET`): over it, a save leaves the
+    /// whole field out, every theme's options and Aurora's too, which then
+    /// come from 0.2's keys again. What leaves is what a theme no longer
+    /// has, most likely (a theme whose option ids change piles them up):
+    /// from the theme with the most saved, its largest option, and never
+    /// the option just set (`theme`, `id`), unless nothing else is left.
+    /// A theme left with none stays as an empty table (Aurora's means
+    /// 0.2's keys were already read).
+    fn fit_theme_options(&mut self, theme: &str, id: &str) {
+        fn size<T: Serialize>(v: &T) -> usize {
+            serde_json::to_vec(v).map_or(usize::MAX, |v| v.len())
+        }
+        while size(&self.theme_options) > appcore::settings::FIELD_BUDGET {
+            // (theme, option): the option to drop, in the fullest theme.
+            let drop = self
+                .theme_options
+                .iter()
+                .filter_map(|(name, saved)| {
+                    let Value::Object(saved) = saved else {
+                        return Some((size(saved), name.clone(), None));
+                    };
+                    let largest = saved
+                        .iter()
+                        .filter(|(option, _)| !(name == theme && *option == id))
+                        .max_by_key(|(option, v)| {
+                            (option.len() + size(v), std::cmp::Reverse((*option).clone()))
+                        })?;
+                    Some((size(saved), name.clone(), Some(largest.0.clone())))
+                })
+                .max_by_key(|(total, name, _)| (*total, std::cmp::Reverse(name.clone())));
+            match drop {
+                Some((_, name, None)) => {
+                    self.theme_options.remove(&name);
+                }
+                Some((_, name, Some(option))) => {
+                    if let Some(Value::Object(saved)) = self.theme_options.get_mut(&name) {
+                        saved.remove(&option);
+                    }
+                }
+                None => {
+                    if let Some(Value::Object(saved)) = self.theme_options.get_mut(theme) {
+                        saved.remove(id);
+                    }
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -459,5 +510,52 @@ mod tests {
         assert_eq!(backdrop_alpha(0.0), MIN_BACKGROUND_OPACITY as f32);
         assert_eq!(backdrop_alpha(7.0), 1.0);
         assert_eq!(backdrop_alpha(f64::NAN), 1.0);
+    }
+
+    /// `theme_options` is one preference under the settings store's
+    /// budget: over it, a save left the whole field out, every theme's
+    /// options with it, and Aurora came from 0.2's keys again (its
+    /// palette back as 0.2 had it). Options of themes that change their
+    /// option ids (here: made from the time) pile up in it.
+    #[test]
+    fn theme_options_stay_within_the_budget_of_a_preference() {
+        let mut s = Settings::default();
+        s.migrate();
+        s.palette = "ember".into(); // 0.2's key, to be ignored once moved
+        s.set_option("aurora", "palette", &text("abyss"));
+        for n in 0..400 {
+            let id = format!("option-{n}-{}", "x".repeat(60));
+            s.set_option("churn", &id, &text("v"));
+        }
+        s.active_theme = "aurora".into();
+        let dir = std::env::temp_dir().join(format!("gmnb-budget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let store = Store::load_from(path.clone());
+        *store.data.borrow_mut() = s;
+        let saved = store.save();
+        let again = Store::load_from(path);
+        again.data.borrow_mut().migrate();
+        let again = again.data.borrow().clone();
+        let _ = std::fs::remove_dir_all(&dir);
+        saved.expect("a save within every budget");
+        assert_eq!(again.options_of("aurora")["palette"], text("abyss"));
+        assert_eq!(again.active_theme, "aurora");
+    }
+
+    /// The option just set is kept while it can be, even when it is large.
+    #[test]
+    fn the_option_just_set_is_kept_while_it_fits() {
+        let mut s = Settings::default();
+        s.set_option("a", "old", &text(&"o".repeat(9_000)));
+        s.set_option("b", "old", &text(&"o".repeat(9_000)));
+        assert!(s.options_of("a").is_empty(), "the fuller theme's went");
+        assert_eq!(s.options_of("b").len(), 1);
+        s.set_option("b", "new", &text(&"n".repeat(9_000)));
+        assert!(s.options_of("b").contains_key("new"));
+        assert!(!s.options_of("b").contains_key("old"));
+        s.set_option("b", "huge", &text(&"h".repeat(40_000)));
+        assert!(s.options_of("b").is_empty(), "too big for the field");
     }
 }
