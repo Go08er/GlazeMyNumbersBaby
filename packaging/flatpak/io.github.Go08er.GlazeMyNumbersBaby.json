@@ -37,7 +37,7 @@
         "install -Dm644 packaging/io.github.Go08er.GlazeMyNumbersBaby.desktop -t /app/share/applications",
         "install -Dm644 packaging/io.github.Go08er.GlazeMyNumbersBaby.metainfo.xml -t /app/share/metainfo",
         "install -Dm644 packaging/icons/io.github.Go08er.GlazeMyNumbersBaby.svg -t /app/share/icons/hicolor/scalable/apps",
-        "install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/glazed/fonts/OFL-Jersey10.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt -t /app/share/licenses/io.github.Go08er.GlazeMyNumbersBaby"
+        "install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/glazed/fonts/OFL-Jersey10.txt apps/gmnb/themes/swirls/credits/ColorMix.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt -t /app/share/licenses/io.github.Go08er.GlazeMyNumbersBaby"
       ],
       "sources": [
         {

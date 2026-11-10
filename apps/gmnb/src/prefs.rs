@@ -1235,6 +1235,80 @@ mod tests {
         assert!(CORE_MATH.contains("Alexei Sibidanov") && CORE_MATH.contains("Permission is"));
     }
 
+    /// Every credit a built-in theme carries (About → Legal shows it) is
+    /// in every package: its file among GMNB's licences (Flatpak, Arch,
+    /// Fedora), a stanza of debian/copyright for its folder, and the
+    /// licence it names in each package's licence list. Swirls' (ly's
+    /// ColorMix, under the WTFPL) was in none.
+    #[test]
+    fn every_built_in_credit_is_in_every_package() {
+        use gmnb_theme::theme::{BUILT_IN, Source, Theme};
+        let flatpak = include_str!(
+            "../../../packaging/flatpak/io.github.Go08er.GlazeMyNumbersBaby.json"
+        );
+        let arch = include_str!("../../../packaging/arch/PKGBUILD");
+        let fedora = include_str!("../../../packaging/fedora/gmnb.spec");
+        let debian = include_str!("../../../packaging/debian/copyright");
+        // GMNB's own parts: Arch's package_gmnb, Fedora's main package.
+        let arch_gmnb = arch.split("package_gmnb()").nth(1).unwrap();
+        let arch_gmnb = arch_gmnb.split("package_dgmnb()").next().unwrap();
+        let fedora_license = fedora.lines().find(|l| l.starts_with("License:")).unwrap();
+        let fedora_files = fedora.split("%files\n").nth(1).unwrap();
+        let fedora_files = fedora_files.split("%files -n").next().unwrap();
+        // The licences a credit can name, by the words that name them.
+        const LICENCES: [(&str, &str); 2] =
+            [("SIL Open Font License", "OFL-1.1"), ("WTFPL", "WTFPL")];
+        let limits = gmnb_theme::Limits {
+            load: std::time::Duration::from_secs(20),
+            ..Default::default()
+        };
+        let mut missing = Vec::new();
+        for b in &BUILT_IN {
+            let theme = Theme::load(Source::built_in(b.id).unwrap(), limits.clone()).unwrap();
+            for (credit, (title, text)) in theme.def.credits.iter().zip(theme.credits()) {
+                let path = format!("apps/gmnb/themes/{}/{}", b.id, credit.file);
+                for (package, list) in [
+                    ("Flatpak", flatpak),
+                    ("Arch", arch_gmnb),
+                    ("Fedora", fedora_files),
+                ] {
+                    if !list.contains(&path) {
+                        missing.push(format!("{package} doesn't install {path} ({title})"));
+                    }
+                }
+                let stanza = debian.split("\n\n").find(|stanza| {
+                    stanza.lines().next().is_some_and(|first| {
+                        first
+                            .strip_prefix("Files: ")
+                            .and_then(|glob| glob.strip_suffix('*'))
+                            .is_some_and(|folder| !folder.is_empty() && path.starts_with(folder))
+                    })
+                });
+                for (words, spdx) in LICENCES.iter().filter(|(w, _)| text.contains(w)) {
+                    // (DEP-5: "License: MIT and WTFPL", and the text of
+                    // each in a paragraph of its own.)
+                    let names = |s: &str| {
+                        s.lines()
+                            .find_map(|l| l.strip_prefix("License: "))
+                            .is_some_and(|l| l.split_whitespace().any(|w| w == *spdx))
+                    };
+                    if !stanza.is_some_and(names)
+                        || !debian.contains(&format!("\nLicense: {spdx}\n "))
+                    {
+                        missing.push(format!("debian/copyright: {path} under {spdx} ({words})"));
+                    }
+                    if !fedora_license.contains(spdx) {
+                        missing.push(format!("Fedora's License has no {spdx} ({title})"));
+                    }
+                    if !arch_gmnb.contains(&format!("'{spdx}'")) {
+                        missing.push(format!("Arch's gmnb has no {spdx} ({title})"));
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+    }
+
     /// Every typeface GMNB bundles has its licence in About → Legal:
     /// Inter, and the Noto Sans subsets it falls back to (0.3 bundles
     /// them, as DGMNB does, whose About lists both).

@@ -36,6 +36,13 @@ Copyright: 2023 The Soft Type Project Authors (https://github.com/scfried/soft-t
 License: OFL-1.1
 Comment: Jersey 10, as its upstream ships it (commit d8446c4c, fonts/ttf/Jersey10-Regular.ttf).
 
+Files: apps/gmnb/themes/swirls/*
+Copyright: 2026 GMNB contributors
+License: MIT and WTFPL
+Comment: The swirl the Swirls theme draws is adapted from the ColorMix
+ animation of ly (src/animations/ColorMix.zig, https://github.com/fairyglade/ly),
+ released under the WTFPL, version 2. credits/ColorMix.txt says what was taken.
+
 Files: apps/dgmnb/assets/fonts/*
 Copyright: 2016 The Inter Project Authors (https://github.com/rsms/inter)
            2022-2025 The Noto Project Authors (https://github.com/notofonts)
@@ -135,6 +142,21 @@ License: OFL-1.1
  DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
  OTHER DEALINGS IN THE FONT SOFTWARE.
+
+License: WTFPL
+ DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+ Version 2, December 2004
+ .
+ Copyright (C) 2004 Sam Hocevar <sam@hocevar.net>
+ .
+ Everyone is permitted to copy and distribute verbatim or modified
+ copies of this license document, and changing it is allowed as long
+ as the name is changed.
+ .
+ DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+ TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+ .
+ 0. You just DO WHAT THE FUCK YOU WANT TO.
 
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a copy
