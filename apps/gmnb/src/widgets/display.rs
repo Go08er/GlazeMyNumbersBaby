@@ -363,7 +363,10 @@ impl Display {
 
         let change = if is_error { Change::Error } else { change };
         imp.change.set(change);
-        if change != Change::None && animations_enabled() && self.is_mapped() {
+        // TRANSITION: the built-in animations stand in for a theme's
+        // `display` layer; the base look has none.
+        let effects = imp.scheme.get().is_some_and(|s| s.display_effects);
+        if change != Change::None && effects && animations_enabled() && self.is_mapped() {
             imp.anim_start.set(Some(Instant::now()));
             self.ensure_ticking();
         } else {
@@ -591,7 +594,12 @@ impl Display {
         };
 
         let value_rect = graphene::Rect::new(0.0, base_y - 4.0, w, g.height + 8.0);
-        let (tint_top, tint_bottom) = if imp.error.get() {
+        // TRANSITION: without a `display` layer the value is the text
+        // colour, flat (`display.value.color`), and has no glow.
+        let effects = scheme.display_effects;
+        let (tint_top, tint_bottom) = if !effects {
+            (rgba(scheme.fg, 1.0), rgba(scheme.fg, 1.0))
+        } else if imp.error.get() {
             (rgba(scheme.fg, 0.92), rgba(scheme.hot_a, 0.95))
         } else if scheme.dark {
             (
@@ -606,7 +614,7 @@ impl Display {
         };
 
         // Glow.
-        if scheme.dark && n > 0 {
+        if effects && scheme.dark && n > 0 {
             s.push_blur((g.size * 0.30) as f64);
             draw_glyphs(s, rgba(scheme.accent, 0.42));
             s.pop();

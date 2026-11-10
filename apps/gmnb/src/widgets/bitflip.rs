@@ -20,6 +20,7 @@ impl BitFlip {
     pub fn new() -> Rc<Self> {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
         root.add_css_class("wc-bitflip");
+        root.add_css_class("wc-plain");
         root.set_valign(gtk::Align::Center);
         let mut bits: Vec<Option<gtk::ToggleButton>> = vec![None; 64];
         for row in 0..4 {

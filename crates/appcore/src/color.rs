@@ -89,6 +89,18 @@ pub fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     ]
 }
 
+/// `top` composited onto `bottom`: straight (non-premultiplied) RGBA, each
+/// 0..1.
+pub fn over(top: [f32; 4], bottom: [f32; 4]) -> [f32; 4] {
+    let (ta, ba) = (top[3].clamp(0.0, 1.0), bottom[3].clamp(0.0, 1.0));
+    let a = ta + ba * (1.0 - ta);
+    if a <= 0.0 {
+        return [0.0; 4];
+    }
+    let ch = |i: usize| (top[i] * ta + bottom[i] * ba * (1.0 - ta)) / a;
+    [ch(0), ch(1), ch(2), a]
+}
+
 /// WCAG relative luminance.
 pub fn luminance(c: Rgb) -> f32 {
     let lin = |v: f32| {
@@ -197,6 +209,17 @@ mod tests {
                 assert!((back[i] - c[i]).abs() < 1e-4, "{c:?} → {back:?}");
             }
         }
+    }
+
+    #[test]
+    fn over_composites_straight_alpha() {
+        let red = [1.0, 0.0, 0.0, 0.5];
+        assert_eq!(over(red, [0.0, 0.0, 1.0, 1.0]), [0.5, 0.0, 0.5, 1.0]);
+        assert_eq!(over([0.2, 0.4, 0.6, 1.0], [1.0; 4]), [0.2, 0.4, 0.6, 1.0]);
+        assert_eq!(over([0.0; 4], [0.2, 0.4, 0.6, 0.5]), [0.2, 0.4, 0.6, 0.5]);
+        let both = over(red, [0.0, 0.0, 1.0, 0.5]);
+        assert!((both[3] - 0.75).abs() < 1e-6);
+        assert_eq!(over([0.0; 4], [0.0; 4]), [0.0; 4]);
     }
 
     #[test]

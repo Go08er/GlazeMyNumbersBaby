@@ -35,6 +35,14 @@ const REMOVED: [&str; 5] = ["require", "loadstring", "getfenv", "setfenv", "newp
 /// How deep `print` may be re-entered (from a `__tostring` it calls).
 const PRINT_NESTING: u32 = 4;
 
+/// The Luau memory category of the host's own tables ([`HostTable`]): what
+/// is allocated while it is active is counted apart from the theme's
+/// ("main"), so the heap cap can be the theme's alone.
+const HOST_CATEGORY: &str = "host";
+/// Its number: mlua numbers categories as they are first named, after
+/// "main" (0). (A test pins this: the host's bytes are seen to grow.)
+const HOST_CATEGORY_ID: i32 = 1;
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// One theme's Luau VM: sandboxed, its heap capped, every entry into it
@@ -45,6 +53,8 @@ pub struct Engine {
     id: u64,
     limits: Limits,
     shared: Rc<Shared>,
+    /// What the host's tables held when last measured.
+    host_bytes: Cell<usize>,
 }
 
 /// What the interrupt and `print` share with the engine.
@@ -134,6 +144,7 @@ impl Engine {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             limits,
             shared,
+            host_bytes: Cell::new(0),
         };
         engine
             .set_up(register)
@@ -143,6 +154,10 @@ impl Engine {
 
     fn set_up(&self, register: impl FnOnce(&Lua) -> mlua::Result<()>) -> mlua::Result<()> {
         let lua = &self.lua;
+        // Name the host's category first, so that it is number 1, and go
+        // back to the theme's.
+        lua.set_memory_category(HOST_CATEGORY)?;
+        lua.set_memory_category("main")?;
         lua.set_memory_limit(self.limits.memory)?;
         let globals = lua.globals();
         for name in REMOVED {
@@ -312,11 +327,11 @@ impl Engine {
     }
 
     /// A [`HostTable`] with room for `array` entries and `fields` named
-    /// ones.
+    /// ones. It is the host's: outside the theme's heap cap, within
+    /// [`Limits::host_memory`].
     pub fn host_table(&self, array: usize, fields: usize) -> Result<HostTable, ThemeError> {
         self.alive()?;
-        let table =
-            self.fatal(self.shielded(|| self.lua.create_table_with_capacity(array, fields)))?;
+        let table = self.as_host(|| self.lua.create_table_with_capacity(array, fields))?;
         table.set_readonly(true);
         Ok(HostTable {
             engine: self.id,
@@ -328,10 +343,14 @@ impl Engine {
     /// `raw_set` and `raw_seti`, which run no metamethods), and it is
     /// read-only again after.
     ///
-    /// The heap cap is lifted meanwhile: what the host stores is the host's
-    /// to bound, and with no cap mlua skips the protected call it otherwise
-    /// makes around every store (which made a 1200-store refill cost 0.3
-    /// ms). So `fill` must not run script code.
+    /// What the host stores is the host's to bound, not the theme's: the
+    /// heap cap is lifted meanwhile (with no cap mlua also skips the
+    /// protected call it otherwise makes around every store, which made a
+    /// 1200-store refill cost 0.3 ms), and what is allocated is counted in
+    /// the host's own memory category, which the theme's cap leaves out
+    /// ([`Engine::host_memory`]). So `fill` must not run script code. A
+    /// refill that leaves the host's tables over [`Limits::host_memory`] is
+    /// a [`ThemeError::Limit`]: not fatal, and not the theme's doing.
     pub fn fill<R>(
         &self,
         host: &HostTable,
@@ -343,20 +362,83 @@ impl Engine {
                 "a host table from another theme engine".into(),
             ));
         }
-        struct Restore<'a>(&'a Lua, &'a Table, usize);
-        impl Drop for Restore<'_> {
+        struct Lock<'a>(&'a Table);
+        impl Drop for Lock<'_> {
             fn drop(&mut self) {
-                self.1.set_readonly(true);
-                let _ = self.0.set_memory_limit(self.2);
+                self.0.set_readonly(true);
             }
         }
-        let cap = self
-            .lua
-            .set_memory_limit(0)
-            .map_err(|e| classify(&e, &self.limits))?;
         host.table.set_readonly(false);
-        let _restore = Restore(&self.lua, &host.table, cap);
-        fill(&host.table).map_err(|e| classify(&e, &self.limits))
+        let _lock = Lock(&host.table);
+        self.as_host(|| fill(&host.table))
+    }
+
+    /// Runs `f`, which allocates for the host and runs no script code:
+    /// with the heap cap lifted, in the host's memory category. The cap is
+    /// back after, moved by what the host now holds.
+    fn as_host<R>(&self, f: impl FnOnce() -> mlua::Result<R>) -> Result<R, ThemeError> {
+        struct Restore<'a>(&'a Engine);
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.lua.set_memory_category("main");
+                self.0.measure_and_cap();
+            }
+        }
+        let classify = |e: mlua::Error| classify(&e, &self.limits);
+        self.lua
+            .set_memory_category(HOST_CATEGORY)
+            .map_err(classify)?;
+        let restore = Restore(self);
+        self.lua.set_memory_limit(0).map_err(classify)?;
+        let r = self.fatal(self.shielded(f));
+        drop(restore);
+        if self.host_bytes.get() > self.limits.host_memory {
+            // Host tables that were dropped count until they are collected.
+            let _ = self.lua.gc_collect();
+            self.host_memory();
+        }
+        let held = self.host_bytes.get();
+        if held > self.limits.host_memory {
+            return Err(ThemeError::Limit(format!(
+                "host tables of {held} bytes (the allowance is {})",
+                self.limits.host_memory
+            )));
+        }
+        r
+    }
+
+    /// Bytes of the Luau heap the host's own tables hold now
+    /// ([`Engine::host_table`], [`Engine::fill`]): live ones, as the
+    /// collector counts them.
+    pub fn host_memory(&self) -> usize {
+        if self.lua.set_memory_limit(0).is_ok() {
+            self.measure_and_cap();
+        }
+        self.host_bytes.get()
+    }
+
+    /// With the heap cap lifted (so that reading can't fail for memory):
+    /// reads what the host's tables hold, and sets the cap for script code.
+    /// That is the theme's [`Limits::memory`], and on top of it what the
+    /// host holds (at most [`Limits::host_memory`]): host work never takes
+    /// from the theme's room, and the theme never gets the host's. (Host
+    /// tables collected since then leave the cap that much too high until
+    /// the next refill: never by more than the allowance.)
+    fn measure_and_cap(&self) {
+        let mut bytes = self.host_bytes.get();
+        // SAFETY: `lua_totalbytes` only reads a counter of the state it is
+        // given, which `exec_raw` hands over locked and valid; nothing is
+        // pushed or popped.
+        let _: mlua::Result<()> = unsafe {
+            self.lua.exec_raw((), |state| {
+                bytes = mlua::ffi::lua_totalbytes(state, HOST_CATEGORY_ID);
+            })
+        };
+        self.host_bytes.set(bytes);
+        let host = bytes.min(self.limits.host_memory);
+        let _ = self
+            .lua
+            .set_memory_limit(self.limits.memory.saturating_add(host));
     }
 
     /// What scripts printed since the last call; the log is then empty.
@@ -380,7 +462,8 @@ impl Engine {
         &self.limits
     }
 
-    /// Bytes in the Luau heap.
+    /// Bytes in the Luau heap, the theme's and the host's
+    /// ([`Engine::host_memory`]) together.
     pub fn used_memory(&self) -> usize {
         self.lua.used_memory()
     }

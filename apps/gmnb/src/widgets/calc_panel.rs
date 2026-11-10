@@ -76,6 +76,18 @@ fn list() -> gtk::ListBox {
 }
 
 impl CalcPanel {
+    /// `panel.tabs.stretch`: the History / Memory switch fills the
+    /// panel's width in equal halves, or hugs its labels at the start.
+    pub fn set_stretch(&self, stretch: bool) {
+        self.switcher.set_homogeneous(stretch);
+        self.switcher.set_hexpand(stretch);
+        self.switcher.set_halign(if stretch {
+            gtk::Align::Fill
+        } else {
+            gtk::Align::Start
+        });
+    }
+
     pub fn new() -> Rc<Self> {
         let switcher = adw::ToggleGroup::new();
         switcher.add(
@@ -92,8 +104,13 @@ impl CalcPanel {
         );
         switcher.set_active_name(Some("history"));
         switcher.add_css_class("wc-toggle-group");
+        switcher.add_css_class("wc-panel-tabs");
         switcher.add_css_class("flat");
-        switcher.set_halign(gtk::Align::Start);
+        // Across the panel in equal halves (`panel.tabs.stretch`, DGMNB's
+        // way) until a style says otherwise: `set_stretch`.
+        switcher.set_homogeneous(true);
+        switcher.set_hexpand(true);
+        switcher.set_halign(gtk::Align::Fill);
 
         let history_list = list();
         let memory_list = list();

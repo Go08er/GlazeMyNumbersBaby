@@ -20,8 +20,12 @@ like: the same as DGMNB.
 3. For autocomplete, point luau-lsp at `types/gmnb.d.luau` (the file's
    first lines say how).
 
-## Not done yet
+## What is drawn so far
 
-`aurora/theme.luau` expects `fonts/Outfit-Variable.ttf` and
-`fonts/OFL-Outfit.txt` beside it. They are still in
-`apps/gmnb/assets/fonts/` and move here with the theme engine.
+The style pipeline is in: a theme's `style` restyles the window, the keys,
+segmented controls and the History/Memory switch, and its options show in
+Settings. The other elements are accepted (a theme returning them is
+checked) but still drawn the old way from the theme's tokens, and the draw
+layers (`background`, `keypad`, `display`, `overlay`) are kept but not
+drawn yet: Aurora shows its glass keys over a plain backdrop until they
+are.

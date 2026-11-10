@@ -330,6 +330,11 @@ local function style(ctx: Ctx): Style
 
 	local hot = slant(s.hot_a, s.hot_b)
 	local hot_soft = slant(alpha(s.hot_a, 0.85), alpha(s.hot_b, 0.85))
+	-- A toggle key that is on carries small text. 0.2 gave it the soft
+	-- gradient, on which that text fell to 2.5:1 in the light palettes:
+	-- here the gradient is solid and deepened until the text reads (4.5:1).
+	local on_a, on_b = gmnb.gradient_for_text(s.on_hot, s.hot_a, s.hot_b, gmnb.TEXT_CONTRAST)
+	local hot_on = slant(on_a, on_b)
 	local halo: { Shadow } = if see
 		then { { blur = 3, color = alpha(base, 0.9) }, { blur = 10, color = alpha(base, 0.75) } }
 		else {}
@@ -596,7 +601,7 @@ local function style(ctx: Ctx): Style
 				icon = { stroke = 2.3 * (0.6 + 0.4 * 22 / 24) },
 				shadow = equals_shadow,
 			},
-			on = { color = s.on_hot, background = over_tint(hot_soft, 0.7) },
+			on = { color = s.on_hot, background = hot_on },
 			pad = { gap = 4, radius = 10, min_height = 32, font = { size = 15 } },
 		},
 

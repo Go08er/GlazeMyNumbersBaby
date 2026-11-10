@@ -110,6 +110,14 @@ impl CalculatorPage {
         column.append(&modes);
 
         let panel = CalcPanel::new();
+        {
+            let weak = Rc::downgrade(&panel);
+            ctx.hub.subscribe_style(&panel.root, move |_, style| {
+                if let Some(panel) = weak.upgrade() {
+                    panel.set_stretch(style.flag("panel.tabs.stretch"));
+                }
+            });
+        }
         let side = gtk::Box::new(gtk::Orientation::Vertical, 0);
         side.add_css_class("wc-glass-panel");
         side.add_css_class("wc-side-panel");
@@ -271,6 +279,9 @@ impl CalculatorPage {
             None => self.flyouts.borrow_mut().push(pad.clone()),
         }
         pad.set_scheme(self.ctx.hub.scheme());
+        self.ctx
+            .hub
+            .subscribe_style(&pad, |pad, style| pad.set_style(style));
         pad
     }
 
@@ -302,6 +313,8 @@ impl CalculatorPage {
     fn memory_row(self: &Rc<Self>, full: bool) -> gtk::Box {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         row.set_homogeneous(full);
+        // Text straight on the backdrop: the scrim of a see-through window.
+        row.add_css_class("wc-plain");
         // Named as upstream's (ClearMemoryButton "Clear all memory", ...),
         // their tooltips read as descriptions.
         let all: &[(B, &str, &str, &str)] = &[
@@ -388,7 +401,7 @@ impl CalculatorPage {
         self.side.set_visible(!on && self.wide.get());
         self.display.set_max_size(if on { 44.0 } else { 64.0 });
         if let Some(pad) = self.keypads.borrow().get(&CalcMode::Standard) {
-            pad.set_spacing(if on { 3 } else { 5 });
+            pad.set_compact(on);
         }
         self.ctx.set_compact(on);
     }
@@ -489,6 +502,7 @@ impl CalculatorPage {
 
         let radix_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         radix_box.add_css_class("wc-radix-list");
+        radix_box.add_css_class("wc-plain");
         for radix in Radix::ALL {
             let name = gtk::Label::new(Some(radix.label()));
             name.add_css_class("wc-radix-name");
@@ -791,11 +805,7 @@ impl CalculatorPage {
     fn on_key(self: &Rc<Self>, pad: &Keypad, id: u32, x: f32, y: f32) {
         let s = self.ctx.hub.scheme();
         let hot = id == B::Equals.id();
-        let color = if hot {
-            s.hot_a
-        } else {
-            s.blobs[(id as usize * 7) % 4]
-        };
+        let color = if hot { s.hot_a } else { s.accent };
         self.ctx
             .pulse_at(pad, x, y, color, if hot { 1.4 } else { 0.55 });
         match id {

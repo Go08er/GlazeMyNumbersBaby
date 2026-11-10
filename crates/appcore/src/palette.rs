@@ -120,6 +120,16 @@ impl Palette {
         }
     }
 
+    /// [`text_scrim`] for these colours.
+    pub fn text_scrim(&self, opacity: f32) -> Rgba {
+        text_scrim(self.bg, self.fg, self.fg_dim, self.accent_text, opacity)
+    }
+
+    /// [`scrim_reads`] for these colours.
+    pub fn scrim_reads(&self, opacity: f32, k: f32) -> bool {
+        scrim_reads(self.bg, self.fg, self.fg_dim, self.accent_text, opacity, k)
+    }
+
     /// Every colour in a fixed order (the order of the fields above, with
     /// the series last), for tests and bulk conversion.
     pub fn all(&self) -> [Rgba; 19] {
@@ -146,6 +156,57 @@ impl Palette {
             s[5],
         ]
     }
+}
+
+/// What the base look puts under text on a see-through window: `bg` at the
+/// smallest alpha `k` at which text stays readable over a black desktop
+/// and over a white one. With the window's background drawn at `opacity`
+/// and `B = over(alpha(bg, k), over(alpha(bg, opacity), desktop))`: `fg`
+/// on `B` reaches 4.5, `fg_dim` (laid over `B`) and `accent_text` reach 3.
+/// Transparent at full opacity, where nothing shows through.
+pub fn text_scrim(bg: Rgba, fg: Rgba, fg_dim: Rgba, accent_text: Rgba, opacity: f32) -> Rgba {
+    let opacity = if opacity.is_finite() {
+        opacity.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let reads = |k: f32| scrim_reads(bg, fg, fg_dim, accent_text, opacity, k);
+    let k = if opacity >= 1.0 || reads(0.0) {
+        0.0
+    } else {
+        // The background only gets closer to `bg` as k grows.
+        let (mut lo, mut hi) = (0.0f32, 1.0f32);
+        for _ in 0..20 {
+            let mid = (lo + hi) / 2.0;
+            if reads(mid) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        hi
+    };
+    [bg[0], bg[1], bg[2], k]
+}
+
+/// Whether text reads on a scrim of alpha `k` (see [`text_scrim`]), over
+/// both desktops.
+pub fn scrim_reads(
+    bg: Rgba,
+    fg: Rgba,
+    fg_dim: Rgba,
+    accent_text: Rgba,
+    opacity: f32,
+    k: f32,
+) -> bool {
+    let rgb3 = |c: Rgba| [c[0], c[1], c[2]];
+    [color::BLACK, color::WHITE].into_iter().all(|desktop| {
+        let window = [bg[0], bg[1], bg[2], bg[3] * opacity];
+        let behind = color::over(window, rgb(desktop));
+        let b = color::over([bg[0], bg[1], bg[2], k], behind);
+        let on = |c: Rgba| contrast(rgb3(color::over(c, b)), rgb3(b));
+        on(fg) >= TEXT_CONTRAST && on(fg_dim) >= UI_CONTRAST && on(accent_text) >= UI_CONTRAST
+    })
 }
 
 #[cfg(test)]
@@ -180,10 +241,45 @@ mod tests {
                     "{accent:?} {dark}"
                 );
                 assert!(c(t.accent_text, t.bg) >= TEXT_CONTRAST, "{accent:?} {dark}");
+                assert!(
+                    c(t.accent_text, t.surface) >= TEXT_CONTRAST,
+                    "{accent:?} {dark}"
+                );
                 assert!(c(t.fg, t.surface) >= 12.0);
                 for s in t.series {
                     assert!(c(s, t.bg) >= UI_CONTRAST, "{accent:?} {dark}");
+                    assert!(c(s, t.surface) >= UI_CONTRAST, "{accent:?} {dark}");
                 }
+            }
+        }
+    }
+
+    /// The scrim under text on a see-through window: none at full opacity,
+    /// and below it the least that keeps text readable over a black and a
+    /// white desktop.
+    #[test]
+    fn the_text_scrim_is_the_least_that_reads() {
+        for accent in ACCENTS {
+            for dark in [false, true] {
+                let t = Palette::new(dark, accent);
+                assert_eq!(t.text_scrim(1.0)[3], 0.0);
+                assert_eq!(t.text_scrim(f32::NAN)[3], 0.0);
+                for opacity in [0.1, 0.25, 0.5, 0.75, 0.9, 0.95] {
+                    let s = t.text_scrim(opacity);
+                    assert_eq!(s[..3], t.bg[..3]);
+                    let k = s[3];
+                    assert!((0.0..=1.0).contains(&k));
+                    assert!(t.scrim_reads(opacity, k), "{accent:?} {dark} {opacity}");
+                    if k > 0.0 {
+                        assert!(
+                            !t.scrim_reads(opacity, k - 0.001),
+                            "{accent:?} {dark} {opacity}: {k} is more than needed"
+                        );
+                    }
+                }
+                // The least opaque window needs the most.
+                assert!(t.text_scrim(0.1)[3] > 0.0);
+                assert!(t.text_scrim(0.1)[3] >= t.text_scrim(0.5)[3]);
             }
         }
     }

@@ -1,4 +1,4 @@
-pub mod aurora;
+pub mod backdrop;
 pub mod bitflip;
 pub mod calc_panel;
 pub mod day_grid;

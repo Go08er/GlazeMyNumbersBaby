@@ -1,18 +1,25 @@
-//! Settings (upstream Settings.xaml: theme + about), plus palette and motion.
+//! Settings (upstream Settings.xaml: theme + about), plus the theme, its
+//! options and the window's opacity (docs/theming.md, "Where Settings
+//! puts things").
 
 use std::rc::Rc;
 
 use adw::prelude::*;
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
+
+use gmnb_theme::OptionValue;
+use gmnb_theme::theme::{OptionDef, OptionKind};
 
 use crate::pages::Ctx;
 use crate::settings::Persist;
-use crate::theme::{PaletteId, Scheme, complement, rgba, to_hex};
+use crate::theme::{parse_hex, rgba, to_hex};
 use crate::window::{Window, apply_backdrop, apply_theme_setting};
 
-/// A palette preview: which palette, its current scheme, and its swatch.
-type Tile = (PaletteId, Rc<Cell<Scheme>>, gtk::DrawingArea);
+/// Shown beside *Open themes folder*: installing a theme is running
+/// someone's script.
+const THEMES_ARE_CODE: &str = "Themes are code: each is a script that runs inside GMNB. It is \
+     sandboxed and limited, and can only change how GMNB looks, but install only themes you trust.";
 
 pub fn show(win: &Rc<Window>) {
     let ctx = win.ctx().clone();
@@ -23,8 +30,8 @@ pub fn show(win: &Rc<Window>) {
     let page = adw::PreferencesPage::new();
     page.set_title("Appearance");
 
-    // Theme.
-    let group = adw::PreferencesGroup::builder().title("App theme").build();
+    // Mode.
+    let group = adw::PreferencesGroup::builder().title("Mode").build();
     let theme = adw::ToggleGroup::new();
     for (name, label) in [("light", "Light"), ("dark", "Dark"), ("system", "System")] {
         theme.add(adw::Toggle::builder().name(name).label(label).build());
@@ -32,7 +39,7 @@ pub fn show(win: &Rc<Window>) {
     theme.set_active_name(Some(&ctx.store.data.borrow().theme));
     theme.set_valign(gtk::Align::Center);
     let row = adw::ActionRow::builder()
-        .title("Theme")
+        .title("Light or dark")
         .subtitle("Follows the system unless you choose otherwise")
         .build();
     row.add_suffix(&theme);
@@ -57,265 +64,38 @@ pub fn show(win: &Rc<Window>) {
             ctx.store.persist();
         });
     }
+    let accent = adw::SwitchRow::builder()
+        .title("Use the desktop's accent colour")
+        .subtitle("The colour your desktop or shell publishes; off, GMNB uses its own blue")
+        .active(ctx.store.data.borrow().system_accent)
+        .build();
+    {
+        let ctx = ctx.clone();
+        accent.connect_active_notify(move |r| {
+            let saved = ctx.store.data.borrow().system_accent;
+            if ctx.layers.covers(r) {
+                // Covered, Settings changes nothing (R15-M-02).
+                if r.is_active() != saved {
+                    r.set_active(saved);
+                }
+                return;
+            }
+            ctx.hub.set_system_accent(r.is_active());
+            ctx.store.data.borrow_mut().system_accent = r.is_active();
+            ctx.store.persist();
+        });
+    }
+    group.add(&accent);
     page.add(&group);
 
+    // Theme, and the chosen theme's options.
+    let themes = ThemeSettings::new(&ctx, &win.widget());
+    page.add(&themes.group);
+    page.add(&themes.options);
+    themes.rebuild_list();
+    themes.rebuild_options();
+
     {
-        // Palette.
-        let group = adw::PreferencesGroup::builder()
-            .title("Palette")
-            .description("Colours for the aurora, keys and graphs")
-            .build();
-        let flow = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::Single)
-            .max_children_per_line(5)
-            .min_children_per_line(3)
-            .homogeneous(true)
-            .row_spacing(10)
-            .column_spacing(10)
-            .css_classes(["wc-palettes"])
-            .build();
-        let dark = adw::StyleManager::default().is_dark();
-        // Each tile draws from a cell so the generated palettes can re-preview.
-        let tiles: Rc<RefCell<Vec<Tile>>> = Rc::default();
-        for id in PaletteId::ALL {
-            let cell = Rc::new(Cell::new(ctx.hub.scheme_for(id, dark)));
-            let swatch = gtk::DrawingArea::builder()
-                .content_width(96)
-                .content_height(56)
-                .build();
-            let c2 = cell.clone();
-            swatch.set_draw_func(move |_, cr, w, h| draw_swatch(cr, w as f64, h as f64, &c2.get()));
-            tiles.borrow_mut().push((id, cell, swatch.clone()));
-            let label = gtk::Label::new(Some(id.title()));
-            label.add_css_class("caption");
-            let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
-            b.append(&swatch);
-            b.append(&label);
-            let child = gtk::FlowBoxChild::builder().child(&b).build();
-            child.update_property(&[gtk::accessible::Property::Label(id.title())]);
-            flow.append(&child);
-            if id == ctx.hub.palette() {
-                flow.select_child(&child);
-            }
-        }
-        let refresh_tiles = {
-            let (tiles, ctx) = (tiles.clone(), ctx.clone());
-            move || {
-                let dark = adw::StyleManager::default().is_dark();
-                for (id, cell, area) in tiles.borrow().iter() {
-                    if matches!(id, PaletteId::System | PaletteId::Custom) {
-                        cell.set(ctx.hub.scheme_for(*id, dark));
-                        area.queue_draw();
-                    }
-                }
-            }
-        };
-
-        // Freestyle: two colour pickers (secondary defaults to the complement).
-        let (p0, q0) = ctx.hub.custom();
-        let color_dialog = gtk::ColorDialog::builder()
-            .with_alpha(false)
-            .title("Pick a colour")
-            .build();
-        let primary = gtk::ColorDialogButton::new(Some(color_dialog.clone()));
-        primary.set_rgba(&rgba(p0, 1.0));
-        primary.set_valign(gtk::Align::Center);
-        let secondary = gtk::ColorDialogButton::new(Some(color_dialog));
-        secondary.set_rgba(&rgba(q0, 1.0));
-        secondary.set_valign(gtk::Align::Center);
-        // GTK names neither the colour button nor the button inside it
-        // (that takes focus): only the colour it shows is read.
-        for (b, name) in [
-            (&primary, "Primary colour"),
-            (&secondary, "Secondary colour"),
-        ] {
-            let label = [gtk::accessible::Property::Label(name)];
-            b.update_property(&label);
-            let mut child = b.first_child();
-            while let Some(c) = child {
-                if c.is::<gtk::Button>() {
-                    c.update_property(&label);
-                }
-                child = c.next_sibling();
-            }
-        }
-        let complement_btn = gtk::Button::builder()
-            .label("Complement")
-            .tooltip_text("Use the colour opposite the primary on the colour wheel")
-            .valign(gtk::Align::Center)
-            .css_classes(["flat"])
-            .build();
-        let row1 = adw::ActionRow::builder()
-            .title("Primary colour")
-            .subtitle("Accent, keys and the aurora's main hue")
-            .build();
-        row1.add_suffix(&primary);
-        let row2 = adw::ActionRow::builder()
-            .title("Secondary colour")
-            .subtitle("The second glow and the = key's gradient")
-            .build();
-        row2.add_suffix(&complement_btn);
-        row2.add_suffix(&secondary);
-        let custom_list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .css_classes(["boxed-list"])
-            .build();
-        custom_list.append(&row1);
-        custom_list.append(&row2);
-        custom_list.set_margin_top(12);
-        let custom_reveal = gtk::Revealer::builder()
-            .child(&custom_list)
-            .transition_type(gtk::RevealerTransitionType::SlideDown)
-            .reveal_child(ctx.hub.palette() == PaletteId::Custom)
-            .build();
-        let system_hint = gtk::Label::new(Some(
-            "Uses your desktop's accent colour (the freedesktop portal setting your desktop or shell publishes) and its complement, and follows it live.",
-        ));
-        system_hint.add_css_class("dim-label");
-        system_hint.add_css_class("caption");
-        system_hint.set_wrap(true);
-        system_hint.set_xalign(0.0);
-        system_hint.set_margin_top(10);
-        let system_reveal = gtk::Revealer::builder()
-            .child(&system_hint)
-            .transition_type(gtk::RevealerTransitionType::SlideDown)
-            .reveal_child(ctx.hub.palette() == PaletteId::System)
-            .build();
-
-        let apply_custom = {
-            // Weak: these buttons own the closures that hold this.
-            let (ctx, primary, secondary, refresh) = (
-                ctx.clone(),
-                primary.downgrade(),
-                secondary.downgrade(),
-                refresh_tiles.clone(),
-            );
-            Rc::new(move || {
-                let (Some(primary), Some(secondary)) = (primary.upgrade(), secondary.upgrade())
-                else {
-                    return;
-                };
-                let c = |b: &gtk::ColorDialogButton| {
-                    let r = b.rgba();
-                    [r.red(), r.green(), r.blue()]
-                };
-                let (p, q) = (c(&primary), c(&secondary));
-                ctx.hub.set_custom(p, q);
-                {
-                    let mut d = ctx.store.data.borrow_mut();
-                    d.custom_primary = to_hex(p);
-                    d.custom_secondary = to_hex(q);
-                }
-                ctx.store.persist();
-                refresh();
-            })
-        };
-        // No cover check here, unlike Settings' other controls: a picked
-        // colour comes from the chooser, which covers Settings until it
-        // has closed. Covered, the buttons themselves refuse (an Action).
-        for b in [&primary, &secondary] {
-            let apply = apply_custom.clone();
-            b.connect_rgba_notify(move |_| apply());
-        }
-        {
-            let (primary, secondary) = (primary.downgrade(), secondary.downgrade());
-            complement_btn.connect_clicked(move |_| {
-                let (Some(primary), Some(secondary)) = (primary.upgrade(), secondary.upgrade())
-                else {
-                    return;
-                };
-                let r = primary.rgba();
-                secondary.set_rgba(&rgba(complement([r.red(), r.green(), r.blue()]), 1.0));
-            });
-        }
-        {
-            // Keep the System preview in step with live accent changes.
-            let refresh = refresh_tiles.clone();
-            ctx.hub.subscribe_while(&flow, move |_, _| refresh());
-        }
-
-        {
-            let ctx = ctx.clone();
-            let (custom_reveal, system_reveal) = (custom_reveal.clone(), system_reveal.clone());
-            flow.connect_selected_children_changed(move |f| {
-                // GTK carries out an assistive technology's Selection
-                // request (SelectChild, DeselectChild, ClearSelection...)
-                // whether or not the grid is covered (crate::inert), and
-                // a single-selection grid can be left with none. Covered,
-                // or left empty, it shows the saved palette again, and
-                // nothing is applied or saved (R15-M-02): GTK then answers
-                // that the child asked for isn't selected.
-                let saved = ctx.hub.palette();
-                let chosen = f
-                    .selected_children()
-                    .first()
-                    .map(|c| PaletteId::ALL[c.index() as usize]);
-                let Some(id) = chosen.filter(|&id| id == saved || !ctx.layers.covers(f)) else {
-                    let at = PaletteId::ALL.iter().position(|&id| id == saved);
-                    if let Some(child) = at.and_then(|i| f.child_at_index(i as i32)) {
-                        f.select_child(&child);
-                    }
-                    return;
-                };
-                custom_reveal.set_reveal_child(id == PaletteId::Custom);
-                system_reveal.set_reveal_child(id == PaletteId::System);
-                if id != ctx.hub.palette() {
-                    ctx.hub.set_palette(id);
-                    ctx.store.data.borrow_mut().palette = id.key().into();
-                    ctx.store.persist();
-                    let s = ctx.hub.scheme();
-                    let a = &ctx.aurora;
-                    for (i, c) in s.blobs.iter().enumerate() {
-                        a.pulse(
-                            a.width() as f32 * (0.2 + 0.2 * i as f32),
-                            a.height() as f32 * 0.5,
-                            *c,
-                            1.4,
-                        );
-                    }
-                }
-            });
-        }
-        group.add(&flow);
-        group.add(&system_reveal);
-        group.add(&custom_reveal);
-        page.add(&group);
-
-        // Motion.
-        let group = adw::PreferencesGroup::builder().title("Motion").build();
-        let anim = adw::SwitchRow::builder()
-            .title("Living background")
-            .subtitle("Let the aurora drift. Pauses whenever the window is in the background")
-            .active(ctx.store.data.borrow().animated_background)
-            .build();
-        {
-            let ctx = ctx.clone();
-            anim.connect_active_notify(move |r| {
-                let saved = ctx.store.data.borrow().animated_background;
-                if ctx.layers.covers(r) {
-                    // Covered, Settings changes nothing (R15-M-02).
-                    if r.is_active() != saved {
-                        r.set_active(saved);
-                    }
-                    return;
-                }
-                ctx.aurora.set_animated(r.is_active());
-                ctx.store.data.borrow_mut().animated_background = r.is_active();
-                ctx.store.persist();
-            });
-        }
-        group.add(&anim);
-        let hint = gtk::Label::new(Some(
-            "Key animations follow the system's “reduce animations” setting.",
-        ));
-        hint.add_css_class("dim-label");
-        hint.add_css_class("caption");
-        hint.set_xalign(0.0);
-        hint.set_margin_top(8);
-        hint.set_wrap(true);
-        group.add(&hint);
-        page.add(&group);
-
         // Window.
         let group = adw::PreferencesGroup::builder().title("Window").build();
         let percent = |v: f64| format!("{}%", (v * 100.0).round());
@@ -364,7 +144,11 @@ pub fn show(win: &Rc<Window>) {
                 let v = s.value();
                 shown.set_text(&percent(v));
                 s.update_property(&[gtk::accessible::Property::ValueText(&percent(v))]);
-                apply_backdrop(&win, &ctx.aurora, crate::settings::backdrop_alpha(v));
+                let alpha = crate::settings::backdrop_alpha(v);
+                apply_backdrop(&win, &ctx.backdrop, alpha);
+                // One step of a drag: only the properties that change
+                // with the opacity are rewritten (the live provider).
+                ctx.hub.set_opacity(alpha, true);
                 ctx.store.data.borrow_mut().background_opacity = v;
                 persist_at_rest(&ctx, &pending);
             });
@@ -408,20 +192,515 @@ pub fn show(win: &Rc<Window>) {
         .end_icon_name("go-next-symbolic")
         .build();
     {
-        let win = win.widget();
-        about_row.connect_activated(move |_| about(&win));
+        let (win, ctx) = (win.widget(), ctx.clone());
+        about_row.connect_activated(move |_| about(&win, &ctx.hub.credits()));
     }
     group.add(&about_row);
     page.add(&group);
 
     dialog.add(&page);
+    // The theme rows' handlers live as long as the dialog does.
+    dialog.connect_closed(move |_| {
+        let _ = &themes;
+    });
     // A dialog's keys never reach the window's controllers.
     crate::window::own_keys(&dialog);
     dialog.present(Some(&win.widget()));
 }
 
+/// Settings' Theme group and the chosen theme's options under it.
+struct ThemeSettings {
+    ctx: Rc<Ctx>,
+    window: gtk::glib::WeakRef<adw::ApplicationWindow>,
+    group: adw::PreferencesGroup,
+    list: gtk::ListBox,
+    /// What the theme's author should know: its error and its notes.
+    report: gtk::Label,
+    /// Holds one group per `group` of the theme's options.
+    options: adw::PreferencesGroup,
+    options_box: gtk::Box,
+    /// Each option row and its option, to show or hide as `visible` says.
+    rows: RefCell<Vec<(gtk::Widget, OptionDef)>>,
+    /// Set while the list or the options are being built: their widgets'
+    /// signals then change nothing.
+    building: std::cell::Cell<bool>,
+    pending: Rc<RefCell<Option<gtk::glib::SourceId>>>,
+}
+
+impl ThemeSettings {
+    fn new(ctx: &Rc<Ctx>, window: &adw::ApplicationWindow) -> Rc<Self> {
+        let group = adw::PreferencesGroup::builder()
+            .title("Theme")
+            .description(THEMES_ARE_CODE)
+            .build();
+        let list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["boxed-list"])
+            .build();
+        group.add(&list);
+        let report = gtk::Label::builder()
+            .wrap(true)
+            .xalign(0.0)
+            .selectable(true)
+            .margin_top(10)
+            .visible(false)
+            .css_classes(["caption", "dim-label"])
+            .build();
+        group.add(&report);
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        buttons.set_margin_top(12);
+        let reload = gtk::Button::builder()
+            .label("Reload theme")
+            .tooltip_text("Run the theme's file again, after you have edited it")
+            .build();
+        let open = gtk::Button::builder()
+            .label("Open themes folder")
+            .tooltip_text("Where your own themes go, one folder each")
+            .build();
+        buttons.append(&reload);
+        buttons.append(&open);
+        group.add(&buttons);
+
+        let options = adw::PreferencesGroup::new();
+        let options_box = gtk::Box::new(gtk::Orientation::Vertical, 24);
+        options.add(&options_box);
+
+        let this = Rc::new(ThemeSettings {
+            ctx: ctx.clone(),
+            window: window.downgrade(),
+            group,
+            list,
+            report,
+            options,
+            options_box,
+            rows: RefCell::default(),
+            building: std::cell::Cell::new(false),
+            pending: Rc::default(),
+        });
+        {
+            let weak = Rc::downgrade(&this);
+            reload.connect_clicked(move |b| {
+                let Some(t) = weak.upgrade() else { return };
+                if t.ctx.layers.covers(b) {
+                    return;
+                }
+                t.ctx.hub.reload();
+                t.rebuild_list();
+                t.rebuild_options();
+            });
+        }
+        {
+            let weak = Rc::downgrade(&this);
+            open.connect_clicked(move |b| {
+                let Some(t) = weak.upgrade() else { return };
+                if t.ctx.layers.covers(b) {
+                    return;
+                }
+                let dir = crate::theme::user_dir();
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    t.ctx
+                        .toast(&format!("Couldn't make {}: {e}", dir.display()));
+                    return;
+                }
+                let file = gtk::gio::File::for_path(&dir);
+                gtk::FileLauncher::new(Some(&file)).launch(
+                    t.window.upgrade().as_ref(),
+                    gtk::gio::Cancellable::NONE,
+                    |_| {},
+                );
+            });
+        }
+        this
+    }
+
+    /// The installed themes, the base look first: one row each, the
+    /// chosen one marked.
+    fn rebuild_list(self: &Rc<Self>) {
+        self.building.set(true);
+        while let Some(row) = self.list.first_child() {
+            self.list.remove(&row);
+        }
+        let active = self.ctx.hub.active();
+        let mut first: Option<gtk::CheckButton> = None;
+        let mut listed = self.ctx.hub.list();
+        // A chosen theme that isn't installed stays the choice: show it.
+        if !listed.iter().any(|l| l.id == active) {
+            listed.push(crate::theme::Listed {
+                id: active.clone(),
+                name: active.clone(),
+                description: String::new(),
+                your_copy: false,
+                error: Some("Not installed".into()),
+            });
+        }
+        for l in listed {
+            let check = gtk::CheckButton::builder()
+                .valign(gtk::Align::Center)
+                .active(l.id == active)
+                .build();
+            match &first {
+                Some(first) => check.set_group(Some(first)),
+                None => first = Some(check.clone()),
+            }
+            let subtitle = match &l.error {
+                Some(e) => format!("Doesn't load: {e}"),
+                None => l.description.clone(),
+            };
+            let row = adw::ActionRow::builder()
+                .title(gtk::glib::markup_escape_text(&l.name))
+                .subtitle(gtk::glib::markup_escape_text(&subtitle))
+                .subtitle_lines(3)
+                .activatable_widget(&check)
+                .build();
+            row.add_prefix(&check);
+            if l.your_copy {
+                let mark = gtk::Label::new(Some("your copy"));
+                mark.add_css_class("caption");
+                mark.add_css_class("dim-label");
+                mark.set_tooltip_text(Some(
+                    "A folder of yours with this name replaces the built-in theme",
+                ));
+                row.add_suffix(&mark);
+            }
+            check.update_property(&[gtk::accessible::Property::Label(&l.name)]);
+            let weak = Rc::downgrade(self);
+            let id = l.id.clone();
+            check.connect_toggled(move |c| {
+                let Some(t) = weak.upgrade() else { return };
+                if t.building.get() || !c.is_active() {
+                    return;
+                }
+                if t.ctx.layers.covers(c) {
+                    // Covered, Settings changes nothing (R15-M-02).
+                    t.rebuild_list();
+                    return;
+                }
+                if t.ctx.hub.active() != id {
+                    t.ctx.hub.set_theme(&id);
+                    t.ctx.store.data.borrow_mut().active_theme = id.clone();
+                    t.ctx.store.persist();
+                    t.rebuild_options();
+                }
+            });
+            self.list.append(&row);
+        }
+        self.building.set(false);
+        self.sync_report();
+    }
+
+    /// The theme's error and its notes (the latest 20), under the list.
+    fn sync_report(&self) {
+        let hub = &self.ctx.hub;
+        let mut lines = Vec::new();
+        if let Some(e) = hub.error() {
+            lines.push(format!("The base look is showing: {e}"));
+        }
+        lines.extend(hub.notes().iter().map(|n| n.to_string()));
+        self.report.set_text(&lines.join("\n"));
+        self.report.set_visible(!lines.is_empty());
+    }
+
+    /// One option changed: tell the theme, save it, and show or hide the
+    /// options as their `visible` now says.
+    fn changed(self: &Rc<Self>, id: &str, value: OptionValue, drag: bool) {
+        let theme = self.ctx.hub.active();
+        self.ctx.hub.set_option(id, value.clone(), drag);
+        self.ctx
+            .store
+            .data
+            .borrow_mut()
+            .set_option(&theme, id, &value);
+        if drag {
+            persist_at_rest(&self.ctx, &self.pending);
+        } else {
+            self.ctx.store.persist();
+        }
+        self.sync_visible();
+        self.sync_report();
+    }
+
+    fn sync_visible(&self) {
+        for (row, option) in self.rows.borrow().iter() {
+            row.set_visible(self.ctx.hub.option_visible(option));
+        }
+    }
+
+    /// The chosen theme's options, rendered from its option list: one
+    /// group per `group`, in the order given.
+    fn rebuild_options(self: &Rc<Self>) {
+        self.building.set(true);
+        while let Some(child) = self.options_box.first_child() {
+            self.options_box.remove(&child);
+        }
+        self.rows.borrow_mut().clear();
+        let defs = self.ctx.hub.option_defs();
+        let values = self.ctx.hub.option_values();
+        self.options.set_visible(!defs.is_empty());
+        let mut groups: Vec<(Option<String>, adw::PreferencesGroup)> = Vec::new();
+        for def in defs {
+            let at = groups.iter().position(|(name, _)| *name == def.group);
+            let group = match at {
+                Some(at) => groups[at].1.clone(),
+                None => {
+                    let title = def.group.clone().unwrap_or_else(|| "Theme options".into());
+                    let group = adw::PreferencesGroup::builder().title(title).build();
+                    self.options_box.append(&group);
+                    groups.push((def.group.clone(), group.clone()));
+                    group
+                }
+            };
+            let row = self.option_row(&def, values.get(&def.id));
+            group.add(&row);
+            self.rows.borrow_mut().push((row, def));
+        }
+        self.building.set(false);
+        self.sync_visible();
+        self.sync_report();
+    }
+
+    /// The row for one option, by its type.
+    fn option_row(self: &Rc<Self>, def: &OptionDef, value: Option<&OptionValue>) -> gtk::Widget {
+        let title = gtk::glib::markup_escape_text(&def.label);
+        let subtitle = gtk::glib::markup_escape_text(def.description.as_deref().unwrap_or(""));
+        let weak = Rc::downgrade(self);
+        let id = def.id.clone();
+        // Whether a control's change is the user's to apply: not while the
+        // rows are being built, and not while Settings is covered
+        // (R15-M-02: the caller then puts the control back).
+        let row: gtk::Widget = match &def.kind {
+            OptionKind::Note => {
+                let label = gtk::Label::builder()
+                    .label(&def.label)
+                    .wrap(true)
+                    .xalign(0.0)
+                    .margin_top(8)
+                    .css_classes(["caption", "dim-label"])
+                    .build();
+                return label.upcast();
+            }
+            OptionKind::Toggle => {
+                let on = matches!(value, Some(OptionValue::Bool(true)));
+                let row = adw::SwitchRow::builder()
+                    .title(title)
+                    .subtitle(subtitle)
+                    .active(on)
+                    .build();
+                row.connect_active_notify(move |r| {
+                    let Some(t) = weak.upgrade() else { return };
+                    if t.building.get() {
+                        return;
+                    }
+                    let saved = matches!(
+                        t.ctx.hub.option_values().get(&id),
+                        Some(OptionValue::Bool(true))
+                    );
+                    if t.ctx.layers.covers(r) {
+                        if r.is_active() != saved {
+                            r.set_active(saved);
+                        }
+                        return;
+                    }
+                    if r.is_active() != saved {
+                        t.changed(&id, OptionValue::Bool(r.is_active()), false);
+                    }
+                });
+                row.upcast()
+            }
+            // With a preview a choice becomes a grid of drawn tiles; until
+            // previews are drawn, it is a list of its labels like any other.
+            OptionKind::Choice { choices, .. } => {
+                let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
+                let ids: Vec<String> = choices.iter().map(|c| c.id.clone()).collect();
+                let selected = match value {
+                    Some(OptionValue::Text(v)) => ids.iter().position(|c| c == v).unwrap_or(0),
+                    _ => 0,
+                };
+                let row = adw::ComboRow::builder()
+                    .title(title)
+                    .subtitle(subtitle)
+                    .model(&gtk::StringList::new(&labels))
+                    .selected(selected as u32)
+                    .build();
+                row.connect_selected_notify(move |r| {
+                    let Some(t) = weak.upgrade() else { return };
+                    if t.building.get() {
+                        return;
+                    }
+                    let saved = match t.ctx.hub.option_values().get(&id) {
+                        Some(OptionValue::Text(v)) => ids.iter().position(|c| c == v),
+                        _ => None,
+                    };
+                    let chosen = r.selected() as usize;
+                    if t.ctx.layers.covers(r) {
+                        if let Some(saved) = saved.filter(|s| *s != chosen) {
+                            r.set_selected(saved as u32);
+                        }
+                        return;
+                    }
+                    if let Some(choice) = ids.get(chosen).filter(|_| saved != Some(chosen)) {
+                        t.changed(&id, OptionValue::Text(choice.clone()), false);
+                    }
+                });
+                row.upcast()
+            }
+            OptionKind::Color => {
+                let colour = match value {
+                    Some(OptionValue::Text(v)) => parse_hex(v),
+                    _ => None,
+                }
+                .unwrap_or([0.0; 3]);
+                let dialog = gtk::ColorDialog::builder()
+                    .with_alpha(false)
+                    .title("Pick a colour")
+                    .build();
+                let button = gtk::ColorDialogButton::new(Some(dialog));
+                button.set_rgba(&rgba(colour, 1.0));
+                button.set_valign(gtk::Align::Center);
+                // GTK names neither the colour button nor the button inside
+                // it (that takes focus): only the colour it shows is read.
+                let label = [gtk::accessible::Property::Label(&def.label)];
+                button.update_property(&label);
+                let mut child = button.first_child();
+                while let Some(c) = child {
+                    if c.is::<gtk::Button>() {
+                        c.update_property(&label);
+                    }
+                    child = c.next_sibling();
+                }
+                // No cover check here, unlike the other controls: a picked
+                // colour comes from the chooser, which covers Settings
+                // until it has closed. Covered, the button itself refuses.
+                button.connect_rgba_notify(move |b| {
+                    let Some(t) = weak.upgrade() else { return };
+                    if t.building.get() {
+                        return;
+                    }
+                    let c = b.rgba();
+                    let hex = to_hex([c.red(), c.green(), c.blue()]);
+                    // A colour being dragged in the chooser: a step of many.
+                    t.changed(&id, OptionValue::Text(hex), true);
+                });
+                let row = adw::ActionRow::builder()
+                    .title(title)
+                    .subtitle(subtitle)
+                    .build();
+                row.add_suffix(&button);
+                row.upcast()
+            }
+            OptionKind::Slider {
+                min,
+                max,
+                step,
+                percent,
+            } => {
+                let (min, max, percent) = (*min, *max, *percent);
+                let step = if *step > 0.0 {
+                    *step
+                } else {
+                    (max - min) / 100.0
+                };
+                let now = match value {
+                    Some(OptionValue::Number(n)) => *n,
+                    _ => min,
+                };
+                let show = move |v: f64| {
+                    if percent {
+                        format!("{}%", (v * 100.0).round())
+                    } else {
+                        let digits = if step.fract() == 0.0 { 0 } else { 2 };
+                        format!("{v:.digits$}")
+                    }
+                };
+                let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step);
+                scale.set_value(now);
+                scale.set_draw_value(false);
+                scale.set_hexpand(true);
+                scale.set_valign(gtk::Align::Center);
+                scale.set_width_request(160);
+                scale.update_property(&[
+                    gtk::accessible::Property::Label(&def.label),
+                    gtk::accessible::Property::ValueText(&show(now)),
+                ]);
+                let shown = gtk::Label::new(Some(&show(now)));
+                shown.add_css_class("numeric");
+                shown.set_width_chars(5);
+                shown.set_xalign(1.0);
+                {
+                    let shown = shown.clone();
+                    scale.connect_value_changed(move |s| {
+                        let Some(t) = weak.upgrade() else { return };
+                        if t.building.get() {
+                            return;
+                        }
+                        let saved = match t.ctx.hub.option_values().get(&id) {
+                            Some(OptionValue::Number(n)) => *n,
+                            _ => min,
+                        };
+                        if t.ctx.layers.covers(s) {
+                            if s.value() != saved {
+                                s.set_value(saved);
+                            }
+                            return;
+                        }
+                        let v = s.value();
+                        shown.set_text(&show(v));
+                        s.update_property(&[gtk::accessible::Property::ValueText(&show(v))]);
+                        if v != saved {
+                            t.changed(&id, OptionValue::Number(v), true);
+                        }
+                    });
+                }
+                let row = adw::ActionRow::builder()
+                    .title(title)
+                    .subtitle(subtitle)
+                    .build();
+                row.add_suffix(&scale);
+                row.add_suffix(&shown);
+                row.upcast()
+            }
+        };
+        // Small buttons at the end of the row: each runs a function of the
+        // theme's that returns the options to change.
+        if let Some(action_row) = row.downcast_ref::<adw::ActionRow>() {
+            for action in &def.actions {
+                let button = gtk::Button::builder()
+                    .label(&action.label)
+                    .valign(gtk::Align::Center)
+                    .css_classes(["flat"])
+                    .build();
+                if let Some(tip) = &action.tooltip {
+                    button.set_tooltip_text(Some(tip));
+                }
+                let (weak, action) = (Rc::downgrade(self), action.clone());
+                button.connect_clicked(move |b| {
+                    let Some(t) = weak.upgrade() else { return };
+                    if t.ctx.layers.covers(b) {
+                        return;
+                    }
+                    let theme = t.ctx.hub.active();
+                    for (id, value) in t.ctx.hub.run_action(&action) {
+                        t.ctx.hub.set_option(&id, value.clone(), false);
+                        t.ctx
+                            .store
+                            .data
+                            .borrow_mut()
+                            .set_option(&theme, &id, &value);
+                    }
+                    t.ctx.store.persist();
+                    // The rows show the new values.
+                    let t2 = t.clone();
+                    gtk::glib::idle_add_local_once(move || t2.rebuild_options());
+                });
+                action_row.add_suffix(&button);
+            }
+        }
+        row
+    }
+}
+
 /// Saves `ctx`'s settings once a slider has rested for a moment, not on
-/// every step of a drag.
+/// every step of a drag; and folds what the drag changed of the style
+/// back into the main provider (`Hub::settle`).
 fn persist_at_rest(ctx: &Rc<Ctx>, pending: &Rc<RefCell<Option<gtk::glib::SourceId>>>) {
     if let Some(id) = pending.borrow_mut().take() {
         id.remove();
@@ -429,6 +708,7 @@ fn persist_at_rest(ctx: &Rc<Ctx>, pending: &Rc<RefCell<Option<gtk::glib::SourceI
     let (ctx, pending2) = (ctx.clone(), pending.clone());
     let id = gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
         pending2.borrow_mut().take();
+        ctx.hub.settle();
         ctx.store.persist();
     });
     *pending.borrow_mut() = Some(id);
@@ -550,7 +830,9 @@ fn graphing_group(ctx: &Rc<Ctx>) -> adw::PreferencesGroup {
     group
 }
 
-pub fn about(parent: &adw::ApplicationWindow) {
+/// About. `credits`: what the installed themes credit (a title and a
+/// text each), shown under Legal.
+pub fn about(parent: &adw::ApplicationWindow, credits: &[(String, String)]) {
     let about = adw::AboutDialog::builder()
         .application_name(crate::APP_NAME)
         .application_icon(crate::APP_ID)
@@ -581,11 +863,19 @@ pub fn about(parent: &adw::ApplicationWindow) {
     );
     // Custom licence text is Pango markup: escape the plain-text notices.
     about.add_legal_section(
-        "Outfit typeface",
-        Some("Copyright 2021 The Outfit Project Authors"),
+        "Inter typeface",
+        Some("Copyright (c) 2016 The Inter Project Authors"),
         gtk::License::Custom,
-        Some(&gtk::glib::markup_escape_text(OUTFIT)),
+        Some(&gtk::glib::markup_escape_text(INTER)),
     );
+    for (title, text) in credits {
+        about.add_legal_section(
+            title,
+            None,
+            gtk::License::Custom,
+            Some(&gtk::glib::markup_escape_text(text)),
+        );
+    }
     about.add_legal_section(
         "CORE-MATH",
         Some("Correctly rounded maths functions, used by Graphing"),
@@ -613,7 +903,7 @@ pub fn about(parent: &adw::ApplicationWindow) {
     about.present(Some(parent));
 }
 
-const OUTFIT: &str = include_str!("../assets/fonts/OFL-Outfit.txt");
+const INTER: &str = include_str!("../../dgmnb/assets/fonts/OFL-Inter.txt");
 const CORE_MATH: &str = concat!(
     include_str!("../../../crates/crmath/vendor/COPYRIGHT"),
     "\n",
@@ -660,56 +950,17 @@ fn third_party_licences(parent: &impl IsA<gtk::Widget>) {
     dialog.present(Some(parent));
 }
 
-fn draw_swatch(cr: &gtk::cairo::Context, w: f64, h: f64, s: &Scheme) {
-    use std::f64::consts::{FRAC_PI_2, PI, TAU};
-    let r = 12.0;
-    cr.new_sub_path();
-    cr.arc(w - r, r, r, -FRAC_PI_2, 0.0);
-    cr.arc(w - r, h - r, r, 0.0, FRAC_PI_2);
-    cr.arc(r, h - r, r, FRAC_PI_2, PI);
-    cr.arc(r, r, r, PI, 1.5 * PI);
-    cr.close_path();
-    cr.clip();
-    let c = |c: [f32; 3]| (c[0] as f64, c[1] as f64, c[2] as f64);
-    let base = gtk::cairo::LinearGradient::new(0.0, 0.0, w * 0.3, h);
-    let (r0, g0, b0) = c(s.base_top);
-    let (r1, g1, b1) = c(s.base_bottom);
-    base.add_color_stop_rgb(0.0, r0, g0, b0);
-    base.add_color_stop_rgb(1.0, r1, g1, b1);
-    let _ = cr.set_source(&base);
-    let _ = cr.paint();
-    for (i, (x, y)) in [(0.2, 0.2), (0.85, 0.35), (0.35, 0.95), (0.9, 0.95)]
-        .iter()
-        .enumerate()
-    {
-        let g = gtk::cairo::RadialGradient::new(x * w, y * h, 0.0, x * w, y * h, w * 0.6);
-        let (r, gg, b) = c(s.blobs[i]);
-        g.add_color_stop_rgba(0.0, r, gg, b, (s.blob_alpha * 1.4).min(1.0) as f64);
-        g.add_color_stop_rgba(1.0, r, gg, b, 0.0);
-        let _ = cr.set_source(&g);
-        let _ = cr.paint();
-    }
-    let hot = gtk::cairo::LinearGradient::new(w - 34.0, h - 26.0, w - 10.0, h - 8.0);
-    let (r0, g0, b0) = c(s.hot_a);
-    let (r1, g1, b1) = c(s.hot_b);
-    hot.add_color_stop_rgb(0.0, r0, g0, b0);
-    hot.add_color_stop_rgb(1.0, r1, g1, b1);
-    let _ = cr.set_source(&hot);
-    cr.arc(w - 20.0, h - 18.0, 9.0, 0.0, TAU);
-    let _ = cr.fill();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Legal sections' text is Pango markup, and text that doesn't parse
-    /// shows as nothing (as the Outfit licence's "PERMISSION & CONDITIONS"
+    /// shows as nothing (as a font licence's "PERMISSION & CONDITIONS"
     /// once did).
     #[test]
     fn legal_text_is_markup() {
-        assert!(pango::parse_markup(OUTFIT, '\0').is_err());
-        for text in [OUTFIT, CORE_MATH] {
+        assert!(pango::parse_markup(INTER, '\0').is_err());
+        for text in [INTER, CORE_MATH] {
             let escaped = gtk::glib::markup_escape_text(text);
             let (_, plain, _) = pango::parse_markup(&escaped, '\0').unwrap();
             assert_eq!(plain, text);

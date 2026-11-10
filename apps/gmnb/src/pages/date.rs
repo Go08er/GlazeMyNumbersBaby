@@ -238,6 +238,7 @@ impl DatePage {
         stack.add_named(&add_box, Some("add"));
 
         let col = gtk::Box::new(gtk::Orientation::Vertical, 14);
+        col.add_css_class("wc-plain");
         col.set_margin_top(4);
         col.set_margin_start(16);
         col.set_margin_end(16);

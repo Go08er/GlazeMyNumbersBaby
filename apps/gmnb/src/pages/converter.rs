@@ -216,6 +216,7 @@ impl ConverterPage {
         currency_box.append(&status);
 
         let values = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        values.add_css_class("wc-plain");
         values.set_vexpand(true);
         values.set_valign(gtk::Align::Start);
         values.append(&f1.frame);
@@ -274,13 +275,14 @@ impl ConverterPage {
                     p.keypad.set_scheme(*s);
                 }
             });
+            ctx.hub
+                .subscribe_style(&page.keypad, |pad, style| pad.set_style(style));
         }
         let weak = Rc::downgrade(&page);
         keypad.connect_pressed(move |id, x, y| {
             if let Some(p) = weak.upgrade() {
                 let s = p.ctx.hub.scheme();
-                p.ctx
-                    .pulse_at(&p.keypad, x, y, s.blobs[(id as usize * 5) % 4], 0.55);
+                p.ctx.pulse_at(&p.keypad, x, y, s.accent, 0.55);
                 p.press(id);
             }
         });

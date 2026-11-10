@@ -1,4 +1,4 @@
-//! The main window: aurora backdrop → toasts → overlay navigation sidebar →
+//! The main window: backdrop → toasts → overlay navigation sidebar →
 //! header + page stack. Pages are created lazily the first time they're
 //! needed and several modes can share one page (as upstream does).
 
@@ -15,8 +15,8 @@ use gtk::{gdk, glib};
 use crate::keymap::key_press;
 use crate::pages::{self, Ctx, Page};
 use crate::settings::{Persist, Store};
-use crate::theme::{Hub, PaletteId};
-use crate::widgets::aurora::Aurora;
+use crate::theme::Hub;
+use crate::widgets::backdrop::Backdrop;
 use crate::widgets::icon::{PathIcon, paths};
 
 pub struct Window {
@@ -326,11 +326,15 @@ pub fn apply_theme_setting(theme: &str) {
 /// The window class for a see-through backdrop.
 pub const SEE_THROUGH: &str = "wc-see-through";
 
-/// Show the backdrop at `alpha`: below 1 it, and the window under it, are
-/// see-through (a Wayland compositor always composites windows).
-pub fn apply_backdrop(win: &adw::ApplicationWindow, aurora: &Aurora, alpha: f32) {
+/// Show the backdrop at `alpha`: below 1 the desktop shows through it (a
+/// Wayland compositor always composites windows; the window itself is
+/// always a transparent surface). The style follows through the hub
+/// (`Hub::set_opacity`).
+pub fn apply_backdrop(win: &adw::ApplicationWindow, backdrop: &Backdrop, alpha: f32) {
     let see_through = alpha < 1.0;
-    aurora.set_backdrop_alpha(if see_through { alpha } else { 1.0 });
+    backdrop.set_alpha(if see_through { alpha } else { 1.0 });
+    // TRANSITION: the display draws its own halo, and reads this class to
+    // know when (it becomes `display.halo`, from the style).
     if see_through == win.has_css_class(SEE_THROUGH) {
         return;
     }
@@ -351,19 +355,69 @@ pub fn apply_backdrop(win: &adw::ApplicationWindow, aurora: &Aurora, alpha: f32)
     redraw(win.upcast_ref());
 }
 
+/// What the theme hub starts with: the saved settings, and what the
+/// environment asks of this run (docs/theming.md, "Environment hooks"),
+/// which is never saved.
+fn theme_config(settings: &crate::settings::Settings) -> crate::theme::Config {
+    use gmnb_theme::theme::{BUILT_IN, DEV_ID};
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let mut run_options = Vec::new();
+    let mut theme = settings.active_theme.clone();
+    let dev_dir = env("GMNB_THEME_DIR").map(std::path::PathBuf::from);
+    if dev_dir.is_some() {
+        theme = DEV_ID.to_string();
+    }
+    // Kept for the old scripts: Aurora in that palette.
+    if let Some(palette) = env("GMNB_PALETTE") {
+        theme = crate::settings::AURORA.to_string();
+        run_options.push(("palette".to_string(), palette));
+    }
+    if let Some(id) = crate::THEME_ARG
+        .get()
+        .cloned()
+        .flatten()
+        .or_else(|| env("GMNB_THEME"))
+    {
+        theme = id;
+    }
+    if let Some(options) = env("GMNB_THEME_OPTIONS") {
+        run_options.extend(crate::theme::options_from_env(&options));
+    }
+    // Every theme with saved options: the built-in ones, and whatever the
+    // settings name.
+    let ids = BUILT_IN
+        .iter()
+        .map(|b| b.id.to_string())
+        .chain(settings.theme_options.keys().cloned())
+        .chain([theme.clone()]);
+    crate::theme::Config {
+        saved_options: ids
+            .map(|id| {
+                let options = settings.options_of(&id);
+                (id, options)
+            })
+            .collect(),
+        theme,
+        run_options,
+        opacity: crate::settings::backdrop_alpha(settings.background_opacity),
+        system_accent: settings.system_accent,
+        accent: env("GMNB_ACCENT").and_then(|v| crate::theme::accent_from_env(&v)),
+        dev_dir,
+    }
+}
+
 impl Window {
     pub fn new(app: &adw::Application) -> Rc<Self> {
         let screenshot = std::env::var_os("GMNB_SCREENSHOT").is_some();
         // Screenshots don't touch saved state unless explicitly asked to read it.
         let ephemeral = screenshot && std::env::var_os("GMNB_REAL_STORE").is_none();
         let store = Rc::new(if ephemeral {
-            Store::ephemeral()
+            let store = Store::ephemeral();
+            store.data.borrow_mut().migrate();
+            store
         } else {
-            Store::load(crate::DATA_DIR)
+            crate::settings::load_store()
         });
-        if let Ok(p) = std::env::var("GMNB_PALETTE") {
-            store.data.borrow_mut().palette = p;
-        }
         if let Some(v) = std::env::var("GMNB_OPACITY")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -385,21 +439,14 @@ impl Window {
 
         let settings = store.data.borrow().clone();
         apply_theme_setting(&settings.theme);
-        let custom = (
-            crate::theme::parse_hex(&settings.custom_primary)
-                .unwrap_or(crate::theme::DEFAULT_PRIMARY),
-            crate::theme::parse_hex(&settings.custom_secondary)
-                .unwrap_or(crate::theme::DEFAULT_SECONDARY),
-        );
-        let hub = Hub::new(
-            PaletteId::from_key(&settings.palette).unwrap_or(PaletteId::Aurora),
-            custom,
-        );
+        let hub = Hub::new(theme_config(&settings));
         crate::theme::follow_portal_accent(&hub);
 
         // Saved (or overridden) sizes are hints: keep them to what a window
         // can be. GTK aborts on anything below -1.
         let defaults = crate::settings::Settings::default();
+        let (min_width, min_height) = appcore::metrics::window::MIN_SIZE;
+        let (min_width, min_height) = (min_width as i32, min_height as i32);
         let fit = |v: i32, min: i32, fallback: i32| {
             if v <= 0 {
                 fallback
@@ -410,24 +457,24 @@ impl Window {
         let win = adw::ApplicationWindow::builder()
             .application(app)
             .title(crate::APP_NAME)
-            .default_width(fit(settings.width, 320, defaults.width))
-            .default_height(fit(settings.height, 480, defaults.height))
-            .width_request(320)
-            .height_request(480)
+            .default_width(fit(settings.width, min_width, defaults.width))
+            .default_height(fit(settings.height, min_height, defaults.height))
+            .width_request(min_width)
+            .height_request(min_height)
             .css_classes(["gmnb"])
             .build();
+        hub.attach(&win);
 
-        let aurora = Aurora::default();
-        aurora.set_animated(settings.animated_background && std::env::var("GMNB_STILL").is_err());
+        let backdrop = Backdrop::default();
         apply_backdrop(
             &win,
-            &aurora,
+            &backdrop,
             crate::settings::backdrop_alpha(settings.background_opacity),
         );
         let toasts = adw::ToastOverlay::new();
         let ctx = Rc::new(Ctx {
             hub: hub.clone(),
-            aurora: aurora.clone(),
+            backdrop: backdrop.clone(),
             toasts: toasts.clone(),
             store: store.clone(),
             compact: Default::default(),
@@ -526,11 +573,19 @@ impl Window {
             );
         }
         toasts.set_child(Some(&split));
+        // The window gets its content in `present`.
+        backdrop.set_child(Some(&toasts));
         {
-            // The window gets its content in `present`.
-            aurora.set_child(Some(&toasts));
-            let aurora = aurora.clone();
-            hub.subscribe(move |s| aurora.set_scheme(*s));
+            // A theme that fails: the base look (or its last style), and
+            // a toast saying so.
+            let toasts = toasts.downgrade();
+            hub.set_tell(move |message| {
+                if let Some(toasts) = toasts.upgrade() {
+                    let toast = adw::Toast::new(message);
+                    toast.set_timeout(4);
+                    toasts.add_toast(toast);
+                }
+            });
         }
 
         let this = Rc::new(Window {
@@ -681,7 +736,7 @@ impl Window {
     pub fn present(&self) {
         self.win.present();
         if self.win.content().is_none() {
-            self.win.set_content(Some(&self.ctx.aurora));
+            self.win.set_content(Some(&self.ctx.backdrop));
         }
     }
 

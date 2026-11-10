@@ -9,12 +9,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::gdk;
-use gtk::graphene;
 use gtk::prelude::*;
 
 use crate::settings::Store;
 use crate::theme::Hub;
-use crate::widgets::aurora::Aurora;
+use crate::widgets::backdrop::Backdrop;
 use appcore::KeyPress;
 use appcore::modes::ViewMode;
 
@@ -62,7 +61,7 @@ impl<T: Copy + PartialEq> Followed<T> {
 /// Services every page can use.
 pub struct Ctx {
     pub hub: Rc<Hub>,
-    pub aurora: Aurora,
+    pub backdrop: Backdrop,
     pub toasts: adw::ToastOverlay,
     pub store: Rc<Store>,
     /// Set by the window: enter/leave the compact "keep on top" chrome.
@@ -78,18 +77,18 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    /// Bloom a pulse in the background at a point given in `widget` coords.
+    /// TRANSITION: where 0.2 bloomed a pulse in its aurora. Each call
+    /// becomes an event for the theme's layers (`press`, `result`,
+    /// `error`; docs/theming.md, "Where events come from"); until the
+    /// layers are drawn, nothing happens.
     pub fn pulse_at(
         &self,
-        widget: &impl IsA<gtk::Widget>,
-        x: f32,
-        y: f32,
-        color: [f32; 3],
-        strength: f32,
+        _widget: &impl IsA<gtk::Widget>,
+        _x: f32,
+        _y: f32,
+        _color: [f32; 3],
+        _strength: f32,
     ) {
-        if let Some(p) = widget.compute_point(&self.aurora, &graphene::Point::new(x, y)) {
-            self.aurora.pulse(p.x(), p.y(), color, strength);
-        }
     }
 
     /// A flyout of the page's own keys, an autohide popover, which holds
