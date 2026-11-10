@@ -854,7 +854,12 @@ hook falls back to.
 | `keys.operator` | Control | background `surface2`; `accent_text`; `text.key` | `button.wc-key.wc-op` |
 | `keys.equals` | Control | background `accent`; `on_accent`; `text.key` | `button.wc-key.wc-eq` |
 | `keys.on` | State | `{ background accent, color on_accent }` | `button.wc-key.wc-on`, `button.wc-fn:checked` (2nd, hyp, … switched on) |
-| `keys.pad` | `{ gap, radius, min_height, font }` | 3, `shape.radius`, 0, `keys.func`'s font | `.wc-graph-pad button.wc-pad-key` and its grid (the graphing page's keypad). The keys are set in their classes' own fonts (`keys.number`, `keys.func`) unless `font` differs from `keys.func`'s: then it is every pad key's (Rust). |
+| `keys.pad` | `{ gap, radius, min_height, font }` | 3, `shape.radius`, 0, `keys.func`'s font | `.wc-graph-pad button.wc-pad-key` and its grid (the graphing page's keypad). The keys are set in their classes' own fonts (`keys.number`, `keys.func`) unless `font` differs from `keys.func`'s: then it is every pad key's (Rust). Its labels ask for no least height, as a keypad's do. |
+| `keys.short.below` | number | 0 (never) | Rust: a keypad whose keys would be less than this high, laid out `keys.gap` apart (`keys.gap_compact` in the compact window), is *short*: it carries `wc-short` and takes the rest of `keys.short` |
+| `keys.short.gap` | number | `keys.gap` | Rust: a short keypad's spacing |
+| `keys.short.icon` | Icon | `keys.icon` | Rust: a short keypad's keys that carry an icon |
+| `keys.short.number`, `.func`, `.operator`, `.equals` | Control | that class as finished | `keypad.wc-short button.wc-key.wc-num` (and `.wc-fn`, `.wc-op`, `.wc-eq`): every rule of the class again, which outranks the class's own for each state; the labels' fonts (Rust) |
+| `keys.short.on` | State | `keys.on` | A short keypad's toggle that is on |
 
 The key classes are Controls but have no `checked`; a toggle that is on
 uses `keys.on`. A class takes `keys`' shared values (`radius`, `padding`,
@@ -869,6 +874,18 @@ that state (`checked`, then `hover` or `active`, then `disabled`, as the
 stylesheet orders them), and it is shrunk to its key's width less 8 with
 no least size. Its halo is `window.raised_text_halo`, and none while the
 key is disabled.
+
+Keys shrink with the window, down to its least, 300×400, where
+Scientific's and Programmer's are some fifteen pixels high in the base
+look. A look made for keys of forty pixels (a lip,
+a glint, a large sign) has no room there: `keys.short` is a second look
+for a keypad whose keys are less than `keys.short.below` high. Only the
+height the keypad is given decides it, never anything the short keys
+ask for, so it can't flicker at the threshold; it is decided once the
+toolkit has laid the window out, and a frame later the keys are drawn
+the other way. A key class's own `min_height` keeps a window from
+shrinking at all, and the least window is the contract's on every page:
+a theme lets its keys shrink and makes them short instead.
 
 ### History and memory panel
 

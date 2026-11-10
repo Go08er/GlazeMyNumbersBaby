@@ -390,6 +390,20 @@ export type KeysStyle = {
 	disabled: State?,
 	-- The graphing page's small keypad.
 	pad: { gap: number?, radius: Radius?, min_height: number?, font: Font? }?,
+	-- A keypad whose keys would be less than `below` pixels high, laid out
+	-- the usual gap apart, is short and takes these instead: its own gap,
+	-- its keys' icons, each class, and a toggle that is on. Each is what
+	-- it stands for unless given. `below` 0, the base look's: never.
+	short: {
+		below: number?,
+		gap: number?,
+		icon: Icon?,
+		number: Control?,
+		func: Control?,
+		operator: Control?,
+		equals: Control?,
+		on: State?,
+	}?,
 }
 
 export type Reveal = "always" | "hover"

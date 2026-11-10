@@ -628,6 +628,9 @@ impl GraphingPage {
                     let text = FitLabel::drawn();
                     text.set_text(label);
                     text.set_align(Align::Center);
+                    // As the calculator's keys: a key may be smaller than
+                    // its label (the least window is 300 × 400).
+                    text.set_loose(true);
                     let inset = (ctl::KEY_LABEL_MARGIN / 2.0) as i32;
                     text.set_margin_start(inset);
                     text.set_margin_end(inset);

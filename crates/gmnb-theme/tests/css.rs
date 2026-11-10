@@ -581,33 +581,36 @@ fn pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fill>)>
             vec![plain.clone()],
         ));
     }
-    for class in ["number", "func", "operator", "equals"] {
-        let key = style.control(&format!("keys.{class}")).unwrap();
-        let rest = key.finished(&[]);
-        // The operators' glyphs (÷ × − +) are symbols, not text to read:
-        // 3, as for an icon. (DGMNB's own light palette puts them at
-        // 4.1 on its second surface.)
-        let need = if class == "operator" {
-            UI_CONTRAST
-        } else {
-            needed(&key.font)
-        };
+    // The keys, and a short keypad's (`keys.short`).
+    for keys in ["keys", "keys.short"] {
+        for class in ["number", "func", "operator", "equals"] {
+            let key = style.control(&format!("{keys}.{class}")).unwrap();
+            let rest = key.finished(&[]);
+            // The operators' glyphs (÷ × − +) are symbols, not text to
+            // read: 3, as for an icon. (DGMNB's own light palette puts
+            // them at 4.1 on its second surface.)
+            let need = if class == "operator" {
+                UI_CONTRAST
+            } else {
+                needed(&key.font)
+            };
+            out.push((
+                format!("{keys}.{class}"),
+                rest.color,
+                need,
+                vec![rest.background],
+            ));
+        }
+        // A toggle that is on.
+        let func = style.control(&format!("{keys}.func")).unwrap();
+        let on = func.finished(&[Which::Checked]);
         out.push((
-            format!("keys.{class}"),
-            rest.color,
-            need,
-            vec![rest.background],
+            format!("{keys}.on"),
+            on.color,
+            needed(&func.font),
+            vec![on.background],
         ));
     }
-    // A toggle that is on.
-    let func = style.control("keys.func").unwrap();
-    let on = func.finished(&[Which::Checked]);
-    out.push((
-        "keys.on".to_string(),
-        on.color,
-        needed(&func.font),
-        vec![on.background],
-    ));
     // The toolkit draws a native family itself, in the stock colours.
     if !style.native().contains(&"segmented") {
         for (name, path, under) in [

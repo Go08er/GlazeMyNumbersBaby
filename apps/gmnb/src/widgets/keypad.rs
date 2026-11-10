@@ -22,6 +22,11 @@
 //!
 //! One thing is built in: a key typed on the keyboard is shown `active`
 //! for 110 ms ([`Keypad::flash`]).
+//!
+//! A keypad whose keys would be less than `keys.short.below` high, laid
+//! out the usual gap apart, is short: it carries `wc-short`, and its gap,
+//! its keys' icons and their labels' fonts are `keys.short`'s. Only the
+//! height it is given decides it, never what its short keys ask for.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
@@ -62,7 +67,26 @@ fn kind_path(kind: KeyKind) -> &'static str {
     }
 }
 
-const KEY_PATHS: [&str; 4] = ["keys.number", "keys.func", "keys.operator", "keys.equals"];
+/// The row a key class's label is set from on a short keypad.
+fn short_path(path: &str) -> &'static str {
+    match path {
+        "keys.number" => "keys.short.number",
+        "keys.operator" => "keys.short.operator",
+        "keys.equals" => "keys.short.equals",
+        _ => "keys.short.func",
+    }
+}
+
+const KEY_PATHS: [&str; 8] = [
+    "keys.number",
+    "keys.func",
+    "keys.operator",
+    "keys.equals",
+    "keys.short.number",
+    "keys.short.func",
+    "keys.short.operator",
+    "keys.short.equals",
+];
 
 /// A key's label and what it is set from.
 struct KeyText {
@@ -158,6 +182,18 @@ mod imp {
         pub radius: Cell<f32>,
         pub gaps: Cell<(f32, f32)>,
         pub compact: Cell<bool>,
+        /// From the style: below what height its keys are short
+        /// (`keys.short.below`), the gap between short keys
+        /// (`keys.short.gap`) and their icons' size and line
+        /// (`keys.short.icon`).
+        pub short_below: Cell<f32>,
+        pub short_gap: Cell<f32>,
+        pub short_icon: Cell<(f32, f32)>,
+        /// The keypad is short; what its last layout found it to be; and
+        /// whether that is to be made so once the layout is done.
+        pub short: Cell<bool>,
+        pub found_short: Cell<bool>,
+        pub short_pending: Cell<bool>,
         /// The gap in use, in whole pixels.
         pub gap: Cell<i32>,
         /// The keys' icons, and the size and line width the style gives
@@ -203,6 +239,12 @@ mod imp {
                     appcore::metrics::calc::KEY_GAP_COMPACT,
                 )),
                 compact: Cell::new(false),
+                short_below: Cell::new(0.0),
+                short_gap: Cell::new(appcore::metrics::calc::KEY_GAP),
+                short_icon: Cell::new((appcore::metrics::controls::KEY_ICON, 1.5)),
+                short: Cell::new(false),
+                found_short: Cell::new(false),
+                short_pending: Cell::new(false),
                 gap: Cell::new(0),
                 icons: RefCell::default(),
                 icon: Cell::new((appcore::metrics::controls::KEY_ICON, 1.5)),
@@ -340,9 +382,25 @@ mod imp {
         }
 
         fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
-            let gap = self.gap.get() as f32;
             let (rows, cols) = self.grid.get();
             let (rows, cols) = (rows.max(1) as f32, cols.max(1) as f32);
+            // Short or not, from the keys this height makes at the usual
+            // gap; made so once the toolkit is done laying out (it
+            // changes the style).
+            let below = self.short_below.get();
+            let usual = self.obj().usual_gap() as f32;
+            let short = below > 0.0 && (height as f32 - usual * (rows - 1.0)) / rows < below;
+            self.found_short.set(short);
+            if short != self.short.get() && !self.short_pending.replace(true) {
+                let weak = self.obj().downgrade();
+                glib::idle_add_local_once(move || {
+                    if let Some(k) = weak.upgrade() {
+                        k.imp().short_pending.set(false);
+                        k.set_short(k.imp().found_short.get());
+                    }
+                });
+            }
+            let gap = self.gap.get() as f32;
             let cw = (width as f32 - gap * (cols - 1.0)) / cols;
             let ch = (height as f32 - gap * (rows - 1.0)) / rows;
             for c in self.cells.borrow().iter() {
@@ -384,16 +442,64 @@ impl Keypad {
         Self::default()
     }
 
-    fn sync_gap(&self) {
+    /// The gap its keys would be laid out with if it weren't short.
+    fn usual_gap(&self) -> i32 {
         let (gap, compact) = self.imp().gaps.get();
         let gap = if self.imp().compact.get() {
             compact
         } else {
             gap
         };
-        let gap = gap.round().max(0.0) as i32;
-        if self.imp().gap.replace(gap) != gap {
+        gap.round().max(0.0) as i32
+    }
+
+    fn sync_gap(&self) {
+        let imp = self.imp();
+        let gap = if imp.short.get() {
+            imp.short_gap.get().round().max(0.0) as i32
+        } else {
+            self.usual_gap()
+        };
+        if imp.gap.replace(gap) != gap {
             self.queue_resize();
+        }
+    }
+
+    /// Short keys, or not: `keys.short`'s gap, icons and fonts, and
+    /// `wc-short` for the stylesheet's short classes.
+    fn set_short(&self, short: bool) {
+        let imp = self.imp();
+        if imp.short.replace(short) == short {
+            return;
+        }
+        if short {
+            self.add_css_class("wc-short");
+        } else {
+            self.remove_css_class("wc-short");
+        }
+        self.sync_icons();
+        let ids: Vec<u32> = imp.texts.borrow().keys().copied().collect();
+        for id in ids {
+            self.sync_text(id);
+        }
+        self.sync_gap();
+        self.queue_draw();
+    }
+
+    /// The size and line of its keys' icons.
+    fn icon_style(&self) -> (f32, f32) {
+        let imp = self.imp();
+        if imp.short.get() {
+            imp.short_icon.get()
+        } else {
+            imp.icon.get()
+        }
+    }
+
+    fn sync_icons(&self) {
+        let (size, stroke) = self.icon_style();
+        for i in self.imp().icons.borrow().iter() {
+            i.set_style(size, stroke);
         }
     }
 
@@ -440,14 +546,23 @@ impl Keypad {
         imp.radius.set(style.radius("keys.radius").uniform());
         imp.gaps
             .set((style.number("keys.gap"), style.number("keys.gap_compact")));
-        self.sync_gap();
-        if let Some(icon) = style.icon("keys.icon") {
-            let stroke = icon.stroke.unwrap_or_else(|| style.icon_stroke(icon.size));
-            imp.icon.set((icon.size, stroke));
-            for i in imp.icons.borrow().iter() {
-                i.set_style(icon.size, stroke);
+        let below = style.number("keys.short.below");
+        if imp.short_below.replace(below) != below {
+            // Short or not is found again as it is laid out.
+            self.queue_resize();
+        }
+        imp.short_gap.set(style.number("keys.short.gap"));
+        for (path, slot) in [
+            ("keys.icon", &imp.icon),
+            ("keys.short.icon", &imp.short_icon),
+        ] {
+            if let Some(icon) = style.icon(path) {
+                let stroke = icon.stroke.unwrap_or_else(|| style.icon_stroke(icon.size));
+                slot.set((icon.size, stroke));
             }
         }
+        self.sync_icons();
+        self.sync_gap();
         self.queue_draw();
     }
 
@@ -470,7 +585,12 @@ impl Keypad {
             text.label.set_halo(&[]);
         }
         let fonts = imp.fonts.borrow();
-        let Some(f) = fonts.get(text.path) else {
+        let path = if imp.short.get() {
+            short_path(text.path)
+        } else {
+            text.path
+        };
+        let Some(f) = fonts.get(path) else {
             return;
         };
         let flags = button.state_flags();
@@ -531,7 +651,7 @@ impl Keypad {
         let mut text = None;
         let child: gtk::Widget = match key.icon {
             Some(path) => {
-                let (size, stroke) = self.imp().icon.get();
+                let (size, stroke) = self.icon_style();
                 let icon = super::icon::PathIcon::new(path, size.round() as i32);
                 icon.set_style(size, stroke);
                 // A key is as small as its place: DGMNB's keys shrink
