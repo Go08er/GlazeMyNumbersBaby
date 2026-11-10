@@ -1430,7 +1430,27 @@ pub static ROWS: &[Row] = &[
         })
     }),
     row("graph.toolbar_button", Kind::Control, |s| {
-        s.icon_button(metrics::graph::TOOLBAR_BUTTON)
+        let mut button = s.icon_button(metrics::graph::TOOLBAR_BUTTON);
+        // Lit, the icon is the accent as text on the accent's tint on the
+        // toolbar on the canvas: the tint dulls it, and for some accents
+        // (a violet, an olive) the text colour reads there at just under
+        // 3. Moved only as far as it takes.
+        if let Value::Control(control) = &mut button {
+            let c = &s.t.colors;
+            let toolbar = alpha(c.surface2, metrics::graph::TOOLBAR_FILL_ALPHA);
+            let tint = alpha(c.accent, metrics::controls::ICON_BUTTON_ON_ALPHA);
+            let ground = crate::states::over(tint, crate::states::over(toolbar, c.surface));
+            let rgb = |c: Rgba| [c[0], c[1], c[2]];
+            let ink = appcore::color::with_contrast(
+                rgb(c.accent_text),
+                rgb(ground),
+                appcore::color::UI_CONTRAST,
+            );
+            if let Some(on) = &mut control.checked.color {
+                *on = [ink[0], ink[1], ink[2], on[3]];
+            }
+        }
+        button
     }),
     row("graph.canvas.background", Kind::Paint, |s| {
         Value::Paint(Paint::Color(s.t.colors.surface))
