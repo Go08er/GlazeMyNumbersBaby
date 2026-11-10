@@ -3,7 +3,9 @@
 //! opacities 0 to 1, with and without a desktop accent and with motion
 //! off; each layer at odd sizes on every page with odd events and odd
 //! timings; the `sound` hooks; the options' `visible`, `actions` and
-//! previews. The readability helpers are css.rs's, copied.
+//! previews. The readability helpers are css.rs's, copied. The three
+//! longest sweeps (Aurora's and Swirls' styles, Swirls' layers: about
+//! three minutes together) are ignored: `--release -- --ignored`.
 
 use std::collections::BTreeMap;
 
@@ -750,6 +752,7 @@ fn report(bad: Vec<String>) {
 }
 
 #[test]
+#[ignore = "a long sweep (a minute or more): cargo test --release -p gmnb-theme --test sweep -- --ignored"]
 fn aurora_styles_sweep() {
     let theme = built_in("aurora");
     report(sweep_styles("aurora", option_sets(&theme)));
@@ -762,6 +765,7 @@ fn glazed_styles_sweep() {
 }
 
 #[test]
+#[ignore = "a long sweep (a minute or more): cargo test --release -p gmnb-theme --test sweep -- --ignored"]
 fn swirls_styles_sweep() {
     let theme = built_in("swirls");
     report(sweep_styles("swirls", option_sets(&theme)));
@@ -1190,6 +1194,7 @@ fn glazed_layers_sweep() {
 }
 
 #[test]
+#[ignore = "a long sweep (a minute or more): cargo test --release -p gmnb-theme --test sweep -- --ignored"]
 fn swirls_layers_sweep() {
     report(sweep_layers("swirls"));
 }
