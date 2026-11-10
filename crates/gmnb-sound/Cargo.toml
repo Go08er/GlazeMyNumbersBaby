@@ -15,6 +15,10 @@ core-math = { package = "crmath", path = "../crmath" }
 # Sound files: WAV and Ogg Vorbis, both in safe Rust.
 hound = "3.5"
 lewton = "0.10"
+# lewton's own Ogg reader (already in the tree through it): the Vorbis
+# headers are checked, packet by packet as lewton will see them, before
+# lewton sets memory aside for what they say.
+ogg = "0.8"
 # PulseAudio's native protocol in Rust (PipeWire's pipewire-pulse and
 # PulseAudio serve it): no native library, nothing loaded until a theme
 # with sounds is.

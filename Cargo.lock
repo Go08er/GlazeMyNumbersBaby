@@ -1275,6 +1275,7 @@ dependencies = [
  "gmnb-theme",
  "hound",
  "lewton",
+ "ogg",
  "pulseaudio",
 ]
 
