@@ -681,6 +681,10 @@ pub static ROWS: &[Row] = &[
             ..s.bare()
         })
     }),
+    // The headings over Settings' and About's cards (DGMNB's STRONG).
+    row("card.heading", Kind::Text, |s| {
+        s.raised_text(&s.t.text.strong, s.t.colors.fg)
+    }),
     row("popover", Kind::Surface, |s| {
         Value::Surface(Surface {
             background: Fill::color(s.t.colors.surface),

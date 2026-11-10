@@ -516,6 +516,10 @@ impl DatePage {
                 refresh();
             });
         }
+        // Dev/screenshot hook: open on "Add or subtract days".
+        if std::env::var_os("GMNB_DATE_ADD").is_some() {
+            mode.set_active_name(Some("add"));
+        }
         {
             let (state, refresh) = (state.clone(), refresh.clone());
             op.connect_active_name_notify(move |g| {

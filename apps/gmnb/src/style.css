@@ -2498,6 +2498,21 @@ window.gmnb.own-card list.boxed-list {
 }
 /* end surface */
 
+/* text card.heading preferencesgroup+box.header+label.heading scope=window.gmnb.own-card */
+window.gmnb.own-card preferencesgroup box.header label.heading {
+  color: var(--gmnb-card-heading-color);
+  font-family: var(--gmnb-card-heading-font-family);
+  font-size: var(--gmnb-card-heading-font-size);
+  font-weight: var(--gmnb-card-heading-font-weight);
+  font-style: var(--gmnb-card-heading-font-style);
+  letter-spacing: var(--gmnb-card-heading-letter-spacing);
+  font-feature-settings: var(--gmnb-card-heading-font-features);
+  font-variation-settings: var(--gmnb-card-heading-font-variations);
+  text-shadow: var(--gmnb-card-heading-text-shadow);
+  margin: var(--gmnb-card-heading-margin);
+}
+/* end text */
+
 /* The toolkit's plain buttons: dialog buttons, drop-downs. */
 /* control button dialog+button:not(.flat):not(.circular):not(.image-button) scope=window.gmnb.own-button active=.keyboard-activating */
 window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button) {
