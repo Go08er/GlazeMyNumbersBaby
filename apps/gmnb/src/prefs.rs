@@ -1105,12 +1105,14 @@ pub fn about(parent: &adw::ApplicationWindow, credits: &[(String, String)]) {
         None,
     );
     // Custom licence text is Pango markup: escape the plain-text notices.
-    about.add_legal_section(
-        "Inter typeface",
-        Some("Copyright (c) 2016 The Inter Project Authors"),
-        gtk::License::Custom,
-        Some(&gtk::glib::markup_escape_text(INTER)),
-    );
+    for (title, copyright, text) in TYPEFACES {
+        about.add_legal_section(
+            title,
+            copyright,
+            gtk::License::Custom,
+            Some(&gtk::glib::markup_escape_text(text)),
+        );
+    }
     for (title, text) in credits {
         about.add_legal_section(
             title,
@@ -1147,6 +1149,22 @@ pub fn about(parent: &adw::ApplicationWindow, credits: &[(String, String)]) {
 }
 
 const INTER: &str = include_str!("../../dgmnb/assets/fonts/OFL-Inter.txt");
+const NOTO: &str = include_str!("../../dgmnb/assets/fonts/OFL-Noto.txt");
+/// The typefaces GMNB bundles itself (`crate::INTER`, and the subsets it
+/// falls back to, `crate::FALLBACKS`): each one's title, copyright and
+/// licence in About → Legal. (A theme's are its own credits.)
+const TYPEFACES: [(&str, Option<&str>, &str); 2] = [
+    (
+        "Inter typeface",
+        Some("Copyright (c) 2016 The Inter Project Authors"),
+        INTER,
+    ),
+    (
+        "Noto Sans typefaces (Math, Arabic, Armenian, Bengali and Khmer subsets)",
+        None,
+        NOTO,
+    ),
+];
 const CORE_MATH: &str = concat!(
     include_str!("../../../crates/crmath/vendor/COPYRIGHT"),
     "\n",
@@ -1215,5 +1233,23 @@ mod tests {
         let (_, plain, _) = pango::parse_markup(&rest, '\0').unwrap();
         assert!(plain.contains("Show their licences"));
         assert!(CORE_MATH.contains("Alexei Sibidanov") && CORE_MATH.contains("Permission is"));
+    }
+
+    /// Every typeface GMNB bundles has its licence in About → Legal:
+    /// Inter, and the Noto Sans subsets it falls back to (0.3 bundles
+    /// them, as DGMNB does, whose About lists both).
+    #[test]
+    fn every_bundled_typeface_is_credited() {
+        let credited = |licence: &str| TYPEFACES.iter().any(|(_, _, text)| *text == licence);
+        assert!(credited(INTER), "Inter isn't credited in About → Legal");
+        for (name, _) in crate::FALLBACKS {
+            assert!(name.starts_with("NotoSans"), "{name}: which licence?");
+            assert!(credited(NOTO), "{name} isn't credited in About → Legal");
+        }
+        for (_, _, text) in TYPEFACES {
+            let escaped = gtk::glib::markup_escape_text(text);
+            let (_, plain, _) = pango::parse_markup(&escaped, '\0').unwrap();
+            assert_eq!(plain, text);
+        }
     }
 }
