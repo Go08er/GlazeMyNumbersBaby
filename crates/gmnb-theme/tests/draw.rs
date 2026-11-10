@@ -971,7 +971,12 @@ fn images_come_from_the_themes_folder_within_their_caps() {
         gmnb_theme::picture::image_size(&jpeg_header(300, 200)),
         Some((300, 200))
     );
+    // A header cut short has no size.
     assert_eq!(gmnb_theme::picture::image_size(b"GIF89a"), None);
+    assert_eq!(
+        gmnb_theme::picture::image_size(b"GIF89a\x40\x01\xf0\x00\x00\x00\x00"),
+        Some((320, 240))
+    );
 
     let d = dir("images");
     let images = d.0.join("images");
@@ -1005,10 +1010,6 @@ fn images_come_from_the_themes_folder_within_their_caps() {
     );
     assert_eq!(theme.api().pictures().len(), 2);
     assert_eq!(ops(&theme).len(), 1);
-    assert!(matches!(
-        theme.api().pictures().pixels(ImageId(0)),
-        Some(Pixels::Encoded(bytes)) if bytes == png_header(64, 32)
-    ));
     let notes: Vec<String> = theme
         .take_draw_notes()
         .into_iter()
@@ -1016,7 +1017,7 @@ fn images_come_from_the_themes_folder_within_their_caps() {
         .collect();
     for part in [
         "wide.png is 2049×10",
-        "text.png is not a PNG or JPEG",
+        "text.png is not a PNG, JPEG, WebP or GIF picture",
         "heavy.png is 4194305 bytes",
         "none.png",
         "outside.png",
@@ -1026,6 +1027,29 @@ fn images_come_from_the_themes_folder_within_their_caps() {
     }
     // Asked for again every frame, a missing picture is noted once.
     assert_eq!(notes.iter().filter(|n| n.contains("none.png")).count(), 1);
+
+    // These files are headers and nothing more: enough for a theme to be
+    // told a size, and no picture. When the app comes to draw one it has
+    // no pixels: it keeps its size, draws nothing, and the author is told
+    // once. It is not decoded twice.
+    assert!(theme.api().pictures().pixels(ImageId(0)).is_none());
+    assert!(theme.api().still(ImageId(0)).is_none());
+    assert!(theme.api().still(ImageId(0)).is_none());
+    assert_eq!(
+        theme
+            .api()
+            .pictures()
+            .get(ImageId(0))
+            .map(|p| (p.width, p.height)),
+        Some((64, 32))
+    );
+    let notes = theme.take_draw_notes();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].message.contains("a.png can't be decoded")
+            && notes[0].message.contains("it draws nothing"),
+        "{notes:?}"
+    );
 
     // Sixteen images, and 32 MiB decoded in all.
     let d = dir("manyimages");

@@ -713,7 +713,8 @@ export type Pixels = {
 	-- Copies width × height × 4 bytes: each pixel red, green, blue,
 	-- opacity (not premultiplied), rows from the top. As one number with
 	-- buffer.writeu32: 0xAABBGGRR. Returns false, changing nothing, if
-	-- the picture was changed too recently (30 times a second at most).
+	-- the picture was changed too recently (30 times a second at most);
+	-- the layer being drawn is then drawn once more when it can be.
 	set: (self: Pixels, data: buffer) -> boolean,
 }
 
@@ -725,7 +726,9 @@ export type ImageOptions = {
 	-- smooth. "nearest": hard pixels.
 	filter: ("trilinear" | "linear" | "nearest")?,
 	-- Animations: where in the animation, in seconds. Left out, the
-	-- layer's clock, and the app schedules the next frame itself.
+	-- layer's clock, and the app schedules the next frame itself. Under
+	-- reduced motion and in a preview the first frame is shown whatever
+	-- this says.
 	time: number?,
 	-- Animations, with `time`: wrap around past the end (the default) or
 	-- hold the last frame.

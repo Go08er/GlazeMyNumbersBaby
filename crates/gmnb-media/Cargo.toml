@@ -1,0 +1,23 @@
+[package]
+name = "gmnb-media"
+description = "GMNB's theme pictures: its own decoders for stills and animations, the animation player, and the field pass"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+# Everything here is Rust: no native library joins GMNB's list
+# (docs/theming-media.md, "Where the code lives"). DGMNB links none of it.
+[dependencies]
+# The version DGMNB's own dependencies already bring (tiny-skia's): one
+# `png` in the lock file.
+png = "0.17"
+# The portable decoder only: none of its `unsafe` SIMD paths is built.
+zune-jpeg = { version = "0.5", default-features = false, features = ["std"] }
+# The decoder; `color_quant` is the encoder's.
+gif = { version = "0.14", default-features = false, features = ["std", "raii_no_panic"] }
+image-webp = "0.2"
+# The processor time the media thread has used (clock_gettime): what its
+# quarter of a core is measured in.
+libc = "0.2"

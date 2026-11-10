@@ -10,10 +10,13 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 
+use gmnb_media::Player;
 use gmnb_theme::draw::{self, BlendMode, DisplayList, Filter, MaskMode, Op};
+use gmnb_theme::field::FieldPicture;
 use gmnb_theme::path::{Path, Segment};
-use gmnb_theme::picture::{ImageId, Pixels};
+use gmnb_theme::picture::{ImageId, PictureKind};
 use gmnb_theme::theme::Theme;
 use gmnb_theme::types::*;
 use gtk::prelude::*;
@@ -64,61 +67,252 @@ pub struct Glyph {
     pub y: f32,
 }
 
+/// An animation's frames as textures: its first, and the one shown.
+#[derive(Default)]
+struct Frames {
+    first: Option<gdk::Texture>,
+    shown: Option<(u32, gdk::Texture)>,
+}
+
 /// What a replay draws with, kept between frames: the theme's pictures
-/// as textures, and the layouts of the texts it drew.
+/// as textures, its animations playing, and the layouts of the texts it
+/// drew.
+///
+/// A theme's file is never handed to the toolkit's loaders: a picture
+/// reaches it as pixels the app's own decoders made
+/// (docs/theming-media.md, "Decoding stills"). They are made here, the
+/// first time a picture is drawn: after the hook that drew it has
+/// returned, so never on a theme's time.
 #[derive(Default)]
 pub struct Cache {
-    /// `None`: the picture has no pixels to show.
+    /// Stills and noise. `None`: the picture has no pixels to show.
     textures: RefCell<HashMap<ImageId, Option<gdk::Texture>>>,
+    /// Pictures a theme fills: the texture, and the version it is of.
+    canvases: RefCell<HashMap<ImageId, (u64, gdk::Texture)>>,
+    frames: RefCell<HashMap<ImageId, Frames>>,
+    /// The textures of fields' pictures, each kept while its picture is
+    /// alive: in a layer's picture, or as the last a field made.
+    fields: RefCell<Vec<(Weak<FieldPicture>, gdk::Texture)>>,
+    /// The theme's animations. Made when one is first drawn; its thread,
+    /// when one first needs a frame after its first. Gone with the theme.
+    player: RefCell<Option<Player>>,
     layouts: RefCell<HashMap<String, pango::Layout>>,
 }
 
 /// Layouts kept at once: more, and the cache starts again.
 const LAYOUTS: usize = 256;
+/// Fields' textures kept at once, should more pictures than that ever be
+/// alive (a bound no theme within its limits comes near). The oldest
+/// goes, and is made again of its picture's own bytes if it is drawn.
+const FIELDS: usize = 64;
+
+/// What the animations have cost, for the gates (`GMNB_THEME_STATS`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MediaStats {
+    /// Media threads this process has ever started.
+    pub threads: u64,
+    /// Times the theme's media thread was woken from its queue.
+    pub wakeups: u64,
+    /// Frames it decoded, and the processor milliseconds that took.
+    pub decoded: u64,
+    pub busy_ms: f64,
+}
+
+/// A picture's pixels as a texture, without a copy: the texture holds the
+/// bytes for as long as it lives.
+fn texture_of(
+    width: u32,
+    height: u32,
+    pixels: impl AsRef<[u8]> + Send + 'static,
+    premultiplied: bool,
+) -> Option<gdk::Texture> {
+    if width == 0 || height == 0 || pixels.as_ref().len() != (width * height * 4) as usize {
+        return None;
+    }
+    let format = if premultiplied {
+        gdk::MemoryFormat::R8g8b8a8Premultiplied
+    } else {
+        gdk::MemoryFormat::R8g8b8a8
+    };
+    let bytes = glib::Bytes::from_owned(pixels);
+    Some(
+        gdk::MemoryTexture::new(
+            width as i32,
+            height as i32,
+            format,
+            &bytes,
+            width as usize * 4,
+        )
+        .upcast(),
+    )
+}
+
+/// `GMNB_SCREENSHOT`: a picture of the window is being taken. Animations
+/// show their first frame, and nothing waits for another.
+fn stills_only() -> bool {
+    static SHOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SHOT.get_or_init(|| std::env::var_os("GMNB_SCREENSHOT").is_some())
+}
 
 impl Cache {
+    /// Forgets the theme that was: its textures, and its animations with
+    /// their thread.
     pub fn clear(&self) {
         self.textures.borrow_mut().clear();
+        self.canvases.borrow_mut().clear();
+        self.frames.borrow_mut().clear();
+        self.fields.borrow_mut().clear();
+        self.player.replace(None);
         self.layouts.borrow_mut().clear();
     }
 
     /// How many textures are held (for the gates).
     pub fn textures(&self) -> usize {
+        let frames: usize = self
+            .frames
+            .borrow()
+            .values()
+            .map(|f| usize::from(f.first.is_some()) + usize::from(f.shown.is_some()))
+            .sum();
         self.textures.borrow().values().flatten().count()
+            + self.canvases.borrow().len()
+            + self.fields.borrow().len()
+            + frames
     }
 
-    /// The texture of a theme's picture: made the first time it is drawn.
-    fn texture(&self, theme: &Theme, id: ImageId) -> Option<gdk::Texture> {
-        if let Some(known) = self.textures.borrow().get(&id) {
-            return known.clone();
+    pub fn media(&self) -> MediaStats {
+        let stats = self
+            .player
+            .borrow()
+            .as_ref()
+            .map(Player::stats)
+            .unwrap_or_default();
+        MediaStats {
+            threads: gmnb_media::threads_started(),
+            wakeups: stats.wakeups,
+            decoded: stats.decoded,
+            busy_ms: stats.busy.as_secs_f64() * 1000.0,
         }
-        let made = match theme.api().pictures().pixels(id) {
-            Some(Pixels::Rgba8 {
-                width,
-                height,
-                bytes,
-            }) if width > 0 && height > 0 && bytes.len() == (width * height * 4) as usize => {
-                let bytes = glib::Bytes::from_owned(bytes);
-                Some(
-                    gdk::MemoryTexture::new(
-                        width as i32,
-                        height as i32,
-                        gdk::MemoryFormat::R8g8b8a8Premultiplied,
-                        &bytes,
-                        width as usize * 4,
-                    )
-                    .upcast(),
-                )
-            }
-            // An image file: decoding them is the app's own decoders'
-            // work (docs/theming-media.md, "Decoding stills"), which
-            // arrive with the media slice. Until then a file draws
-            // nothing; the toolkit's loaders are never given a theme's
-            // file.
-            _ => None,
+    }
+
+    /// Takes in the animation frames that have arrived from the media
+    /// thread: the animations whose frame shown changed (whoever drew one
+    /// draws again), what the theme's author should know, and how much
+    /// slower than their files say the animations are to play.
+    pub fn arrived(&self, now: f64) -> (Vec<ImageId>, Vec<String>, f64) {
+        let mut player = self.player.borrow_mut();
+        let Some(player) = player.as_mut() else {
+            return (Vec::new(), Vec::new(), 1.0);
         };
-        self.textures.borrow_mut().insert(id, made.clone());
-        made
+        let changed = player.poll().into_iter().map(ImageId).collect();
+        (changed, player.take_notes(), player.slow(now))
+    }
+
+    /// The texture of a theme's picture, as `draw:image` and `draw:tile`
+    /// show it: made the first time it is drawn, and again when a picture
+    /// the theme fills has changed. Of an animation, its first frame.
+    fn texture(&self, theme: &Theme, id: ImageId) -> Option<gdk::Texture> {
+        match theme.api().kind(id)? {
+            PictureKind::Canvas => {
+                let canvas = theme.api().canvas(id)?;
+                let mut canvases = self.canvases.borrow_mut();
+                if let Some((version, texture)) = canvases.get(&id)
+                    && *version == canvas.version
+                {
+                    return Some(texture.clone());
+                }
+                // As the theme wrote it: not premultiplied.
+                let made = texture_of(canvas.width, canvas.height, canvas.pixels, false)?;
+                canvases.insert(id, (canvas.version, made.clone()));
+                Some(made)
+            }
+            PictureKind::Animation(..) => self.frame(theme, id, 0, true),
+            _ => {
+                if let Some(known) = self.textures.borrow().get(&id) {
+                    return known.clone();
+                }
+                // Decoded now, by the app's own decoders; a file that
+                // doesn't decode draws nothing and is not tried again.
+                let made = theme
+                    .api()
+                    .still(id)
+                    .and_then(|p| texture_of(p.width, p.height, p.pixels, true));
+                self.textures.borrow_mut().insert(id, made.clone());
+                made
+            }
+        }
+    }
+
+    /// The texture of frame `index` of an animation: that frame if the
+    /// player has it, else the frame it shows meanwhile (the frame wanted
+    /// is asked of the media thread, and the layer drawn again when it
+    /// arrives). `still`: the first frame, which is always there and
+    /// disturbs nothing that plays.
+    fn frame(&self, theme: &Theme, id: ImageId, index: u32, still: bool) -> Option<gdk::Texture> {
+        let mut player = self.player.borrow_mut();
+        let player = player.get_or_insert_with(|| Player::new(crate::layers::wake));
+        if !player.has(id.0) {
+            // Its file, read again, and its first frame decoded: here,
+            // once. One that fails is noted and not asked for again.
+            let (bytes, timeline) = theme.api().animation(id)?;
+            if let Err(e) = player.open(id.0, bytes, timeline) {
+                let file = match theme.api().kind(id) {
+                    Some(PictureKind::Animation(file, _)) => file,
+                    _ => String::new(),
+                };
+                theme
+                    .api()
+                    .spoil(id, format!("gmnb.animation: {file} {e}; it draws nothing"));
+                return None;
+            }
+        }
+        let frame = if still || stills_only() {
+            player.first(id.0)?
+        } else {
+            player.frame(id.0, index, crate::layers::now())?
+        };
+        let mut frames = self.frames.borrow_mut();
+        let kept = frames.entry(id).or_default();
+        let make = || texture_of(frame.width, frame.height, frame.pixels.clone(), true);
+        if frame.index == 0 {
+            if kept.first.is_none() {
+                kept.first = make();
+            }
+            return kept.first.clone();
+        }
+        if let Some((shown, texture)) = &kept.shown
+            && *shown == frame.index
+        {
+            return Some(texture.clone());
+        }
+        let made = make()?;
+        kept.shown = Some((frame.index, made.clone()));
+        Some(made)
+    }
+
+    /// The texture of a field's picture.
+    ///
+    /// A texture is kept for as long as its picture is: a field that
+    /// moves makes a new picture every frame, and the old one's texture
+    /// goes with it (no heap of old frames); one that stands, in however
+    /// many layers and tiles, is never made a texture of twice. The
+    /// texture is of the picture's own bytes, so keeping it costs no
+    /// memory the picture doesn't.
+    fn field(&self, picture: &Rc<FieldPicture>) -> Option<gdk::Texture> {
+        let mut fields = self.fields.borrow_mut();
+        fields.retain(|(of, _)| of.strong_count() > 0);
+        if let Some((_, texture)) = fields
+            .iter()
+            .find(|(of, _)| std::ptr::eq(of.as_ptr(), Rc::as_ptr(picture)))
+        {
+            return Some(texture.clone());
+        }
+        let made = texture_of(picture.width, picture.height, picture.pixels.clone(), true)?;
+        if fields.len() >= FIELDS {
+            fields.remove(0);
+        }
+        fields.push((Rc::downgrade(picture), made.clone()));
+        Some(made)
     }
 
     fn layout(&self, context: &pango::Context, text: &str, font: &Font) -> pango::Layout {
@@ -289,6 +483,14 @@ fn to_stroke(stroke: &draw::Stroke) -> gsk::Stroke {
         s.set_dash_offset(stroke.dash_offset);
     }
     s
+}
+
+fn scaling(filter: Filter) -> gsk::ScalingFilter {
+    match filter {
+        Filter::Trilinear => gsk::ScalingFilter::Trilinear,
+        Filter::Linear => gsk::ScalingFilter::Linear,
+        Filter::Nearest => gsk::ScalingFilter::Nearest,
+    }
 }
 
 fn bounds_of(r: &graphene::Rect) -> draw::Rect {
@@ -480,12 +682,34 @@ pub fn replay(s: &gtk::Snapshot, list: &DisplayList, scene: &Scene) {
                 }
                 let texture = scene.theme.and_then(|t| scene.cache.texture(t, *image));
                 if let Some(texture) = texture {
-                    let filter = match filter {
-                        Filter::Trilinear => gsk::ScalingFilter::Trilinear,
-                        Filter::Linear => gsk::ScalingFilter::Linear,
-                        Filter::Nearest => gsk::ScalingFilter::Nearest,
-                    };
-                    s.append_scaled_texture(&texture, filter, &rect(*r));
+                    s.append_scaled_texture(&texture, scaling(*filter), &rect(*r));
+                }
+            }
+            Op::Animation {
+                image,
+                frame,
+                still,
+                rect: r,
+                filter,
+            } => {
+                if empty(*r) {
+                    continue;
+                }
+                let texture = scene
+                    .theme
+                    .and_then(|t| scene.cache.frame(t, *image, *frame, *still));
+                if let Some(texture) = texture {
+                    s.append_scaled_texture(&texture, scaling(*filter), &rect(*r));
+                }
+            }
+            Op::Field { picture, rect: r } => {
+                if empty(*r) {
+                    continue;
+                }
+                // Coloured at less than the rectangle's size, and scaled
+                // up smoothly.
+                if let Some(texture) = scene.cache.field(picture) {
+                    s.append_scaled_texture(&texture, gsk::ScalingFilter::Linear, &rect(*r));
                 }
             }
             Op::Tile { image, rect: r } => {

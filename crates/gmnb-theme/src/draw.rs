@@ -26,8 +26,9 @@ use mlua::{Function, Lua, LuaString, Table, Value};
 
 use crate::ThemeValue;
 use crate::check::{self, Notes, parse_hex};
+use crate::field::{FieldPicture, Fields};
 use crate::path::{self, Path};
-use crate::picture::{ImageId, Pictures};
+use crate::picture::{Canvas, ImageId, PictureKind, Pictures};
 use crate::types::*;
 
 /// The draw API's caps (docs/theming.md, "Limits").
@@ -60,6 +61,22 @@ pub struct DrawLimits {
     pub noise_side: u32,
     /// Noise pictures a theme may make.
     pub noises: usize,
+    /// An animation file, in bytes.
+    pub animation_file: u64,
+    /// An animation's canvas: its width and height.
+    pub animation_side: u32,
+    /// An animation's frames.
+    pub animation_frames: u32,
+    /// Animations a theme may load.
+    pub animations: usize,
+    /// A picture the theme fills (`gmnb.pixels`): its width and height.
+    pub canvas_side: u32,
+    /// Pictures a theme may make to fill.
+    pub canvases: usize,
+    /// Fields per `draw`.
+    pub fields: usize,
+    /// Ramps a theme may make.
+    pub ramps: usize,
 }
 
 impl Default for DrawLimits {
@@ -78,9 +95,22 @@ impl Default for DrawLimits {
             image_bytes: 32 << 20,
             noise_side: 512,
             noises: 8,
+            animation_file: 8 << 20,
+            animation_side: 1024,
+            animation_frames: 2048,
+            animations: 4,
+            canvas_side: 512,
+            canvases: 4,
+            fields: 2,
+            ramps: 8,
         }
     }
 }
+
+/// How long before its start an animation's frame is shown, if the
+/// layer happens to be drawn then: 2 ms. (No frame is shorter than
+/// 20 ms.)
+pub const EARLY: f64 = 0.002;
 
 /// `x, y, width, height`.
 pub type Rect = [f32; 4];
@@ -186,8 +216,8 @@ impl BlendMode {
 /// few (the contract's table); the app's replay is the only reader that
 /// needs the toolkit.
 ///
-/// More kinds will come (moving pictures, pictures the app fills in), so
-/// a reader must have an arm for the ones it doesn't know.
+/// More kinds may come, so a reader must have an arm for the ones it
+/// doesn't know.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Op {
@@ -246,9 +276,26 @@ pub enum Op {
         rect: Rect,
         filter: Filter,
     },
-    /// The picture repeated at its own size over `rect`.
+    /// The picture repeated at its own size over `rect` (of an animation,
+    /// its first frame).
     Tile {
         image: ImageId,
+        rect: Rect,
+    },
+    /// One frame of an animation scaled into `rect`. `still`: nothing
+    /// moves (reduced motion, a preview), and `frame` is the first; the
+    /// app shows it without disturbing an animation that plays elsewhere.
+    Animation {
+        image: ImageId,
+        /// Which frame, from 0.
+        frame: u32,
+        still: bool,
+        rect: Rect,
+        filter: Filter,
+    },
+    /// A field's picture scaled smoothly over `rect`.
+    Field {
+        picture: Rc<FieldPicture>,
         rect: Rect,
     },
     PushClip {
@@ -326,6 +373,21 @@ pub struct Recorder {
     /// What `draw:text` fonts merge onto.
     base_font: Font,
     notes: Vec<String>,
+    /// The frame's place on its layer's clock, and whether anything may
+    /// move: what an animation drawn without a `time` plays by.
+    time: f64,
+    motion: bool,
+    /// A still picture is being drawn (a preview).
+    still: bool,
+    /// Which layer, in which place, is drawing.
+    pub(crate) layer: u64,
+    /// Fields drawn so far this frame.
+    pub(crate) fields: usize,
+    /// Seconds until an animation drawn this frame shows its next frame.
+    due: Option<f64>,
+    /// Seconds until a picture this frame was refused (a field coloured,
+    /// a picture changed, too soon after the last) can be made.
+    retry: Option<f64>,
 }
 
 impl Recorder {
@@ -343,12 +405,38 @@ impl Recorder {
             glyphs: [0, 0],
             base_font: Font::new(&[INTER.to_string()], 15.0, 400.0),
             notes: Vec::new(),
+            time: 0.0,
+            motion: true,
+            still: false,
+            layer: 0,
+            fields: 0,
+            due: None,
+            retry: None,
         }
+    }
+
+    /// A hook is drawing a still picture (a preview's tile).
+    pub(crate) fn still(&self) -> bool {
+        self.still
+    }
+
+    /// A picture was refused for being asked for too soon, and can be
+    /// had in `wait` seconds: if a hook is drawing, its layer is to be
+    /// drawn once more then, so that what stands on screen is never a
+    /// picture the theme has since replaced.
+    pub(crate) fn retry(&mut self, wait: f64) {
+        if self.active {
+            self.retry = Some(self.retry.map_or(wait, |r| r.min(wait)));
+        }
+    }
+
+    pub(crate) fn limits(&self) -> &DrawLimits {
+        &self.limits
     }
 
     /// A call may record: a hook is running and the frame is within its
     /// caps.
-    fn ready(&self, what: &str) -> mlua::Result<()> {
+    pub(crate) fn ready(&self, what: &str) -> mlua::Result<()> {
         if !self.active {
             return Err(bad(what, "can only be called while a draw hook runs"));
         }
@@ -360,13 +448,13 @@ impl Recorder {
 
     /// Going over a cap: an error, and the frame is dropped whatever the
     /// hook does next.
-    fn over(&mut self, what: &str, cap: impl std::fmt::Display) -> mlua::Error {
+    pub(crate) fn over(&mut self, what: &str, cap: impl std::fmt::Display) -> mlua::Error {
         let message = format!("draw:{what}: {cap}");
         self.over.get_or_insert_with(|| message.clone());
         mlua::Error::runtime(message)
     }
 
-    fn push(&mut self, what: &str, op: Op) -> mlua::Result<()> {
+    pub(crate) fn push(&mut self, what: &str, op: Op) -> mlua::Result<()> {
         self.ready(what)?;
         if self.ops.len() >= self.limits.ops {
             return Err(self.over(
@@ -393,7 +481,7 @@ impl Recorder {
         Ok(())
     }
 
-    fn note(&mut self, message: String) {
+    pub(crate) fn note(&mut self, message: String) {
         if self.notes.len() < 32 && !self.notes.contains(&message) {
             self.notes.push(message);
         }
@@ -416,7 +504,7 @@ fn coord(what: &str, n: f64) -> mlua::Result<f32> {
     }
 }
 
-fn rect(what: &str, x: f64, y: f64, w: f64, h: f64) -> mlua::Result<Rect> {
+pub(crate) fn rect(what: &str, x: f64, y: f64, w: f64, h: f64) -> mlua::Result<Rect> {
     Ok([
         coord(what, x)?,
         coord(what, y)?,
@@ -824,11 +912,67 @@ fn stroke(what: &str, v: &Value) -> mlua::Result<Stroke> {
 pub(crate) struct Shared {
     pub(crate) recorder: RefCell<Recorder>,
     pub(crate) pictures: RefCell<Pictures>,
+    pub(crate) fields: RefCell<Fields>,
+    /// Seconds on a clock that only goes forward: what the allowances of
+    /// pictures that change and of fields are counted by.
+    clock: RefCell<Rc<dyn Fn() -> f64>>,
+    /// How much slower than their files say the theme's animations play,
+    /// because the app can't decode them faster within its share (1:
+    /// they keep up).
+    slow: Cell<f64>,
     measure: RefCell<Option<Rc<dyn TextMeasure>>>,
     /// Messages already handed out: each is reported once.
     told: RefCell<HashSet<String>>,
     /// Whether the last frame recorded left pushes or saves open.
     unbalanced: Cell<bool>,
+}
+
+impl Shared {
+    pub(crate) fn now(&self) -> f64 {
+        let clock = self.clock.borrow().clone();
+        clock()
+    }
+}
+
+/// Seconds since the first time anyone asked: the clock allowances are
+/// counted by unless the app (or a test) sets another.
+fn monotonic() -> f64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
+}
+
+/// What a hook's frame is, as far as the draw calls need to know.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Begin {
+    /// How many characters the display's value has, and the value before
+    /// it (0 outside the display layer).
+    pub glyphs: [u32; 2],
+    /// `frame.time`: seconds the layer has spent animating.
+    pub time: f64,
+    /// `frame.motion`.
+    pub motion: bool,
+    /// A still picture is drawn (a preview's tile): animations show their
+    /// first frame.
+    pub still: bool,
+    /// A number for the layer in the place it is drawn (this keypad's,
+    /// that readout's): what a field's allowance and last picture are
+    /// kept by.
+    pub layer: u64,
+}
+
+impl Default for Begin {
+    fn default() -> Self {
+        Begin {
+            glyphs: [0, 0],
+            time: 0.0,
+            motion: true,
+            still: false,
+            layer: 0,
+        }
+    }
 }
 
 /// One theme's draw API: its `draw` table, and what was recorded.
@@ -839,8 +983,9 @@ pub struct Api {
 
 impl Api {
     /// Makes the `draw` table and adds the drawing constructors
-    /// (`gmnb.path`, `gmnb.svg_path`, `gmnb.image`, `gmnb.noise`) to
-    /// `gmnb`. Called while the engine's globals are registered.
+    /// (`gmnb.path`, `gmnb.svg_path`, `gmnb.image`, `gmnb.noise`,
+    /// `gmnb.animation`, `gmnb.pixels`, `gmnb.ramp`) to `gmnb`. Called
+    /// while the engine's globals are registered.
     pub(crate) fn register(
         lua: &Lua,
         gmnb: &Table,
@@ -850,12 +995,16 @@ impl Api {
         let shared = Rc::new(Shared {
             recorder: RefCell::new(Recorder::new(limits)),
             pictures: RefCell::new(pictures),
+            fields: RefCell::default(),
+            clock: RefCell::new(Rc::new(monotonic)),
+            slow: Cell::new(1.0),
             measure: RefCell::new(None),
             told: RefCell::default(),
             unbalanced: Cell::new(false),
         });
         path::register(lua, gmnb)?;
         crate::picture::register(lua, gmnb, &shared)?;
+        crate::field::register(lua, gmnb, &shared)?;
         let table = draw_table(lua, &shared)?;
         Ok(Api { shared, table })
     }
@@ -878,11 +1027,38 @@ impl Api {
         }
     }
 
+    /// The clock the allowances of `canvas:set` and `draw:field` are
+    /// counted by: seconds, only ever forward.
+    pub fn set_clock(&self, clock: Rc<dyn Fn() -> f64>) {
+        self.shared.clock.replace(clock);
+    }
+
+    /// How much slower than their files say the theme's animations are to
+    /// play from now on (1 or more): what the app's player measured it
+    /// can decode within its share of a processor core.
+    pub fn set_slow(&self, slow: f64) {
+        self.shared
+            .slow
+            .set(if slow.is_finite() { slow.max(1.0) } else { 1.0 });
+    }
+
     /// A hook is about to run: the recorder is emptied and takes calls.
-    /// `glyphs`: how many characters the display's value has, and the
-    /// value before it (0 outside the display layer).
-    pub fn begin(&self, glyphs: [u32; 2]) {
+    pub fn begin(&self, frame: &Begin) {
+        let Begin {
+            glyphs,
+            time,
+            motion,
+            still,
+            layer,
+        } = *frame;
         let mut rec = self.shared.recorder.borrow_mut();
+        rec.time = time;
+        rec.motion = motion;
+        rec.still = still;
+        rec.layer = layer;
+        rec.fields = 0;
+        rec.due = None;
+        rec.retry = None;
         rec.active = true;
         rec.ops.clear();
         rec.open.clear();
@@ -925,10 +1101,27 @@ impl Api {
         })
     }
 
+    /// Seconds until an animation the finished frame drew on its layer's
+    /// clock shows its next frame: the layer is drawn again then, as if
+    /// `draw` had returned that. `None`: no animation was drawn so.
+    pub fn take_due(&self) -> Option<f64> {
+        self.shared.recorder.borrow_mut().due.take()
+    }
+
+    /// Seconds until a picture the finished frame was refused can be made
+    /// (`draw:field` or `canvas:set` past its allowance): the layer is to
+    /// be drawn once more then, whether or not anything may move. `None`:
+    /// nothing was refused.
+    pub fn take_retry(&self) -> Option<f64> {
+        self.shared.recorder.borrow_mut().retry.take()
+    }
+
     /// Abandons a frame (the hook failed): nothing is kept.
     pub fn abandon(&self) {
         let mut rec = self.shared.recorder.borrow_mut();
         rec.active = false;
+        rec.due = None;
+        rec.retry = None;
         rec.over = None;
         rec.ops.clear();
         rec.open.clear();
@@ -953,6 +1146,44 @@ impl Api {
     /// The theme's pictures, for the app to make textures of.
     pub fn pictures(&self) -> std::cell::Ref<'_, Pictures> {
         self.shared.pictures.borrow()
+    }
+
+    /// What kind of picture `id` is.
+    pub fn kind(&self, id: ImageId) -> Option<PictureKind> {
+        self.shared
+            .pictures
+            .borrow()
+            .get(id)
+            .map(|p| p.kind.clone())
+    }
+
+    /// A still's pixels, decoded now ([`Pictures::still`]): call it
+    /// outside the theme's hooks.
+    pub fn still(&self, id: ImageId) -> Option<gmnb_media::Rgba> {
+        self.shared.pictures.borrow_mut().still(id)
+    }
+
+    /// An animation's file and timeline ([`Pictures::animation`]).
+    pub fn animation(
+        &self,
+        id: ImageId,
+    ) -> Option<(gmnb_media::Bytes, std::sync::Arc<gmnb_media::Timeline>)> {
+        self.shared.pictures.borrow_mut().animation(id)
+    }
+
+    /// A picture the theme fills, as it stands.
+    pub fn canvas(&self, id: ImageId) -> Option<Canvas> {
+        self.shared.pictures.borrow().canvas(id).cloned()
+    }
+
+    /// The app found a picture's pixels can't be had ([`Pictures::spoil`]).
+    pub fn spoil(&self, id: ImageId, note: String) {
+        self.shared.pictures.borrow_mut().spoil(id, note);
+    }
+
+    /// A note from the app about the theme's pictures.
+    pub fn note(&self, note: String) {
+        self.shared.pictures.borrow_mut().note(note);
     }
 }
 
@@ -1167,27 +1398,49 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     Value,
                 )| {
                     let Value::Table(image) = image else {
-                        return Err(bad(name, "expected a picture (gmnb.image, gmnb.noise)"));
+                        return Err(bad(
+                            name,
+                            "expected a picture (gmnb.image, gmnb.noise, gmnb.animation, gmnb.pixels)",
+                        ));
                     };
                     let rect = rect(name, x, y, w, h)?;
-                    // `options.filter`; what else it may hold (an
-                    // animation's `time` and `loop`) means nothing to a
-                    // still.
-                    let filter = match &options {
-                        Value::Table(o) if !tile => match o.raw_get::<Value>("filter")? {
-                            Value::Nil => Filter::Trilinear,
-                            v => word(
+                    // `options`: how it is sampled, and for an animation
+                    // where in it and whether it wraps. (`draw:tile`
+                    // takes none.)
+                    let options = match &options {
+                        Value::Table(o) if !tile => Some(o),
+                        Value::Nil | Value::Table(_) => None,
+                        _ => {
+                            return Err(bad(
                                 name,
-                                &v,
-                                &[
-                                    ("trilinear", Filter::Trilinear),
-                                    ("linear", Filter::Linear),
-                                    ("nearest", Filter::Nearest),
-                                ],
-                            )?,
-                        },
-                        Value::Nil | Value::Table(_) => Filter::Trilinear,
-                        _ => return Err(bad(name, "options are a table { filter = … }")),
+                                "options are a table { filter = …, time = …, loop = … }",
+                            ));
+                        }
+                    };
+                    let option = |key: &str| match options {
+                        Some(o) => o.raw_get::<Value>(key),
+                        None => Ok(Value::Nil),
+                    };
+                    let filter = match option("filter")? {
+                        Value::Nil => None,
+                        v => Some(word(
+                            name,
+                            &v,
+                            &[
+                                ("trilinear", Filter::Trilinear),
+                                ("linear", Filter::Linear),
+                                ("nearest", Filter::Nearest),
+                            ],
+                        )?),
+                    };
+                    let time = match option("time")? {
+                        Value::Nil => None,
+                        v => Some(number(name, &v)?),
+                    };
+                    let looped = match option("loop")? {
+                        Value::Nil => true,
+                        Value::Boolean(b) => b,
+                        _ => return Err(bad(name, "`loop` is true or false")),
                     };
                     let mut rec = s.recorder.borrow_mut();
                     rec.ready(name)?;
@@ -1196,27 +1449,77 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                         Value::Nil => return Ok(()),
                         v => number(name, &v)?,
                     };
-                    let known = s.pictures.borrow().len();
-                    if id.fract() != 0.0 || id < 1.0 || id > known as f64 {
+                    let mut pictures = s.pictures.borrow_mut();
+                    if id.fract() != 0.0 || id < 1.0 || id > pictures.len() as f64 {
                         return Err(bad(name, "not a picture of this theme"));
                     }
                     let image = ImageId(id as u32 - 1);
-                    rec.push(
-                        name,
-                        if tile {
-                            Op::Tile { image, rect }
-                        } else {
-                            Op::Image {
+                    let kind = pictures.get(image).map(|p| p.kind.clone());
+                    let op = match kind {
+                        // Of an animation a tile is its first frame.
+                        _ if tile => Op::Tile { image, rect },
+                        Some(PictureKind::Animation(_, timeline)) => {
+                            // Nothing moves under reduced motion or in a
+                            // preview, whatever `time` says.
+                            let still = !rec.motion || rec.still;
+                            let frame = match time {
+                                _ if still => 0,
+                                // The theme's own clock: it asks for
+                                // frames itself.
+                                Some(time) => timeline.frame_at(time, looped),
+                                // The layer's clock: the app sees to the
+                                // next frame.
+                                None => {
+                                    let slow = s.slow.get();
+                                    let position = pictures.position(image, rec.time, slow);
+                                    // The layer is woken for a frame by a
+                                    // timer of whole milliseconds, and may
+                                    // be drawn a hair before the frame
+                                    // starts: it shows it all the same.
+                                    // (Else it would wait a thirtieth of
+                                    // a second more.)
+                                    let frame = timeline.frame_at(position + EARLY, true);
+                                    if let Some(due) = timeline.due_after(frame, position) {
+                                        let due = due * slow;
+                                        rec.due = Some(rec.due.map_or(due, |d| d.min(due)));
+                                    }
+                                    frame
+                                }
+                            };
+                            Op::Animation {
                                 image,
+                                frame,
+                                still,
                                 rect,
-                                filter,
+                                filter: filter.unwrap_or(Filter::Linear),
                             }
+                        }
+                        Some(PictureKind::Canvas) => Op::Image {
+                            image,
+                            rect,
+                            filter: filter.unwrap_or(Filter::Linear),
                         },
-                    )
+                        _ => Op::Image {
+                            image,
+                            rect,
+                            filter: filter.unwrap_or(Filter::Trilinear),
+                        },
+                    };
+                    drop(pictures);
+                    rec.push(name, op)
                 },
             )?,
         )?;
     }
+    let s = shared.clone();
+    set(
+        "field",
+        lua.create_function(
+            move |_, (_, x, y, w, h, spec): (Value, f64, f64, f64, f64, Value)| {
+                crate::field::draw_field(&s, (x, y, w, h), spec)
+            },
+        )?,
+    )?;
 
     // ---- Groups ----------------------------------------------------------------
     let s = shared.clone();
