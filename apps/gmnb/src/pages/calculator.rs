@@ -136,6 +136,8 @@ impl CalculatorPage {
         let display_bin = FixedBin::new(&display);
 
         let modes = gtk::Stack::new();
+        // `motion.mode` ms (`apply_style`; none in the base look).
+        modes.set_transition_type(gtk::StackTransitionType::Crossfade);
         modes.set_vhomogeneous(false);
         modes.set_vexpand(true);
 
@@ -305,6 +307,11 @@ impl CalculatorPage {
         set_margins(&self.side, margin);
         let width = style.number("layout.calculator.panel_width") + margin.left + margin.right;
         self.side_bin.set_width(width.round() as i32);
+        self.modes
+            .set_transition_duration(style.number("motion.mode").round() as u32);
+        if let Some(stack) = self.prog_stack.borrow().as_ref() {
+            stack.set_transition_duration(style.number("motion.flip").round() as u32);
+        }
         let gap = style.number("text_button_gap");
         for row in self.mem_rows.borrow().iter() {
             row.set_gap(gap);
@@ -760,6 +767,9 @@ impl CalculatorPage {
         b.append(&bar);
 
         let stack = gtk::Stack::new();
+        // Keypad and bits slide over each other for `motion.flip` ms.
+        stack.set_transition_type(gtk::StackTransitionType::SlideUpDown);
+        stack.set_transition_duration(self.ctx.hub.style().number("motion.flip").round() as u32);
         let pad = self.add_keypad(keys::programmer(), Some(CalcMode::Programmer));
         self.announce_open_parens(&pad);
         Self::keypad_slot(&pad);

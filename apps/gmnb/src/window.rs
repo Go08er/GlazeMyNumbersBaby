@@ -764,7 +764,10 @@ impl Window {
 
         let stack = gtk::Stack::new();
         stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-        stack.set_transition_duration(220);
+        // `motion.page` ms (none in the base look).
+        hub.subscribe_style(&stack, |stack, style| {
+            stack.set_transition_duration(style.number("motion.page").round() as u32);
+        });
 
         let content = adw::ToolbarView::new();
         content.add_top_bar(&header);

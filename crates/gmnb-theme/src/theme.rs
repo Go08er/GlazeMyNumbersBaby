@@ -461,6 +461,9 @@ pub struct Layer {
     pub pointer: bool,
 }
 
+/// The longest an event is kept for, in seconds (the contract's 5).
+const MAX_EVENT_SECONDS: f64 = crate::events::MAX_LIFE;
+
 pub const LAYERS: [&str; 4] = ["background", "keypad", "display", "overlay"];
 pub const EVENTS: [&str; 6] = ["press", "result", "error", "show", "option", "mode"];
 
@@ -739,17 +742,41 @@ fn parse_layer(v: &ThemeValue, path: &str, notes: &mut Notes) -> Layer {
     }
     layer.draw = function_field(v, "draw", &dot, notes);
     layer.place = function_field(v, "place", &dot, notes);
-    layer.pointer = matches!(v.get("pointer"), Some(ThemeValue::Bool(true)));
-    if let Some(ThemeValue::Map(events)) = v.get("events") {
-        for (kind, seconds) in events {
-            match (EVENTS.contains(&kind.as_str()), seconds.as_f64()) {
-                (true, Some(s)) if s > 0.0 => {
-                    layer.events.insert(kind.clone(), s.min(5.0));
+    match v.get("pointer") {
+        None => {}
+        Some(ThemeValue::Bool(b)) => layer.pointer = *b,
+        Some(other) => notes.push(
+            &format!("{dot}pointer"),
+            format!("expected true or false, got {}", other.type_name()),
+        ),
+    }
+    match v.get("events") {
+        None => {}
+        Some(ThemeValue::Map(events)) => {
+            for (kind, seconds) in events {
+                match (EVENTS.contains(&kind.as_str()), seconds.as_f64()) {
+                    (true, Some(s)) if s > 0.0 => {
+                        let kept = s.min(MAX_EVENT_SECONDS);
+                        if kept < s {
+                            notes.push(
+                                &format!("{dot}events.{kind}"),
+                                format!("{s} is out of range; using {kept}"),
+                            );
+                        }
+                        layer.events.insert(kind.clone(), kept);
+                    }
+                    (true, _) => notes.push(&format!("{dot}events.{kind}"), "expected seconds"),
+                    (false, _) => notes.push(&format!("{dot}events.{kind}"), "unknown event"),
                 }
-                (true, _) => notes.push(&format!("{dot}events.{kind}"), "expected seconds"),
-                (false, _) => notes.push(&format!("{dot}events.{kind}"), "unknown event"),
             }
         }
+        Some(other) => notes.push(
+            &format!("{dot}events"),
+            format!(
+                "expected a table of seconds by event, got {}",
+                other.type_name()
+            ),
+        ),
     }
     layer
 }
@@ -867,7 +894,14 @@ pub fn parse(v: &ThemeValue, notes: &mut Notes) -> Result<ThemeDef, LoadError> {
                 match LAYERS.iter().find(|l| *l == name) {
                     Some(known) => {
                         let path = format!("layers.{name}");
-                        def.layers.insert(known, parse_layer(layer, &path, notes));
+                        let parsed = parse_layer(layer, &path, notes);
+                        if parsed.place.is_some() && *known != "keypad" {
+                            notes.push(
+                                &format!("{path}.place"),
+                                "only the keypad layer has `place`; it is never called here",
+                            );
+                        }
+                        def.layers.insert(known, parsed);
                     }
                     None => notes.push(&format!("layers.{name}"), "unknown layer"),
                 }
