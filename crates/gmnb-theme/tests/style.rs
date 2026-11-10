@@ -970,3 +970,36 @@ fn theme_files_stay_inside_the_folder() {
     }
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// H-a11y-1: every option and every choice is named for a screen reader
+/// and the keyboard user: one with no label, or a blank one, is named by
+/// its id (Settings builds its row, switch, slider or tile from the label).
+#[test]
+fn every_option_and_choice_has_a_name() {
+    let theme = load(
+        "names",
+        r#"return {
+            name = "Names", api = 1,
+            options = {
+                { id = "s", type = "slider" },
+                { id = "t", type = "toggle", label = "" },
+                { id = "c", type = "choice", label = "Pick",
+                  choices = { { id = "a", label = "" }, { id = "b" } } },
+                { id = "n", type = "note" },
+            },
+            style = function(ctx) return {} end,
+        }"#,
+    )
+    .unwrap();
+    for o in &theme.def.options {
+        if matches!(o.kind, theme::OptionKind::Note) {
+            continue;
+        }
+        assert!(!o.label.trim().is_empty(), "option {} has no name", o.id);
+        if let theme::OptionKind::Choice { choices, .. } = &o.kind {
+            for c in choices {
+                assert!(!c.label.trim().is_empty(), "choice {} has no name", c.id);
+            }
+        }
+    }
+}

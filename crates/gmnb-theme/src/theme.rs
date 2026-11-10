@@ -599,7 +599,10 @@ fn parse_option(v: &ThemeValue, path: &str, notes: &mut Notes) -> Option<OptionD
                             );
                             break;
                         }
+                        // Unnamed (absent or blank) it is named by its id: a tile
+                        // nothing says the name of can't be heard.
                         let label = text_field(c, "label", &cpath, MAX_LABEL, notes)
+                            .filter(|l| !l.trim().is_empty())
                             .unwrap_or_else(|| cid.to_string());
                         choices.push(Choice {
                             id: cid.to_string(),
@@ -678,20 +681,21 @@ fn parse_option(v: &ThemeValue, path: &str, notes: &mut Notes) -> Option<OptionD
             _ => notes.push(&apath, "an action needs a label and a run function"),
         }
     }
+    let note = matches!(kind, OptionKind::Note);
+    // A control with no name (absent or blank) is named by its id: its row,
+    // switch, slider or tile would otherwise be read as nothing.
+    let label = text_field(
+        v,
+        "label",
+        &dot,
+        if note { MAX_DESCRIPTION } else { MAX_LABEL },
+        notes,
+    )
+    .filter(|l| note || !l.trim().is_empty())
+    .unwrap_or_else(|| if note { String::new() } else { id.clone() });
     let mut option = OptionDef {
         id,
-        label: text_field(
-            v,
-            "label",
-            &dot,
-            if matches!(kind, OptionKind::Note) {
-                MAX_DESCRIPTION
-            } else {
-                MAX_LABEL
-            },
-            notes,
-        )
-        .unwrap_or_default(),
+        label,
         description: text_field(v, "description", &dot, MAX_DESCRIPTION, notes),
         group: text_field(v, "group", &dot, MAX_LABEL, notes),
         default: None,
