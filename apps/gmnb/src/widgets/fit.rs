@@ -297,6 +297,22 @@ impl FitLabel {
         }
     }
 
+    /// Sets the line about `middle`, a point of `grid`'s, where `key` (an
+    /// ancestor of the label's, in `grid`) has its own middle as the
+    /// toolkit allocated it: DGMNB's keys sit in cells of fractional size.
+    pub fn centre_on(
+        &self,
+        middle: (f32, f32),
+        key: &impl IsA<gtk::Widget>,
+        grid: &impl IsA<gtk::Widget>,
+    ) {
+        if let Some(at) = key.compute_bounds(grid) {
+            let dx = middle.0 - (at.x() + at.width() / 2.0);
+            let dy = middle.1 - (at.y() + at.height() / 2.0);
+            self.set_shift(dx, dy);
+        }
+    }
+
     /// Sets the line about a middle `dx`, `dy` from the allocation's.
     pub fn set_shift(&self, dx: f32, dy: f32) {
         if self.imp().shift.replace((dx, dy)) != (dx, dy) {
@@ -538,6 +554,24 @@ impl MaxWidth {
             self.queue_resize();
         }
     }
+}
+
+/// The middle of DGMNB's cell (`Rect::cell`) at `at` = (row, column) of a
+/// `size` grid of `cells` = (rows, columns), `gap` apart: fractions the
+/// toolkit's integer allocations round away.
+pub fn cell_middle(
+    size: (f32, f32),
+    cells: (usize, usize),
+    at: (usize, usize),
+    gap: f32,
+) -> (f32, f32) {
+    let (rows, cols) = (cells.0 as f32, cells.1 as f32);
+    let cw = (size.0 - gap * (cols - 1.0)) / cols;
+    let ch = (size.1 - gap * (rows - 1.0)) / rows;
+    (
+        at.1 as f32 * (cw + gap) + cw / 2.0,
+        at.0 as f32 * (ch + gap) + ch / 2.0,
+    )
 }
 
 /// A page's FitLabels and the style path each takes its font from: a Text

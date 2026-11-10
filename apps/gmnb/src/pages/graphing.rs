@@ -25,7 +25,7 @@ use graphing::{EquationId, Graph, TrigUnit};
 use gtk::{gdk, gio, glib};
 
 use super::{Ctx, Page};
-use crate::widgets::fit::{Align, FitLabel, SizeBin};
+use crate::widgets::fit::{self, Align, FitLabel, SizeBin};
 use crate::widgets::graph_view::GraphView;
 use crate::widgets::icon::{PathIcon, paths};
 use crate::widgets::width_bin::WidthBin;
@@ -669,26 +669,18 @@ impl GraphingPage {
     /// pad's height and width shared out in fractions, which the toolkit
     /// can't allocate.
     fn place_pad_labels(&self, w: i32, h: i32) {
-        let rows = GRAPH_PAD.len() as f32;
-        let cols = GRAPH_PAD[0].len() as f32;
+        let (rows, cols) = (GRAPH_PAD.len(), GRAPH_PAD[0].len());
         let gap = self.pad.row_spacing() as f32;
-        let cw = (w as f32 - gap * (cols - 1.0)) / cols;
-        let ch = (h as f32 - gap * (rows - 1.0)) / rows;
         let labels = self.pad_labels.borrow();
         for (b, r, c) in self.pad_keys.borrow().iter() {
-            let Some(at) = b.compute_bounds(&self.pad) else {
-                continue;
-            };
-            let ideal_x = *c as f32 * (cw + gap) + cw / 2.0;
-            let ideal_y = *r as f32 * (ch + gap) + ch / 2.0;
-            let dx = ideal_x - (at.x() + at.width() / 2.0);
-            let dy = ideal_y - (at.y() + at.height() / 2.0);
-            if let Some((label, _)) = labels
+            let Some((label, _)) = labels
                 .iter()
                 .find(|(l, _)| l.parent().as_ref() == Some(b.upcast_ref()))
-            {
-                label.set_shift(dx, dy);
-            }
+            else {
+                continue;
+            };
+            let cell = fit::cell_middle((w as f32, h as f32), (rows, cols), (*r, *c), gap);
+            label.centre_on(cell, b, &self.pad);
         }
     }
 

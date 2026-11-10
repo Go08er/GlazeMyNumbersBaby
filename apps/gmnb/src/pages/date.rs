@@ -342,8 +342,18 @@ impl DatePage {
         spins.append(&yb);
         spins.append(&mb);
         spins.append(&db);
+        // The toolkit's boxes need room for their largest value: in a
+        // window narrower than that they are cut at the right rather than
+        // widen the page.
+        let spins_bin = gtk::ScrolledWindow::builder()
+            .child(&spins)
+            .hscrollbar_policy(gtk::PolicyType::External)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_width(true)
+            .propagate_natural_height(true)
+            .build();
         below(
-            &spins,
+            &spins_bin,
             md::STEP_OFFSETS_LABEL - md::OFFSET_LINE_TOP - md::OFFSET_LINE_H,
         );
         let step_icons: Vec<PathIcon> = yi.into_iter().chain(mi).chain(di).collect();
@@ -356,7 +366,7 @@ impl DatePage {
         add_box.append(&start_caption);
         add_box.append(&start.bin);
         add_box.append(&op_bin);
-        add_box.append(&spins);
+        add_box.append(&spins_bin);
         let date_caption = section_label(S::DATE_LABEL, &texts);
         below(&date_caption, md::STEP_LABEL_RESULT - md::FIELD_LABEL_H);
         add_box.append(&date_caption);
