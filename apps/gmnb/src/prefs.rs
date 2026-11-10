@@ -1147,12 +1147,12 @@ pub fn about(parent: &adw::ApplicationWindow, credits: &[(String, String)]) {
             Some(&gtk::glib::markup_escape_text(text)),
         );
     }
-    for (title, text) in credits {
+    for (title, text) in legal_credits(credits) {
         about.add_legal_section(
-            title,
+            &title,
             None,
             gtk::License::Custom,
-            Some(&gtk::glib::markup_escape_text(text)),
+            Some(&gtk::glib::markup_escape_text(&text)),
         );
     }
     about.add_legal_section(
@@ -1180,6 +1180,63 @@ pub fn about(parent: &adw::ApplicationWindow, credits: &[(String, String)]) {
     });
     crate::window::own_keys(&about);
     about.present(Some(parent));
+}
+
+/// The most of one theme credit About → Legal sets in its label (its
+/// bytes): a credit is a licence, and 12 KiB is the Apache licence.
+const LEGAL_CREDIT_MAX: usize = 12 << 10;
+/// The most of all the themes' credits it sets (bytes), and so the most
+/// that is laid out when Legal is shown: a label's layout takes time
+/// and height by its size, and every installed theme adds its credits.
+const LEGAL_CREDITS_MAX: usize = 192 << 10;
+/// The longest run of characters without a place to wrap that a credit's
+/// label keeps: a longer one is broken (a zero-width space), as a long
+/// word with no break took seconds to lay out.
+const LEGAL_RUN_MAX: usize = 60;
+
+/// The themes' credits as About → Legal sets them (a title and a text
+/// each): each credit's text shortened to [`LEGAL_CREDIT_MAX`], the lot
+/// to [`LEGAL_CREDITS_MAX`] (what doesn't fit is left out, with a line
+/// that says so), and long runs without a break broken, so that the
+/// labels lay out in a moment whatever the themes hold.
+fn legal_credits(credits: &[(String, String)]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut left = LEGAL_CREDITS_MAX;
+    for (n, (title, text)) in credits.iter().enumerate() {
+        if left == 0 {
+            let more = credits.len() - n;
+            out.push((
+                "More credits".to_string(),
+                format!("{more} more credits of installed themes are in their folders."),
+            ));
+            break;
+        }
+        let mut shown = String::with_capacity(text.len().min(left.min(LEGAL_CREDIT_MAX)) + 16);
+        let mut run = 0;
+        let mut cut = false;
+        for c in text.chars() {
+            if shown.len() + c.len_utf8() > left.min(LEGAL_CREDIT_MAX) {
+                cut = true;
+                break;
+            }
+            if c.is_whitespace() {
+                run = 0;
+            } else {
+                run += 1;
+                if run > LEGAL_RUN_MAX {
+                    shown.push('\u{200b}');
+                    run = 1;
+                }
+            }
+            shown.push(c);
+        }
+        left = left.saturating_sub(shown.len());
+        if cut {
+            shown.push_str("\n\n… (the rest is in the theme's folder)");
+        }
+        out.push((title.clone(), shown));
+    }
+    out
 }
 
 const INTER: &str = include_str!("../../dgmnb/assets/fonts/OFL-Inter.txt");
@@ -1248,6 +1305,48 @@ fn third_party_licences(parent: &impl IsA<gtk::Widget>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// About → Legal sets every installed theme's credits in labels: up
+    /// to 8 files of 64 KiB each. One long word, without a break, took
+    /// 3.3 s to lay out at 64 KiB (and 8 of them in a theme, in each
+    /// theme); newlines made a label 1.5 million pixels high.
+    #[test]
+    fn theme_credits_are_laid_out_in_a_moment() {
+        use pango::prelude::*;
+        let hostile = [
+            "x".repeat(64 << 10),
+            "\n".repeat(64 << 10),
+            "lorem ipsum ".repeat(6000),
+            "\u{4e2d}".repeat(21_000),
+        ];
+        // Four themes of eight such credits each.
+        let credits: Vec<(String, String)> = (0..32)
+            .map(|n| (format!("C{n}"), hostile[n % 4].clone()))
+            .collect();
+        let shown = legal_credits(&credits);
+        let bytes: usize = shown.iter().map(|(_, t)| t.len()).sum();
+        assert!(bytes <= LEGAL_CREDITS_MAX + 4096, "{bytes} bytes");
+        let context = pangocairo::FontMap::default().create_context();
+        let start = std::time::Instant::now();
+        let mut height = 0;
+        for (_, text) in &shown {
+            let layout = pango::Layout::new(&context);
+            layout.set_width(400 * pango::SCALE);
+            layout.set_wrap(pango::WrapMode::WordChar);
+            layout.set_markup(&gtk::glib::markup_escape_text(text));
+            height += layout.pixel_size().1;
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "laying out took {:?}",
+            start.elapsed()
+        );
+        assert!(height < 4_000_000, "{height} px high");
+        // A credit within the limits is as it was written.
+        let licence = "Copyright (c) A\n\nPermission is hereby granted.\n".repeat(50);
+        let kept = legal_credits(&[("L".to_string(), licence.clone())]);
+        assert_eq!(kept, [("L".to_string(), licence)]);
+    }
 
     /// Legal sections' text is Pango markup, and text that doesn't parse
     /// shows as nothing (as a font licence's "PERMISSION & CONDITIONS"
