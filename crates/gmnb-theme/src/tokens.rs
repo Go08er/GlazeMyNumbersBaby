@@ -133,8 +133,49 @@ impl Colors {
 
     /// What goes under text on a see-through window, for these colours
     /// (`appcore::palette::text_scrim`): transparent at full opacity.
+    ///
+    /// It is also the least that lets `danger` (an error's text on the
+    /// graph's canvas) reach 3 over both desktops: `appcore`'s is worked
+    /// out for the text, its dim and the accent only, and DGMNB draws
+    /// with it as it is.
     pub fn text_scrim(&self, opacity: f32) -> Rgba {
-        appcore::palette::text_scrim(self.bg, self.fg, self.fg_dim, self.accent_text, opacity)
+        let mut scrim =
+            appcore::palette::text_scrim(self.bg, self.fg, self.fg_dim, self.accent_text, opacity);
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if opacity >= 1.0 {
+            return scrim;
+        }
+        let danger_reads = |k: f32| {
+            [appcore::color::BLACK, appcore::color::WHITE]
+                .into_iter()
+                .all(|desktop| {
+                    let window = [self.bg[0], self.bg[1], self.bg[2], self.bg[3] * opacity];
+                    let behind =
+                        appcore::color::over(window, [desktop[0], desktop[1], desktop[2], 1.0]);
+                    let b = appcore::color::over([self.bg[0], self.bg[1], self.bg[2], k], behind);
+                    let b3 = [b[0], b[1], b[2]];
+                    let d = appcore::color::over(self.danger, b);
+                    appcore::color::contrast([d[0], d[1], d[2]], b3) >= appcore::color::UI_CONTRAST
+                })
+        };
+        if !danger_reads(scrim[3]) {
+            // The background only gets closer to `bg` as k grows.
+            let (mut lo, mut hi) = (scrim[3], 1.0f32);
+            for _ in 0..20 {
+                let mid = (lo + hi) / 2.0;
+                if danger_reads(mid) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            scrim[3] = hi;
+        }
+        scrim
     }
 
     /// Faint text straight on a see-through window, on that scrim
