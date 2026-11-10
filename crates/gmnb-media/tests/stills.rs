@@ -323,3 +323,15 @@ fn malformed_files_never_panic_past_the_shield() {
     }
     assert!(ok > 0 && refused > 0, "{ok} decoded, {refused} refused");
 }
+
+#[test]
+fn an_interlaced_palette_png_decodes_like_the_plain_one() {
+    // The same picture twice, by another program's encoder: 32 bits a
+    // pixel, and eight with a palette, interlaced.
+    let plain = still(&fixture("still.png")).unwrap();
+    let interlaced = still(&fixture("interlaced.png")).unwrap();
+    assert_eq!((plain.width, plain.height), (16, 12));
+    assert_eq!(plain, interlaced);
+    assert_eq!(pixel(&plain.pixels, 16, 2, 6), [200, 50, 20, 255]);
+    assert_eq!(pixel(&plain.pixels, 16, 13, 6), [20, 50, 200, 255]);
+}

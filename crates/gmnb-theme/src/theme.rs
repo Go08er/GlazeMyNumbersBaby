@@ -1218,7 +1218,21 @@ impl Theme {
                 v.previous.map_or(0, |p| p.glyphs.len() as u32),
             ]
         });
-        self.api.begin(glyphs);
+        // Which layer, where: this keypad's, that readout's.
+        let place = frame
+            .keys
+            .as_ref()
+            .map(|k| k.pad)
+            .or(frame.value.as_ref().map(|v| v.readout))
+            .unwrap_or(0);
+        let which = LayerKind::ALL.iter().position(|k| *k == kind).unwrap_or(0) as u64;
+        self.api.begin(&draw::Begin {
+            glyphs,
+            time: frame.time,
+            motion: frame.motion,
+            still: false,
+            layer: which << 60 | (place & ((1 << 60) - 1)),
+        });
         let result = self
             .engine
             .call(hook, Budget::Frame, (self.api.table(), frames.table()));
@@ -1237,6 +1251,9 @@ impl Theme {
             }
         }
         drawn.again = again.as_f64();
+        // An animation drawn on the layer's clock asks for its next frame
+        // itself; what `draw` returned stays what `draw` returned.
+        drawn.due = self.api.take_due();
         Ok(drawn)
     }
 
@@ -1259,7 +1276,12 @@ impl Theme {
         self.sync_base_font();
         let (w, h) = layer::PREVIEW_SIZE;
         layer::preview_table(&self.engine, &self.preview, w, h, self.ctx.table())?;
-        self.api.begin([0, 0]);
+        // A tile is a still picture: animations show their first frame.
+        self.api.begin(&draw::Begin {
+            still: true,
+            layer: u64::MAX,
+            ..draw::Begin::default()
+        });
         let result = self.engine.call(
             hook,
             Budget::Preview,

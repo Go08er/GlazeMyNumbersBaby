@@ -290,6 +290,40 @@ fn a_lossy_animated_webp_plays() {
 }
 
 #[test]
+fn animations_by_other_programs_encoders_play() {
+    // A GIF by ImageMagick: red, green, blue, shown 0.1 s, 0.2 s, 0.3 s.
+    let file = fixture("anim.gif");
+    let t = timeline(&file).unwrap();
+    assert_eq!(
+        (t.format, t.width, t.height, t.frames()),
+        (Format::Gif, 8, 6, 3)
+    );
+    for (i, want) in [0.0, 0.1, 0.3].iter().enumerate() {
+        assert!((t.start(i as u32) - want).abs() < 1e-9, "start {i}");
+    }
+    assert!((t.duration - 0.6).abs() < 1e-9);
+    let colours = [[200u8, 50, 20, 255], [20, 200, 50, 255], [20, 50, 200, 255]];
+    let mut s = stream(&file);
+    for (i, want) in colours.iter().enumerate() {
+        let (pixels, _) = s.seek(i as u32).unwrap();
+        assert_eq!(pixel(&pixels, 8, 4, 3), *want, "frame {i}");
+    }
+    // An animated PNG by ffmpeg: the same three, a tenth of a second each.
+    let file = fixture("anim.png");
+    let t = timeline(&file).unwrap();
+    assert_eq!(
+        (t.format, t.width, t.height, t.frames()),
+        (Format::Png, 8, 6, 3)
+    );
+    assert!((t.duration - 0.3).abs() < 1e-9);
+    let mut s = stream(&file);
+    for (i, want) in colours.iter().enumerate() {
+        let (pixels, _) = s.seek(i as u32).unwrap();
+        assert_eq!(pixel(&pixels, 8, 4, 3), *want, "frame {i}");
+    }
+}
+
+#[test]
 fn a_still_is_an_animation_of_one_frame_and_a_jpeg_is_none() {
     let four = [RED, GREEN, BLUE, WHITE].concat();
     let sixteen = four.repeat(4);

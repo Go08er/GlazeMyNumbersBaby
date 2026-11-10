@@ -73,6 +73,7 @@ pub mod draw;
 mod engine;
 mod error;
 pub mod events;
+pub mod field;
 pub mod layer;
 pub mod library;
 pub mod path;
@@ -98,6 +99,9 @@ pub use tokens::{Ctx, OptionValue, Tokens};
 pub use value::{FunctionHandle, ThemeValue};
 pub use writer::{Update, Writer};
 
+/// The pictures' own crate: decoders, the animation player, the field
+/// pass. The app turns what it gives into textures.
+pub use gmnb_media as media;
 /// The Luau binding, for the API layer's globals and argument tables.
 pub use mlua;
 

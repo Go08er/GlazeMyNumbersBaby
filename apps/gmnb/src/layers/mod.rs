@@ -846,6 +846,7 @@ impl Instance {
                 list,
                 again,
                 places,
+                due,
             }) => {
                 layers.count(|s| s.frames[slot(self.kind)] += 1);
                 st.picture = Some(Picture {
@@ -853,7 +854,16 @@ impl Instance {
                     places: Rc::new(places),
                     again,
                 });
-                let wait = st.clock.end(now, again, c);
+                // The layer is drawn again when `draw` asked, or when
+                // something it drew is due to change by itself (an
+                // animation's next frame), whichever is sooner. (What
+                // `draw` returned stays what the picture says it was: a
+                // readout's change ends on nil.)
+                let next = match (again, due) {
+                    (Some(again), Some(due)) => Some(again.min(due)),
+                    (again, due) => again.or(due),
+                };
+                let wait = st.clock.end(now, next, c);
                 self.arm(&mut st, wait);
             }
             Err(failure) => {

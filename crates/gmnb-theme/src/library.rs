@@ -50,7 +50,7 @@ fn number(what: &str, v: &Value) -> mlua::Result<f32> {
 
 /// A Color argument: a hex string, or `{ r, g, b, a }` (read raw: no
 /// script code runs).
-fn color_arg(what: &str, v: &Value) -> mlua::Result<Rgba> {
+pub(crate) fn color_arg(what: &str, v: &Value) -> mlua::Result<Rgba> {
     match v {
         Value::String(s) => {
             let text = s.to_str()?;

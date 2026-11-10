@@ -206,6 +206,10 @@ pub struct Drawn {
     /// Keypad: one per cell, in the cells' order; `None` leaves the cell
     /// alone. Empty if `place` didn't run.
     pub places: Vec<Option<Placement>>,
+    /// Seconds until something the layer drew is due to change by itself
+    /// (an animation's next frame), whatever `draw` returned: the layer
+    /// is drawn again at the sooner of the two. `None`: nothing is.
+    pub due: Option<f64>,
 }
 
 /// Why a layer drew nothing.
