@@ -26,8 +26,8 @@ use gtk::{gdk, gio, glib};
 // outside the window, keys and segmented controls) still read a `Scheme`
 // and the `@wc_*` colours. Both are derived from the resolved style here,
 // so they follow whatever theme is active. Remove `Scheme`,
-// `legacy_scheme`, `legacy_colors`, `Hub::scheme`, `Hub::subscribe` and
-// `Hub::subscribe_while` once nothing reads them.
+// `legacy_scheme`, `legacy_colors`, `Hub::scheme` and `Hub::subscribe` once
+// nothing reads them (`Hub::subscribe_while` went with the date page's readouts).
 // ---------------------------------------------------------------------------
 
 /// TRANSITION: the colours the unmigrated surfaces draw with.
@@ -805,26 +805,6 @@ impl Hub {
             f(s);
             true
         }));
-    }
-
-    /// TRANSITION: like [`Hub::subscribe`], but only while `widget` is
-    /// alive.
-    pub fn subscribe_while<W: IsA<glib::Object>>(
-        &self,
-        widget: &W,
-        f: impl Fn(&W, &Scheme) + 'static,
-    ) {
-        f(widget, &self.scheme());
-        let weak = widget.downgrade();
-        self.subscribers
-            .borrow_mut()
-            .push(Box::new(move |s| match weak.upgrade() {
-                Some(w) => {
-                    f(&w, s);
-                    true
-                }
-                None => false,
-            }));
     }
 
     pub fn stats(&self) -> Stats {

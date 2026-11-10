@@ -1294,104 +1294,1332 @@ button.wc-bit:disabled {
 
 /* flyouts */
 
-popover.wc-flyout > contents {
-  padding: 8px;
-  border-radius: 18px;
-  background-image: linear-gradient(to bottom, alpha(@wc_base, 0.98), alpha(@wc_base, 0.95));
-  box-shadow: 0 18px 48px -16px alpha(black, 0.5), inset 0 0 0 1px @wc_glass_border;
-}
-
 button.wc-flyout-button {
   padding: 0 10px;
 }
 
-/* fields (date page) */
+/* ------------------------------------------------------------ date page */
 
-.wc-section {
-  font-family: "Outfit";
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: alpha(@wc_fg, 0.6);
-  margin-top: 6px;
+/* Laid out in Rust as DGMNB's page (pages/date.rs). The switch is a
+   segmented control; the captions, the date buttons, the results. */
+
+/* text date.label label.wc-date-label */
+label.wc-date-label {
+  color: var(--gmnb-date-label-color);
+  font-family: var(--gmnb-date-label-font-family);
+  font-size: var(--gmnb-date-label-font-size);
+  font-weight: var(--gmnb-date-label-font-weight);
+  font-style: var(--gmnb-date-label-font-style);
+  letter-spacing: var(--gmnb-date-label-letter-spacing);
+  font-feature-settings: var(--gmnb-date-label-font-features);
+  font-variation-settings: var(--gmnb-date-label-font-variations);
+  text-shadow: var(--gmnb-date-label-text-shadow);
+  margin: var(--gmnb-date-label-margin);
+}
+/* end text */
+
+/* control date.field menubutton.wc-field>button.toggle scope=window.gmnb */
+window.gmnb menubutton.wc-field>button.toggle {
+  background-color: var(--gmnb-date-field-background-color);
+  background-image: var(--gmnb-date-field-background-image);
+  color: var(--gmnb-date-field-color);
+  box-shadow: var(--gmnb-date-field-shadow);
+  opacity: var(--gmnb-date-field-opacity);
+  filter: var(--gmnb-date-field-filter);
+  transform: var(--gmnb-date-field-transform);
+  transition: var(--gmnb-date-field-transition);
+  border-radius: var(--gmnb-date-field-radius);
+  padding: var(--gmnb-date-field-padding);
+  margin: var(--gmnb-date-field-margin);
+  min-width: var(--gmnb-date-field-min-width);
+  min-height: var(--gmnb-date-field-min-height);
+  font-family: var(--gmnb-date-field-font-family);
+  font-size: var(--gmnb-date-field-font-size);
+  font-weight: var(--gmnb-date-field-font-weight);
+  font-style: var(--gmnb-date-field-font-style);
+  letter-spacing: var(--gmnb-date-field-letter-spacing);
+  font-feature-settings: var(--gmnb-date-field-font-features);
+  font-variation-settings: var(--gmnb-date-field-font-variations);
+}
+window.gmnb menubutton.wc-field>button.toggle:hover {
+  background-color: var(--gmnb-date-field-hover-background-color);
+  background-image: var(--gmnb-date-field-hover-background-image);
+  color: var(--gmnb-date-field-hover-color);
+  box-shadow: var(--gmnb-date-field-hover-shadow);
+  opacity: var(--gmnb-date-field-hover-opacity);
+  filter: var(--gmnb-date-field-hover-filter);
+  transform: var(--gmnb-date-field-hover-transform);
+  transition: var(--gmnb-date-field-hover-transition);
+  font-weight: var(--gmnb-date-field-hover-font-weight);
+}
+window.gmnb menubutton.wc-field>button.toggle:active {
+  background-color: var(--gmnb-date-field-active-background-color);
+  background-image: var(--gmnb-date-field-active-background-image);
+  color: var(--gmnb-date-field-active-color);
+  box-shadow: var(--gmnb-date-field-active-shadow);
+  opacity: var(--gmnb-date-field-active-opacity);
+  filter: var(--gmnb-date-field-active-filter);
+  transform: var(--gmnb-date-field-active-transform);
+  transition: var(--gmnb-date-field-active-transition);
+  font-weight: var(--gmnb-date-field-active-font-weight);
+}
+window.gmnb menubutton.wc-field>button.toggle:checked {
+  background-color: var(--gmnb-date-field-checked-background-color);
+  background-image: var(--gmnb-date-field-checked-background-image);
+  color: var(--gmnb-date-field-checked-color);
+  box-shadow: var(--gmnb-date-field-checked-shadow);
+  opacity: var(--gmnb-date-field-checked-opacity);
+  filter: var(--gmnb-date-field-checked-filter);
+  transform: var(--gmnb-date-field-checked-transform);
+  transition: var(--gmnb-date-field-checked-transition);
+  font-weight: var(--gmnb-date-field-checked-font-weight);
+}
+window.gmnb menubutton.wc-field>button.toggle:checked:hover {
+  background-color: var(--gmnb-date-field-checked-hover-background-color);
+  background-image: var(--gmnb-date-field-checked-hover-background-image);
+  color: var(--gmnb-date-field-checked-hover-color);
+  box-shadow: var(--gmnb-date-field-checked-hover-shadow);
+  opacity: var(--gmnb-date-field-checked-hover-opacity);
+  filter: var(--gmnb-date-field-checked-hover-filter);
+  transform: var(--gmnb-date-field-checked-hover-transform);
+  transition: var(--gmnb-date-field-checked-hover-transition);
+  font-weight: var(--gmnb-date-field-checked-hover-font-weight);
+}
+window.gmnb menubutton.wc-field>button.toggle:checked:active {
+  background-color: var(--gmnb-date-field-checked-active-background-color);
+  background-image: var(--gmnb-date-field-checked-active-background-image);
+  color: var(--gmnb-date-field-checked-active-color);
+  box-shadow: var(--gmnb-date-field-checked-active-shadow);
+  opacity: var(--gmnb-date-field-checked-active-opacity);
+  filter: var(--gmnb-date-field-checked-active-filter);
+  transform: var(--gmnb-date-field-checked-active-transform);
+  transition: var(--gmnb-date-field-checked-active-transition);
+  font-weight: var(--gmnb-date-field-checked-active-font-weight);
+}
+window.gmnb menubutton.wc-field>button.toggle:disabled {
+  background-color: var(--gmnb-date-field-disabled-background-color);
+  background-image: var(--gmnb-date-field-disabled-background-image);
+  color: var(--gmnb-date-field-disabled-color);
+  box-shadow: var(--gmnb-date-field-disabled-shadow);
+  opacity: var(--gmnb-date-field-disabled-opacity);
+  filter: var(--gmnb-date-field-disabled-filter);
+  transform: var(--gmnb-date-field-disabled-transform);
+  transition: var(--gmnb-date-field-disabled-transition);
+  font-weight: var(--gmnb-date-field-disabled-font-weight);
+}
+window.gmnb menubutton.wc-field>button.toggle:checked:disabled {
+  background-color: var(--gmnb-date-field-checked-disabled-background-color);
+  background-image: var(--gmnb-date-field-checked-disabled-background-image);
+  color: var(--gmnb-date-field-checked-disabled-color);
+  box-shadow: var(--gmnb-date-field-checked-disabled-shadow);
+  opacity: var(--gmnb-date-field-checked-disabled-opacity);
+  filter: var(--gmnb-date-field-checked-disabled-filter);
+  transform: var(--gmnb-date-field-checked-disabled-transform);
+  transition: var(--gmnb-date-field-checked-disabled-transition);
+  font-weight: var(--gmnb-date-field-checked-disabled-font-weight);
+}
+window.gmnb .wc-inert menubutton.wc-field>button.toggle:disabled:not(.wc-off) {
+  background-color: var(--gmnb-date-field-background-color);
+  background-image: var(--gmnb-date-field-background-image);
+  color: var(--gmnb-date-field-color);
+  box-shadow: var(--gmnb-date-field-shadow);
+  opacity: var(--gmnb-date-field-opacity);
+  filter: var(--gmnb-date-field-filter);
+  transform: var(--gmnb-date-field-transform);
+  transition: var(--gmnb-date-field-transition);
+  font-weight: var(--gmnb-date-field-font-weight);
+}
+window.gmnb .wc-inert menubutton.wc-field>button.toggle:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-date-field-checked-background-color);
+  background-image: var(--gmnb-date-field-checked-background-image);
+  color: var(--gmnb-date-field-checked-color);
+  box-shadow: var(--gmnb-date-field-checked-shadow);
+  opacity: var(--gmnb-date-field-checked-opacity);
+  filter: var(--gmnb-date-field-checked-filter);
+  transform: var(--gmnb-date-field-checked-transform);
+  transition: var(--gmnb-date-field-checked-transition);
+  font-weight: var(--gmnb-date-field-checked-font-weight);
+}
+/* end control */
+
+/* text date.subresult label.wc-subresult */
+label.wc-subresult {
+  color: var(--gmnb-date-subresult-color);
+  font-family: var(--gmnb-date-subresult-font-family);
+  font-size: var(--gmnb-date-subresult-font-size);
+  font-weight: var(--gmnb-date-subresult-font-weight);
+  font-style: var(--gmnb-date-subresult-font-style);
+  letter-spacing: var(--gmnb-date-subresult-letter-spacing);
+  font-feature-settings: var(--gmnb-date-subresult-font-features);
+  font-variation-settings: var(--gmnb-date-subresult-font-variations);
+  text-shadow: var(--gmnb-date-subresult-text-shadow);
+  margin: var(--gmnb-date-subresult-margin);
+}
+/* end text */
+
+/* The results (widgets/fit.rs draws them at the style's font). */
+fitlabel.wc-date-result {
+  color: var(--gmnb-window-color);
 }
 
-menubutton.wc-field > button,
-button.wc-field {
-  min-height: 44px;
-  padding: 0 14px;
-  border-radius: 14px;
-  font-family: "Outfit";
-  font-size: 16px;
-  background-image: linear-gradient(to bottom, @wc_glass_hi, @wc_glass);
-  box-shadow: inset 0 1px alpha(white, 0.10), inset 0 0 0 1px @wc_glass_border;
+fitlabel.wc-date-result.wc-error {
+  color: var(--error-color);
 }
 
-/* The date pickers' month of days (widgets/day_grid.rs). */
-.wc-days {
-  padding: 4px;
+/* The add/subtract switch is shorter than the mode switch (DGMNB's 34 to
+   36): its height is set in Rust. */
+window.gmnb.own-segmented toggle-group.wc-date-op > toggle {
+  min-height: 0;
 }
 
-.wc-days-title {
-  font-family: "Outfit";
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.wc-days-weekday {
-  font-size: 12px;
-  color: @wc_fg_dim;
-  min-height: 24px;
-}
-
-button.wc-day {
-  min-width: 34px;
-  min-height: 34px;
+/* The year, month and day boxes: DGMNB's [−][box][+], the box a field. */
+window.gmnb spinbutton.wc-spin {
+  background: none;
+  box-shadow: none;
+  border: none;
   padding: 0;
-  font-feature-settings: "tnum";
+  min-height: 0;
+  outline: none;
 }
 
-button.wc-day.wc-day-other {
-  color: @wc_fg_faint;
+/* field field spinbutton.wc-spin>text scope=window.gmnb.own-field */
+window.gmnb.own-field spinbutton.wc-spin>text {
+  background-color: var(--gmnb-field-background-color);
+  background-image: var(--gmnb-field-background-image);
+  color: var(--gmnb-field-color);
+  box-shadow: var(--gmnb-field-shadow);
+  opacity: var(--gmnb-field-opacity);
+  filter: var(--gmnb-field-filter);
+  transform: var(--gmnb-field-transform);
+  transition: var(--gmnb-field-transition);
+  border-radius: var(--gmnb-field-radius);
+  padding: var(--gmnb-field-padding);
+  min-height: var(--gmnb-field-min-height);
+  font-family: var(--gmnb-field-font-family);
+  font-size: var(--gmnb-field-font-size);
+  font-weight: var(--gmnb-field-font-weight);
+  font-style: var(--gmnb-field-font-style);
+  letter-spacing: var(--gmnb-field-letter-spacing);
+  font-feature-settings: var(--gmnb-field-font-features);
+  font-variation-settings: var(--gmnb-field-font-variations);
+  caret-color: var(--gmnb-field-caret);
+}
+window.gmnb.own-field spinbutton.wc-spin>text placeholder {
+  color: var(--gmnb-field-placeholder);
+}
+window.gmnb.own-field spinbutton.wc-spin>text text > selection {
+  background-color: var(--gmnb-field-selection);
+}
+window.gmnb.own-field spinbutton.wc-spin>text:focus-within {
+  background-color: var(--gmnb-field-focus-background-color);
+  background-image: var(--gmnb-field-focus-background-image);
+  color: var(--gmnb-field-focus-color);
+  box-shadow: var(--gmnb-field-focus-shadow);
+  opacity: var(--gmnb-field-focus-opacity);
+  filter: var(--gmnb-field-focus-filter);
+  transform: var(--gmnb-field-focus-transform);
+  transition: var(--gmnb-field-focus-transition);
+  font-weight: var(--gmnb-field-focus-font-weight);
+}
+window.gmnb.own-field spinbutton.wc-spin>text.error {
+  background-color: var(--gmnb-field-error-background-color);
+  background-image: var(--gmnb-field-error-background-image);
+  color: var(--gmnb-field-error-color);
+  box-shadow: var(--gmnb-field-error-shadow);
+  opacity: var(--gmnb-field-error-opacity);
+  filter: var(--gmnb-field-error-filter);
+  transform: var(--gmnb-field-error-transform);
+  transition: var(--gmnb-field-error-transition);
+  font-weight: var(--gmnb-field-error-font-weight);
+}
+window.gmnb.own-field spinbutton.wc-spin>text.error:focus-within {
+  background-color: var(--gmnb-field-error-focus-background-color);
+  background-image: var(--gmnb-field-error-focus-background-image);
+  color: var(--gmnb-field-error-focus-color);
+  box-shadow: var(--gmnb-field-error-focus-shadow);
+  opacity: var(--gmnb-field-error-focus-opacity);
+  filter: var(--gmnb-field-error-focus-filter);
+  transform: var(--gmnb-field-error-focus-transform);
+  transition: var(--gmnb-field-error-focus-transition);
+  font-weight: var(--gmnb-field-error-focus-font-weight);
+}
+/* end field */
+
+window.gmnb spinbutton.wc-spin > text {
+  min-height: 0;
+  outline: none;
 }
 
-button.wc-day.wc-day-today {
-  box-shadow: inset 0 0 0 1px @wc_accent;
+/* control icon_button spinbutton.wc-spin>button scope=window.gmnb */
+window.gmnb spinbutton.wc-spin>button {
+  background-color: var(--gmnb-icon-button-background-color);
+  background-image: var(--gmnb-icon-button-background-image);
+  color: var(--gmnb-icon-button-color);
+  box-shadow: var(--gmnb-icon-button-shadow);
+  opacity: var(--gmnb-icon-button-opacity);
+  filter: var(--gmnb-icon-button-filter);
+  transform: var(--gmnb-icon-button-transform);
+  transition: var(--gmnb-icon-button-transition);
+  border-radius: var(--gmnb-icon-button-radius);
+  padding: var(--gmnb-icon-button-padding);
+  margin: var(--gmnb-icon-button-margin);
+  min-width: var(--gmnb-icon-button-min-width);
+  min-height: var(--gmnb-icon-button-min-height);
+  font-family: var(--gmnb-icon-button-font-family);
+  font-size: var(--gmnb-icon-button-font-size);
+  font-weight: var(--gmnb-icon-button-font-weight);
+  font-style: var(--gmnb-icon-button-font-style);
+  letter-spacing: var(--gmnb-icon-button-letter-spacing);
+  font-feature-settings: var(--gmnb-icon-button-font-features);
+  font-variation-settings: var(--gmnb-icon-button-font-variations);
+}
+window.gmnb spinbutton.wc-spin>button:hover {
+  background-color: var(--gmnb-icon-button-hover-background-color);
+  background-image: var(--gmnb-icon-button-hover-background-image);
+  color: var(--gmnb-icon-button-hover-color);
+  box-shadow: var(--gmnb-icon-button-hover-shadow);
+  opacity: var(--gmnb-icon-button-hover-opacity);
+  filter: var(--gmnb-icon-button-hover-filter);
+  transform: var(--gmnb-icon-button-hover-transform);
+  transition: var(--gmnb-icon-button-hover-transition);
+  font-weight: var(--gmnb-icon-button-hover-font-weight);
+}
+window.gmnb spinbutton.wc-spin>button:active {
+  background-color: var(--gmnb-icon-button-active-background-color);
+  background-image: var(--gmnb-icon-button-active-background-image);
+  color: var(--gmnb-icon-button-active-color);
+  box-shadow: var(--gmnb-icon-button-active-shadow);
+  opacity: var(--gmnb-icon-button-active-opacity);
+  filter: var(--gmnb-icon-button-active-filter);
+  transform: var(--gmnb-icon-button-active-transform);
+  transition: var(--gmnb-icon-button-active-transition);
+  font-weight: var(--gmnb-icon-button-active-font-weight);
+}
+window.gmnb spinbutton.wc-spin>button:checked {
+  background-color: var(--gmnb-icon-button-checked-background-color);
+  background-image: var(--gmnb-icon-button-checked-background-image);
+  color: var(--gmnb-icon-button-checked-color);
+  box-shadow: var(--gmnb-icon-button-checked-shadow);
+  opacity: var(--gmnb-icon-button-checked-opacity);
+  filter: var(--gmnb-icon-button-checked-filter);
+  transform: var(--gmnb-icon-button-checked-transform);
+  transition: var(--gmnb-icon-button-checked-transition);
+  font-weight: var(--gmnb-icon-button-checked-font-weight);
+}
+window.gmnb spinbutton.wc-spin>button:checked:hover {
+  background-color: var(--gmnb-icon-button-checked-hover-background-color);
+  background-image: var(--gmnb-icon-button-checked-hover-background-image);
+  color: var(--gmnb-icon-button-checked-hover-color);
+  box-shadow: var(--gmnb-icon-button-checked-hover-shadow);
+  opacity: var(--gmnb-icon-button-checked-hover-opacity);
+  filter: var(--gmnb-icon-button-checked-hover-filter);
+  transform: var(--gmnb-icon-button-checked-hover-transform);
+  transition: var(--gmnb-icon-button-checked-hover-transition);
+  font-weight: var(--gmnb-icon-button-checked-hover-font-weight);
+}
+window.gmnb spinbutton.wc-spin>button:checked:active {
+  background-color: var(--gmnb-icon-button-checked-active-background-color);
+  background-image: var(--gmnb-icon-button-checked-active-background-image);
+  color: var(--gmnb-icon-button-checked-active-color);
+  box-shadow: var(--gmnb-icon-button-checked-active-shadow);
+  opacity: var(--gmnb-icon-button-checked-active-opacity);
+  filter: var(--gmnb-icon-button-checked-active-filter);
+  transform: var(--gmnb-icon-button-checked-active-transform);
+  transition: var(--gmnb-icon-button-checked-active-transition);
+  font-weight: var(--gmnb-icon-button-checked-active-font-weight);
+}
+window.gmnb spinbutton.wc-spin>button:disabled {
+  background-color: var(--gmnb-icon-button-disabled-background-color);
+  background-image: var(--gmnb-icon-button-disabled-background-image);
+  color: var(--gmnb-icon-button-disabled-color);
+  box-shadow: var(--gmnb-icon-button-disabled-shadow);
+  opacity: var(--gmnb-icon-button-disabled-opacity);
+  filter: var(--gmnb-icon-button-disabled-filter);
+  transform: var(--gmnb-icon-button-disabled-transform);
+  transition: var(--gmnb-icon-button-disabled-transition);
+  font-weight: var(--gmnb-icon-button-disabled-font-weight);
+}
+window.gmnb spinbutton.wc-spin>button:checked:disabled {
+  background-color: var(--gmnb-icon-button-checked-disabled-background-color);
+  background-image: var(--gmnb-icon-button-checked-disabled-background-image);
+  color: var(--gmnb-icon-button-checked-disabled-color);
+  box-shadow: var(--gmnb-icon-button-checked-disabled-shadow);
+  opacity: var(--gmnb-icon-button-checked-disabled-opacity);
+  filter: var(--gmnb-icon-button-checked-disabled-filter);
+  transform: var(--gmnb-icon-button-checked-disabled-transform);
+  transition: var(--gmnb-icon-button-checked-disabled-transition);
+  font-weight: var(--gmnb-icon-button-checked-disabled-font-weight);
+}
+window.gmnb .wc-inert spinbutton.wc-spin>button:disabled:not(.wc-off) {
+  background-color: var(--gmnb-icon-button-background-color);
+  background-image: var(--gmnb-icon-button-background-image);
+  color: var(--gmnb-icon-button-color);
+  box-shadow: var(--gmnb-icon-button-shadow);
+  opacity: var(--gmnb-icon-button-opacity);
+  filter: var(--gmnb-icon-button-filter);
+  transform: var(--gmnb-icon-button-transform);
+  transition: var(--gmnb-icon-button-transition);
+  font-weight: var(--gmnb-icon-button-font-weight);
+}
+window.gmnb .wc-inert spinbutton.wc-spin>button:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-icon-button-checked-background-color);
+  background-image: var(--gmnb-icon-button-checked-background-image);
+  color: var(--gmnb-icon-button-checked-color);
+  box-shadow: var(--gmnb-icon-button-checked-shadow);
+  opacity: var(--gmnb-icon-button-checked-opacity);
+  filter: var(--gmnb-icon-button-checked-filter);
+  transform: var(--gmnb-icon-button-checked-transform);
+  transition: var(--gmnb-icon-button-checked-transition);
+  font-weight: var(--gmnb-icon-button-checked-font-weight);
+}
+/* end control */
+
+window.gmnb spinbutton.wc-spin > button {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: none;
 }
 
-button.wc-day.wc-day-selected {
-  background-color: @accent_bg_color;
-  color: @accent_fg_color;
+/* The calendar (widgets/day_grid.rs), in a popover card. */
+popover.wc-calendar-popover > contents {
+  padding: 0;
+}
+
+/* text date.calendar.title label.wc-days-title */
+label.wc-days-title {
+  color: var(--gmnb-date-calendar-title-color);
+  font-family: var(--gmnb-date-calendar-title-font-family);
+  font-size: var(--gmnb-date-calendar-title-font-size);
+  font-weight: var(--gmnb-date-calendar-title-font-weight);
+  font-style: var(--gmnb-date-calendar-title-font-style);
+  letter-spacing: var(--gmnb-date-calendar-title-letter-spacing);
+  font-feature-settings: var(--gmnb-date-calendar-title-font-features);
+  font-variation-settings: var(--gmnb-date-calendar-title-font-variations);
+  text-shadow: var(--gmnb-date-calendar-title-text-shadow);
+  margin: var(--gmnb-date-calendar-title-margin);
+}
+/* end text */
+
+/* text date.calendar.weekday label.wc-days-weekday */
+label.wc-days-weekday {
+  color: var(--gmnb-date-calendar-weekday-color);
+  font-family: var(--gmnb-date-calendar-weekday-font-family);
+  font-size: var(--gmnb-date-calendar-weekday-font-size);
+  font-weight: var(--gmnb-date-calendar-weekday-font-weight);
+  font-style: var(--gmnb-date-calendar-weekday-font-style);
+  letter-spacing: var(--gmnb-date-calendar-weekday-letter-spacing);
+  font-feature-settings: var(--gmnb-date-calendar-weekday-font-features);
+  font-variation-settings: var(--gmnb-date-calendar-weekday-font-variations);
+  text-shadow: var(--gmnb-date-calendar-weekday-text-shadow);
+  margin: var(--gmnb-date-calendar-weekday-margin);
+}
+/* end text */
+
+/* control icon_button button.wc-days-nav scope=window.gmnb */
+window.gmnb button.wc-days-nav {
+  background-color: var(--gmnb-icon-button-background-color);
+  background-image: var(--gmnb-icon-button-background-image);
+  color: var(--gmnb-icon-button-color);
+  box-shadow: var(--gmnb-icon-button-shadow);
+  opacity: var(--gmnb-icon-button-opacity);
+  filter: var(--gmnb-icon-button-filter);
+  transform: var(--gmnb-icon-button-transform);
+  transition: var(--gmnb-icon-button-transition);
+  border-radius: var(--gmnb-icon-button-radius);
+  padding: var(--gmnb-icon-button-padding);
+  margin: var(--gmnb-icon-button-margin);
+  min-width: var(--gmnb-icon-button-min-width);
+  min-height: var(--gmnb-icon-button-min-height);
+  font-family: var(--gmnb-icon-button-font-family);
+  font-size: var(--gmnb-icon-button-font-size);
+  font-weight: var(--gmnb-icon-button-font-weight);
+  font-style: var(--gmnb-icon-button-font-style);
+  letter-spacing: var(--gmnb-icon-button-letter-spacing);
+  font-feature-settings: var(--gmnb-icon-button-font-features);
+  font-variation-settings: var(--gmnb-icon-button-font-variations);
+}
+window.gmnb button.wc-days-nav:hover {
+  background-color: var(--gmnb-icon-button-hover-background-color);
+  background-image: var(--gmnb-icon-button-hover-background-image);
+  color: var(--gmnb-icon-button-hover-color);
+  box-shadow: var(--gmnb-icon-button-hover-shadow);
+  opacity: var(--gmnb-icon-button-hover-opacity);
+  filter: var(--gmnb-icon-button-hover-filter);
+  transform: var(--gmnb-icon-button-hover-transform);
+  transition: var(--gmnb-icon-button-hover-transition);
+  font-weight: var(--gmnb-icon-button-hover-font-weight);
+}
+window.gmnb button.wc-days-nav:active {
+  background-color: var(--gmnb-icon-button-active-background-color);
+  background-image: var(--gmnb-icon-button-active-background-image);
+  color: var(--gmnb-icon-button-active-color);
+  box-shadow: var(--gmnb-icon-button-active-shadow);
+  opacity: var(--gmnb-icon-button-active-opacity);
+  filter: var(--gmnb-icon-button-active-filter);
+  transform: var(--gmnb-icon-button-active-transform);
+  transition: var(--gmnb-icon-button-active-transition);
+  font-weight: var(--gmnb-icon-button-active-font-weight);
+}
+window.gmnb button.wc-days-nav:checked {
+  background-color: var(--gmnb-icon-button-checked-background-color);
+  background-image: var(--gmnb-icon-button-checked-background-image);
+  color: var(--gmnb-icon-button-checked-color);
+  box-shadow: var(--gmnb-icon-button-checked-shadow);
+  opacity: var(--gmnb-icon-button-checked-opacity);
+  filter: var(--gmnb-icon-button-checked-filter);
+  transform: var(--gmnb-icon-button-checked-transform);
+  transition: var(--gmnb-icon-button-checked-transition);
+  font-weight: var(--gmnb-icon-button-checked-font-weight);
+}
+window.gmnb button.wc-days-nav:checked:hover {
+  background-color: var(--gmnb-icon-button-checked-hover-background-color);
+  background-image: var(--gmnb-icon-button-checked-hover-background-image);
+  color: var(--gmnb-icon-button-checked-hover-color);
+  box-shadow: var(--gmnb-icon-button-checked-hover-shadow);
+  opacity: var(--gmnb-icon-button-checked-hover-opacity);
+  filter: var(--gmnb-icon-button-checked-hover-filter);
+  transform: var(--gmnb-icon-button-checked-hover-transform);
+  transition: var(--gmnb-icon-button-checked-hover-transition);
+  font-weight: var(--gmnb-icon-button-checked-hover-font-weight);
+}
+window.gmnb button.wc-days-nav:checked:active {
+  background-color: var(--gmnb-icon-button-checked-active-background-color);
+  background-image: var(--gmnb-icon-button-checked-active-background-image);
+  color: var(--gmnb-icon-button-checked-active-color);
+  box-shadow: var(--gmnb-icon-button-checked-active-shadow);
+  opacity: var(--gmnb-icon-button-checked-active-opacity);
+  filter: var(--gmnb-icon-button-checked-active-filter);
+  transform: var(--gmnb-icon-button-checked-active-transform);
+  transition: var(--gmnb-icon-button-checked-active-transition);
+  font-weight: var(--gmnb-icon-button-checked-active-font-weight);
+}
+window.gmnb button.wc-days-nav:disabled {
+  background-color: var(--gmnb-icon-button-disabled-background-color);
+  background-image: var(--gmnb-icon-button-disabled-background-image);
+  color: var(--gmnb-icon-button-disabled-color);
+  box-shadow: var(--gmnb-icon-button-disabled-shadow);
+  opacity: var(--gmnb-icon-button-disabled-opacity);
+  filter: var(--gmnb-icon-button-disabled-filter);
+  transform: var(--gmnb-icon-button-disabled-transform);
+  transition: var(--gmnb-icon-button-disabled-transition);
+  font-weight: var(--gmnb-icon-button-disabled-font-weight);
+}
+window.gmnb button.wc-days-nav:checked:disabled {
+  background-color: var(--gmnb-icon-button-checked-disabled-background-color);
+  background-image: var(--gmnb-icon-button-checked-disabled-background-image);
+  color: var(--gmnb-icon-button-checked-disabled-color);
+  box-shadow: var(--gmnb-icon-button-checked-disabled-shadow);
+  opacity: var(--gmnb-icon-button-checked-disabled-opacity);
+  filter: var(--gmnb-icon-button-checked-disabled-filter);
+  transform: var(--gmnb-icon-button-checked-disabled-transform);
+  transition: var(--gmnb-icon-button-checked-disabled-transition);
+  font-weight: var(--gmnb-icon-button-checked-disabled-font-weight);
+}
+window.gmnb .wc-inert button.wc-days-nav:disabled:not(.wc-off) {
+  background-color: var(--gmnb-icon-button-background-color);
+  background-image: var(--gmnb-icon-button-background-image);
+  color: var(--gmnb-icon-button-color);
+  box-shadow: var(--gmnb-icon-button-shadow);
+  opacity: var(--gmnb-icon-button-opacity);
+  filter: var(--gmnb-icon-button-filter);
+  transform: var(--gmnb-icon-button-transform);
+  transition: var(--gmnb-icon-button-transition);
+  font-weight: var(--gmnb-icon-button-font-weight);
+}
+window.gmnb .wc-inert button.wc-days-nav:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-icon-button-checked-background-color);
+  background-image: var(--gmnb-icon-button-checked-background-image);
+  color: var(--gmnb-icon-button-checked-color);
+  box-shadow: var(--gmnb-icon-button-checked-shadow);
+  opacity: var(--gmnb-icon-button-checked-opacity);
+  filter: var(--gmnb-icon-button-checked-filter);
+  transform: var(--gmnb-icon-button-checked-transform);
+  transition: var(--gmnb-icon-button-checked-transition);
+  font-weight: var(--gmnb-icon-button-checked-font-weight);
+}
+/* end control */
+
+/* control date.calendar.day button.wc-day scope=window.gmnb checked=.wc-day-selected */
+window.gmnb button.wc-day {
+  background-color: var(--gmnb-date-calendar-day-background-color);
+  background-image: var(--gmnb-date-calendar-day-background-image);
+  color: var(--gmnb-date-calendar-day-color);
+  box-shadow: var(--gmnb-date-calendar-day-shadow);
+  opacity: var(--gmnb-date-calendar-day-opacity);
+  filter: var(--gmnb-date-calendar-day-filter);
+  transform: var(--gmnb-date-calendar-day-transform);
+  transition: var(--gmnb-date-calendar-day-transition);
+  border-radius: var(--gmnb-date-calendar-day-radius);
+  padding: var(--gmnb-date-calendar-day-padding);
+  margin: var(--gmnb-date-calendar-day-margin);
+  min-width: var(--gmnb-date-calendar-day-min-width);
+  min-height: var(--gmnb-date-calendar-day-min-height);
+  font-family: var(--gmnb-date-calendar-day-font-family);
+  font-size: var(--gmnb-date-calendar-day-font-size);
+  font-weight: var(--gmnb-date-calendar-day-font-weight);
+  font-style: var(--gmnb-date-calendar-day-font-style);
+  letter-spacing: var(--gmnb-date-calendar-day-letter-spacing);
+  font-feature-settings: var(--gmnb-date-calendar-day-font-features);
+  font-variation-settings: var(--gmnb-date-calendar-day-font-variations);
+}
+window.gmnb button.wc-day:hover {
+  background-color: var(--gmnb-date-calendar-day-hover-background-color);
+  background-image: var(--gmnb-date-calendar-day-hover-background-image);
+  color: var(--gmnb-date-calendar-day-hover-color);
+  box-shadow: var(--gmnb-date-calendar-day-hover-shadow);
+  opacity: var(--gmnb-date-calendar-day-hover-opacity);
+  filter: var(--gmnb-date-calendar-day-hover-filter);
+  transform: var(--gmnb-date-calendar-day-hover-transform);
+  transition: var(--gmnb-date-calendar-day-hover-transition);
+  font-weight: var(--gmnb-date-calendar-day-hover-font-weight);
+}
+window.gmnb button.wc-day:active {
+  background-color: var(--gmnb-date-calendar-day-active-background-color);
+  background-image: var(--gmnb-date-calendar-day-active-background-image);
+  color: var(--gmnb-date-calendar-day-active-color);
+  box-shadow: var(--gmnb-date-calendar-day-active-shadow);
+  opacity: var(--gmnb-date-calendar-day-active-opacity);
+  filter: var(--gmnb-date-calendar-day-active-filter);
+  transform: var(--gmnb-date-calendar-day-active-transform);
+  transition: var(--gmnb-date-calendar-day-active-transition);
+  font-weight: var(--gmnb-date-calendar-day-active-font-weight);
+}
+window.gmnb button.wc-day.wc-day-selected {
+  background-color: var(--gmnb-date-calendar-day-checked-background-color);
+  background-image: var(--gmnb-date-calendar-day-checked-background-image);
+  color: var(--gmnb-date-calendar-day-checked-color);
+  box-shadow: var(--gmnb-date-calendar-day-checked-shadow);
+  opacity: var(--gmnb-date-calendar-day-checked-opacity);
+  filter: var(--gmnb-date-calendar-day-checked-filter);
+  transform: var(--gmnb-date-calendar-day-checked-transform);
+  transition: var(--gmnb-date-calendar-day-checked-transition);
+  font-weight: var(--gmnb-date-calendar-day-checked-font-weight);
+}
+window.gmnb button.wc-day.wc-day-selected:hover {
+  background-color: var(--gmnb-date-calendar-day-checked-hover-background-color);
+  background-image: var(--gmnb-date-calendar-day-checked-hover-background-image);
+  color: var(--gmnb-date-calendar-day-checked-hover-color);
+  box-shadow: var(--gmnb-date-calendar-day-checked-hover-shadow);
+  opacity: var(--gmnb-date-calendar-day-checked-hover-opacity);
+  filter: var(--gmnb-date-calendar-day-checked-hover-filter);
+  transform: var(--gmnb-date-calendar-day-checked-hover-transform);
+  transition: var(--gmnb-date-calendar-day-checked-hover-transition);
+  font-weight: var(--gmnb-date-calendar-day-checked-hover-font-weight);
+}
+window.gmnb button.wc-day.wc-day-selected:active {
+  background-color: var(--gmnb-date-calendar-day-checked-active-background-color);
+  background-image: var(--gmnb-date-calendar-day-checked-active-background-image);
+  color: var(--gmnb-date-calendar-day-checked-active-color);
+  box-shadow: var(--gmnb-date-calendar-day-checked-active-shadow);
+  opacity: var(--gmnb-date-calendar-day-checked-active-opacity);
+  filter: var(--gmnb-date-calendar-day-checked-active-filter);
+  transform: var(--gmnb-date-calendar-day-checked-active-transform);
+  transition: var(--gmnb-date-calendar-day-checked-active-transition);
+  font-weight: var(--gmnb-date-calendar-day-checked-active-font-weight);
+}
+window.gmnb button.wc-day:disabled {
+  background-color: var(--gmnb-date-calendar-day-disabled-background-color);
+  background-image: var(--gmnb-date-calendar-day-disabled-background-image);
+  color: var(--gmnb-date-calendar-day-disabled-color);
+  box-shadow: var(--gmnb-date-calendar-day-disabled-shadow);
+  opacity: var(--gmnb-date-calendar-day-disabled-opacity);
+  filter: var(--gmnb-date-calendar-day-disabled-filter);
+  transform: var(--gmnb-date-calendar-day-disabled-transform);
+  transition: var(--gmnb-date-calendar-day-disabled-transition);
+  font-weight: var(--gmnb-date-calendar-day-disabled-font-weight);
+}
+window.gmnb button.wc-day.wc-day-selected:disabled {
+  background-color: var(--gmnb-date-calendar-day-checked-disabled-background-color);
+  background-image: var(--gmnb-date-calendar-day-checked-disabled-background-image);
+  color: var(--gmnb-date-calendar-day-checked-disabled-color);
+  box-shadow: var(--gmnb-date-calendar-day-checked-disabled-shadow);
+  opacity: var(--gmnb-date-calendar-day-checked-disabled-opacity);
+  filter: var(--gmnb-date-calendar-day-checked-disabled-filter);
+  transform: var(--gmnb-date-calendar-day-checked-disabled-transform);
+  transition: var(--gmnb-date-calendar-day-checked-disabled-transition);
+  font-weight: var(--gmnb-date-calendar-day-checked-disabled-font-weight);
+}
+window.gmnb .wc-inert button.wc-day:disabled:not(.wc-off) {
+  background-color: var(--gmnb-date-calendar-day-background-color);
+  background-image: var(--gmnb-date-calendar-day-background-image);
+  color: var(--gmnb-date-calendar-day-color);
+  box-shadow: var(--gmnb-date-calendar-day-shadow);
+  opacity: var(--gmnb-date-calendar-day-opacity);
+  filter: var(--gmnb-date-calendar-day-filter);
+  transform: var(--gmnb-date-calendar-day-transform);
+  transition: var(--gmnb-date-calendar-day-transition);
+  font-weight: var(--gmnb-date-calendar-day-font-weight);
+}
+window.gmnb .wc-inert button.wc-day.wc-day-selected:disabled:not(.wc-off) {
+  background-color: var(--gmnb-date-calendar-day-checked-background-color);
+  background-image: var(--gmnb-date-calendar-day-checked-background-image);
+  color: var(--gmnb-date-calendar-day-checked-color);
+  box-shadow: var(--gmnb-date-calendar-day-checked-shadow);
+  opacity: var(--gmnb-date-calendar-day-checked-opacity);
+  filter: var(--gmnb-date-calendar-day-checked-filter);
+  transform: var(--gmnb-date-calendar-day-checked-transform);
+  transition: var(--gmnb-date-calendar-day-checked-transition);
+  font-weight: var(--gmnb-date-calendar-day-checked-font-weight);
+}
+/* end control */
+
+window.gmnb button.wc-day.wc-day-other:not(.wc-day-selected) {
+  color: var(--gmnb-date-calendar-other-month);
+}
+
+window.gmnb button.wc-day.wc-day-today:not(.wc-day-selected) {
+  box-shadow: var(--gmnb-date-calendar-today);
 }
 
 /* The day the keys are on (a popover isn't told of keyboard use, so not
    only :focus-visible). */
-button.wc-day:focus {
-  outline: 2px solid alpha(@wc_accent, 0.9);
-  outline-offset: 1px;
+window.gmnb button.wc-day:focus {
+  outline-style: solid;
+  outline-width: var(--gmnb-date-calendar-focus-width);
+  outline-color: var(--gmnb-date-calendar-focus-color);
+  outline-offset: var(--gmnb-date-calendar-focus-offset);
 }
 
-.wc-result-panel {
-  padding: 10px 6px 14px 6px;
-  margin-top: 10px;
+/* ------------------------------------------- the toolkit's own widgets */
+
+/* Each family sits under the window class the app sets unless the theme
+   hands the family back (native = { "field" } and so on). */
+
+/* text section .wc-section */
+.wc-section {
+  color: var(--gmnb-section-color);
+  font-family: var(--gmnb-section-font-family);
+  font-size: var(--gmnb-section-font-size);
+  font-weight: var(--gmnb-section-font-weight);
+  font-style: var(--gmnb-section-font-style);
+  letter-spacing: var(--gmnb-section-letter-spacing);
+  font-feature-settings: var(--gmnb-section-font-features);
+  font-variation-settings: var(--gmnb-section-font-variations);
+  text-shadow: var(--gmnb-section-text-shadow);
+  margin: var(--gmnb-section-margin);
+}
+/* end text */
+
+/* Popovers: the app's flyouts and the calendar are cards; the toolkit's
+   menus and lists are cards too, a little less round. */
+/* surface popover popover.wc-flyout>contents */
+popover.wc-flyout>contents {
+  background-color: var(--gmnb-popover-background-color);
+  background-image: var(--gmnb-popover-background-image);
+  box-shadow: var(--gmnb-popover-shadow);
+  border-radius: var(--gmnb-popover-radius);
+  padding: var(--gmnb-popover-padding);
+  margin: var(--gmnb-popover-margin);
+}
+/* end surface */
+
+/* surface popover popover.wc-calendar-popover>contents */
+popover.wc-calendar-popover>contents {
+  background-color: var(--gmnb-popover-background-color);
+  background-image: var(--gmnb-popover-background-image);
+  box-shadow: var(--gmnb-popover-shadow);
+  border-radius: var(--gmnb-popover-radius);
+  padding: var(--gmnb-popover-padding);
+  margin: var(--gmnb-popover-margin);
+}
+/* end surface */
+
+/* surface menu popover:not(.wc-flyout):not(.wc-calendar-popover)>contents scope=window.gmnb.own-menu */
+window.gmnb.own-menu popover:not(.wc-flyout):not(.wc-calendar-popover)>contents {
+  background-color: var(--gmnb-menu-background-color);
+  background-image: var(--gmnb-menu-background-image);
+  box-shadow: var(--gmnb-menu-shadow);
+  border-radius: var(--gmnb-menu-radius);
+  padding: var(--gmnb-menu-padding);
+  margin: var(--gmnb-menu-margin);
+}
+/* end surface */
+
+window.gmnb.own-menu popover:not(.wc-flyout):not(.wc-calendar-popover) > contents,
+popover.wc-flyout > contents,
+popover.wc-calendar-popover > contents {
+  color: var(--gmnb-window-color);
 }
 
-.wc-result-panel .wc-section {
-  margin-left: 14px;
+/* control row popover>contents+modelbutton scope=window.gmnb.own-menu */
+window.gmnb.own-menu popover>contents modelbutton {
+  background-color: var(--gmnb-row-background-color);
+  background-image: var(--gmnb-row-background-image);
+  color: var(--gmnb-row-color);
+  box-shadow: var(--gmnb-row-shadow);
+  opacity: var(--gmnb-row-opacity);
+  filter: var(--gmnb-row-filter);
+  transform: var(--gmnb-row-transform);
+  transition: var(--gmnb-row-transition);
+  border-radius: var(--gmnb-row-radius);
+  padding: var(--gmnb-row-padding);
+  margin: var(--gmnb-row-margin);
+  min-width: var(--gmnb-row-min-width);
+  min-height: var(--gmnb-row-min-height);
+  font-family: var(--gmnb-row-font-family);
+  font-size: var(--gmnb-row-font-size);
+  font-weight: var(--gmnb-row-font-weight);
+  font-style: var(--gmnb-row-font-style);
+  letter-spacing: var(--gmnb-row-letter-spacing);
+  font-feature-settings: var(--gmnb-row-font-features);
+  font-variation-settings: var(--gmnb-row-font-variations);
+}
+window.gmnb.own-menu popover>contents modelbutton:hover {
+  background-color: var(--gmnb-row-hover-background-color);
+  background-image: var(--gmnb-row-hover-background-image);
+  color: var(--gmnb-row-hover-color);
+  box-shadow: var(--gmnb-row-hover-shadow);
+  opacity: var(--gmnb-row-hover-opacity);
+  filter: var(--gmnb-row-hover-filter);
+  transform: var(--gmnb-row-hover-transform);
+  transition: var(--gmnb-row-hover-transition);
+  font-weight: var(--gmnb-row-hover-font-weight);
+}
+window.gmnb.own-menu popover>contents modelbutton:active {
+  background-color: var(--gmnb-row-active-background-color);
+  background-image: var(--gmnb-row-active-background-image);
+  color: var(--gmnb-row-active-color);
+  box-shadow: var(--gmnb-row-active-shadow);
+  opacity: var(--gmnb-row-active-opacity);
+  filter: var(--gmnb-row-active-filter);
+  transform: var(--gmnb-row-active-transform);
+  transition: var(--gmnb-row-active-transition);
+  font-weight: var(--gmnb-row-active-font-weight);
+}
+window.gmnb.own-menu popover>contents modelbutton:checked {
+  background-color: var(--gmnb-row-checked-background-color);
+  background-image: var(--gmnb-row-checked-background-image);
+  color: var(--gmnb-row-checked-color);
+  box-shadow: var(--gmnb-row-checked-shadow);
+  opacity: var(--gmnb-row-checked-opacity);
+  filter: var(--gmnb-row-checked-filter);
+  transform: var(--gmnb-row-checked-transform);
+  transition: var(--gmnb-row-checked-transition);
+  font-weight: var(--gmnb-row-checked-font-weight);
+}
+window.gmnb.own-menu popover>contents modelbutton:checked:hover {
+  background-color: var(--gmnb-row-checked-hover-background-color);
+  background-image: var(--gmnb-row-checked-hover-background-image);
+  color: var(--gmnb-row-checked-hover-color);
+  box-shadow: var(--gmnb-row-checked-hover-shadow);
+  opacity: var(--gmnb-row-checked-hover-opacity);
+  filter: var(--gmnb-row-checked-hover-filter);
+  transform: var(--gmnb-row-checked-hover-transform);
+  transition: var(--gmnb-row-checked-hover-transition);
+  font-weight: var(--gmnb-row-checked-hover-font-weight);
+}
+window.gmnb.own-menu popover>contents modelbutton:checked:active {
+  background-color: var(--gmnb-row-checked-active-background-color);
+  background-image: var(--gmnb-row-checked-active-background-image);
+  color: var(--gmnb-row-checked-active-color);
+  box-shadow: var(--gmnb-row-checked-active-shadow);
+  opacity: var(--gmnb-row-checked-active-opacity);
+  filter: var(--gmnb-row-checked-active-filter);
+  transform: var(--gmnb-row-checked-active-transform);
+  transition: var(--gmnb-row-checked-active-transition);
+  font-weight: var(--gmnb-row-checked-active-font-weight);
+}
+window.gmnb.own-menu popover>contents modelbutton:disabled {
+  background-color: var(--gmnb-row-disabled-background-color);
+  background-image: var(--gmnb-row-disabled-background-image);
+  color: var(--gmnb-row-disabled-color);
+  box-shadow: var(--gmnb-row-disabled-shadow);
+  opacity: var(--gmnb-row-disabled-opacity);
+  filter: var(--gmnb-row-disabled-filter);
+  transform: var(--gmnb-row-disabled-transform);
+  transition: var(--gmnb-row-disabled-transition);
+  font-weight: var(--gmnb-row-disabled-font-weight);
+}
+window.gmnb.own-menu popover>contents modelbutton:checked:disabled {
+  background-color: var(--gmnb-row-checked-disabled-background-color);
+  background-image: var(--gmnb-row-checked-disabled-background-image);
+  color: var(--gmnb-row-checked-disabled-color);
+  box-shadow: var(--gmnb-row-checked-disabled-shadow);
+  opacity: var(--gmnb-row-checked-disabled-opacity);
+  filter: var(--gmnb-row-checked-disabled-filter);
+  transform: var(--gmnb-row-checked-disabled-transform);
+  transition: var(--gmnb-row-checked-disabled-transition);
+  font-weight: var(--gmnb-row-checked-disabled-font-weight);
+}
+window.gmnb.own-menu .wc-inert popover>contents modelbutton:disabled:not(.wc-off) {
+  background-color: var(--gmnb-row-background-color);
+  background-image: var(--gmnb-row-background-image);
+  color: var(--gmnb-row-color);
+  box-shadow: var(--gmnb-row-shadow);
+  opacity: var(--gmnb-row-opacity);
+  filter: var(--gmnb-row-filter);
+  transform: var(--gmnb-row-transform);
+  transition: var(--gmnb-row-transition);
+  font-weight: var(--gmnb-row-font-weight);
+}
+window.gmnb.own-menu .wc-inert popover>contents modelbutton:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-row-checked-background-color);
+  background-image: var(--gmnb-row-checked-background-image);
+  color: var(--gmnb-row-checked-color);
+  box-shadow: var(--gmnb-row-checked-shadow);
+  opacity: var(--gmnb-row-checked-opacity);
+  filter: var(--gmnb-row-checked-filter);
+  transform: var(--gmnb-row-checked-transform);
+  transition: var(--gmnb-row-checked-transition);
+  font-weight: var(--gmnb-row-checked-font-weight);
+}
+/* end control */
+
+/* control row popover>contents+listview>row scope=window.gmnb.own-menu checked=:selected */
+window.gmnb.own-menu popover>contents listview>row {
+  background-color: var(--gmnb-row-background-color);
+  background-image: var(--gmnb-row-background-image);
+  color: var(--gmnb-row-color);
+  box-shadow: var(--gmnb-row-shadow);
+  opacity: var(--gmnb-row-opacity);
+  filter: var(--gmnb-row-filter);
+  transform: var(--gmnb-row-transform);
+  transition: var(--gmnb-row-transition);
+  border-radius: var(--gmnb-row-radius);
+  padding: var(--gmnb-row-padding);
+  margin: var(--gmnb-row-margin);
+  min-width: var(--gmnb-row-min-width);
+  min-height: var(--gmnb-row-min-height);
+  font-family: var(--gmnb-row-font-family);
+  font-size: var(--gmnb-row-font-size);
+  font-weight: var(--gmnb-row-font-weight);
+  font-style: var(--gmnb-row-font-style);
+  letter-spacing: var(--gmnb-row-letter-spacing);
+  font-feature-settings: var(--gmnb-row-font-features);
+  font-variation-settings: var(--gmnb-row-font-variations);
+}
+window.gmnb.own-menu popover>contents listview>row:hover {
+  background-color: var(--gmnb-row-hover-background-color);
+  background-image: var(--gmnb-row-hover-background-image);
+  color: var(--gmnb-row-hover-color);
+  box-shadow: var(--gmnb-row-hover-shadow);
+  opacity: var(--gmnb-row-hover-opacity);
+  filter: var(--gmnb-row-hover-filter);
+  transform: var(--gmnb-row-hover-transform);
+  transition: var(--gmnb-row-hover-transition);
+  font-weight: var(--gmnb-row-hover-font-weight);
+}
+window.gmnb.own-menu popover>contents listview>row:active {
+  background-color: var(--gmnb-row-active-background-color);
+  background-image: var(--gmnb-row-active-background-image);
+  color: var(--gmnb-row-active-color);
+  box-shadow: var(--gmnb-row-active-shadow);
+  opacity: var(--gmnb-row-active-opacity);
+  filter: var(--gmnb-row-active-filter);
+  transform: var(--gmnb-row-active-transform);
+  transition: var(--gmnb-row-active-transition);
+  font-weight: var(--gmnb-row-active-font-weight);
+}
+window.gmnb.own-menu popover>contents listview>row:selected {
+  background-color: var(--gmnb-row-checked-background-color);
+  background-image: var(--gmnb-row-checked-background-image);
+  color: var(--gmnb-row-checked-color);
+  box-shadow: var(--gmnb-row-checked-shadow);
+  opacity: var(--gmnb-row-checked-opacity);
+  filter: var(--gmnb-row-checked-filter);
+  transform: var(--gmnb-row-checked-transform);
+  transition: var(--gmnb-row-checked-transition);
+  font-weight: var(--gmnb-row-checked-font-weight);
+}
+window.gmnb.own-menu popover>contents listview>row:selected:hover {
+  background-color: var(--gmnb-row-checked-hover-background-color);
+  background-image: var(--gmnb-row-checked-hover-background-image);
+  color: var(--gmnb-row-checked-hover-color);
+  box-shadow: var(--gmnb-row-checked-hover-shadow);
+  opacity: var(--gmnb-row-checked-hover-opacity);
+  filter: var(--gmnb-row-checked-hover-filter);
+  transform: var(--gmnb-row-checked-hover-transform);
+  transition: var(--gmnb-row-checked-hover-transition);
+  font-weight: var(--gmnb-row-checked-hover-font-weight);
+}
+window.gmnb.own-menu popover>contents listview>row:selected:active {
+  background-color: var(--gmnb-row-checked-active-background-color);
+  background-image: var(--gmnb-row-checked-active-background-image);
+  color: var(--gmnb-row-checked-active-color);
+  box-shadow: var(--gmnb-row-checked-active-shadow);
+  opacity: var(--gmnb-row-checked-active-opacity);
+  filter: var(--gmnb-row-checked-active-filter);
+  transform: var(--gmnb-row-checked-active-transform);
+  transition: var(--gmnb-row-checked-active-transition);
+  font-weight: var(--gmnb-row-checked-active-font-weight);
+}
+window.gmnb.own-menu popover>contents listview>row:disabled {
+  background-color: var(--gmnb-row-disabled-background-color);
+  background-image: var(--gmnb-row-disabled-background-image);
+  color: var(--gmnb-row-disabled-color);
+  box-shadow: var(--gmnb-row-disabled-shadow);
+  opacity: var(--gmnb-row-disabled-opacity);
+  filter: var(--gmnb-row-disabled-filter);
+  transform: var(--gmnb-row-disabled-transform);
+  transition: var(--gmnb-row-disabled-transition);
+  font-weight: var(--gmnb-row-disabled-font-weight);
+}
+window.gmnb.own-menu popover>contents listview>row:selected:disabled {
+  background-color: var(--gmnb-row-checked-disabled-background-color);
+  background-image: var(--gmnb-row-checked-disabled-background-image);
+  color: var(--gmnb-row-checked-disabled-color);
+  box-shadow: var(--gmnb-row-checked-disabled-shadow);
+  opacity: var(--gmnb-row-checked-disabled-opacity);
+  filter: var(--gmnb-row-checked-disabled-filter);
+  transform: var(--gmnb-row-checked-disabled-transform);
+  transition: var(--gmnb-row-checked-disabled-transition);
+  font-weight: var(--gmnb-row-checked-disabled-font-weight);
+}
+window.gmnb.own-menu .wc-inert popover>contents listview>row:disabled:not(.wc-off) {
+  background-color: var(--gmnb-row-background-color);
+  background-image: var(--gmnb-row-background-image);
+  color: var(--gmnb-row-color);
+  box-shadow: var(--gmnb-row-shadow);
+  opacity: var(--gmnb-row-opacity);
+  filter: var(--gmnb-row-filter);
+  transform: var(--gmnb-row-transform);
+  transition: var(--gmnb-row-transition);
+  font-weight: var(--gmnb-row-font-weight);
+}
+window.gmnb.own-menu .wc-inert popover>contents listview>row:selected:disabled:not(.wc-off) {
+  background-color: var(--gmnb-row-checked-background-color);
+  background-image: var(--gmnb-row-checked-background-image);
+  color: var(--gmnb-row-checked-color);
+  box-shadow: var(--gmnb-row-checked-shadow);
+  opacity: var(--gmnb-row-checked-opacity);
+  filter: var(--gmnb-row-checked-filter);
+  transform: var(--gmnb-row-checked-transform);
+  transition: var(--gmnb-row-checked-transition);
+  font-weight: var(--gmnb-row-checked-font-weight);
+}
+/* end control */
+
+/* Text fields. */
+/* field field entry scope=window.gmnb.own-field */
+window.gmnb.own-field entry {
+  background-color: var(--gmnb-field-background-color);
+  background-image: var(--gmnb-field-background-image);
+  color: var(--gmnb-field-color);
+  box-shadow: var(--gmnb-field-shadow);
+  opacity: var(--gmnb-field-opacity);
+  filter: var(--gmnb-field-filter);
+  transform: var(--gmnb-field-transform);
+  transition: var(--gmnb-field-transition);
+  border-radius: var(--gmnb-field-radius);
+  padding: var(--gmnb-field-padding);
+  min-height: var(--gmnb-field-min-height);
+  font-family: var(--gmnb-field-font-family);
+  font-size: var(--gmnb-field-font-size);
+  font-weight: var(--gmnb-field-font-weight);
+  font-style: var(--gmnb-field-font-style);
+  letter-spacing: var(--gmnb-field-letter-spacing);
+  font-feature-settings: var(--gmnb-field-font-features);
+  font-variation-settings: var(--gmnb-field-font-variations);
+  caret-color: var(--gmnb-field-caret);
+}
+window.gmnb.own-field entry placeholder {
+  color: var(--gmnb-field-placeholder);
+}
+window.gmnb.own-field entry text > selection {
+  background-color: var(--gmnb-field-selection);
+}
+window.gmnb.own-field entry:focus-within {
+  background-color: var(--gmnb-field-focus-background-color);
+  background-image: var(--gmnb-field-focus-background-image);
+  color: var(--gmnb-field-focus-color);
+  box-shadow: var(--gmnb-field-focus-shadow);
+  opacity: var(--gmnb-field-focus-opacity);
+  filter: var(--gmnb-field-focus-filter);
+  transform: var(--gmnb-field-focus-transform);
+  transition: var(--gmnb-field-focus-transition);
+  font-weight: var(--gmnb-field-focus-font-weight);
+}
+window.gmnb.own-field entry.error {
+  background-color: var(--gmnb-field-error-background-color);
+  background-image: var(--gmnb-field-error-background-image);
+  color: var(--gmnb-field-error-color);
+  box-shadow: var(--gmnb-field-error-shadow);
+  opacity: var(--gmnb-field-error-opacity);
+  filter: var(--gmnb-field-error-filter);
+  transform: var(--gmnb-field-error-transform);
+  transition: var(--gmnb-field-error-transition);
+  font-weight: var(--gmnb-field-error-font-weight);
+}
+window.gmnb.own-field entry.error:focus-within {
+  background-color: var(--gmnb-field-error-focus-background-color);
+  background-image: var(--gmnb-field-error-focus-background-image);
+  color: var(--gmnb-field-error-focus-color);
+  box-shadow: var(--gmnb-field-error-focus-shadow);
+  opacity: var(--gmnb-field-error-focus-opacity);
+  filter: var(--gmnb-field-error-focus-filter);
+  transform: var(--gmnb-field-error-focus-transform);
+  transition: var(--gmnb-field-error-focus-transition);
+  font-weight: var(--gmnb-field-error-focus-font-weight);
+}
+/* end field */
+
+window.gmnb.own-field entry,
+window.gmnb.own-field entry:focus-within {
+  border: none;
+  outline-color: transparent;
 }
 
-.wc-subresult {
-  font-family: "Outfit";
-  font-size: 17px;
-  color: alpha(@wc_fg, 0.65);
-  margin-left: 14px;
+/* Sliders: a thin track, the part before the knob in the accent, a round
+   knob that grows a halo under the pointer. */
+window.gmnb.own-slider scale > trough {
+  min-height: var(--gmnb-slider-track-height);
+  border-radius: var(--gmnb-slider-track-radius);
+  background-color: var(--gmnb-slider-track-color);
+  background-image: none;
+  box-shadow: none;
+  outline: none;
 }
 
-spinbutton.wc-spin {
-  border-radius: 12px;
-  font-family: "Outfit";
-  font-size: 16px;
+window.gmnb.own-slider scale > trough > highlight {
+  min-height: var(--gmnb-slider-track-height);
+  border-radius: var(--gmnb-slider-track-radius);
+  background-color: var(--gmnb-slider-fill);
+  background-image: none;
+  box-shadow: none;
 }
+
+window.gmnb.own-slider scale > trough > slider {
+  min-width: var(--gmnb-slider-knob-size);
+  min-height: var(--gmnb-slider-knob-size);
+  margin: calc((var(--gmnb-slider-track-height) - var(--gmnb-slider-knob-size)) / 2);
+  border-radius: var(--gmnb-slider-knob-size);
+  background-color: var(--gmnb-slider-knob-color);
+  background-image: none;
+  box-shadow: none;
+  outline: none;
+}
+
+window.gmnb.own-slider scale > trough > slider:hover,
+window.gmnb.own-slider scale > trough > slider:active {
+  box-shadow: 0 0 0 calc((var(--gmnb-slider-knob-halo-size) - var(--gmnb-slider-knob-size)) / 2) var(--gmnb-slider-knob-halo);
+}
+
+/* Switches: DGMNB's pill and round knob. */
+window.gmnb.own-switch switch {
+  min-width: var(--gmnb-switch-width);
+  min-height: var(--gmnb-switch-height);
+  padding: 0;
+  border: none;
+  border-radius: var(--gmnb-switch-height);
+  background-color: var(--gmnb-switch-off);
+  background-image: none;
+  box-shadow: none;
+}
+
+window.gmnb.own-switch switch:checked {
+  background-color: var(--gmnb-switch-on);
+}
+
+window.gmnb.own-switch switch > image {
+  color: transparent;
+}
+
+window.gmnb.own-switch switch > slider {
+  min-width: var(--gmnb-switch-knob-size);
+  min-height: var(--gmnb-switch-knob-size);
+  margin: calc((var(--gmnb-switch-height) - var(--gmnb-switch-knob-size)) / 2);
+  border: none;
+  border-radius: var(--gmnb-switch-knob-size);
+  background-color: var(--gmnb-switch-knob);
+  background-image: none;
+  box-shadow: none;
+}
+
+window.gmnb.own-switch switch:checked > slider {
+  background-color: var(--gmnb-switch-knob-on);
+}
+
+/* Toasts: a pill in the text colour. */
+window.gmnb.own-toast toastoverlay > toast {
+  min-height: var(--gmnb-toast-min-height);
+  padding: var(--gmnb-toast-padding);
+  border-radius: var(--gmnb-toast-radius);
+  background-color: var(--gmnb-toast-background-color);
+  background-image: var(--gmnb-toast-background-image);
+  color: var(--gmnb-toast-color);
+  font-family: var(--gmnb-toast-font-family);
+  font-size: var(--gmnb-toast-font-size);
+  font-weight: var(--gmnb-toast-font-weight);
+  font-style: var(--gmnb-toast-font-style);
+  letter-spacing: var(--gmnb-toast-letter-spacing);
+  font-feature-settings: var(--gmnb-toast-font-features);
+  font-variation-settings: var(--gmnb-toast-font-variations);
+  box-shadow: none;
+  text-shadow: none;
+}
+
+/* Tooltips. */
+window.gmnb.own-tooltip tooltip,
+window.gmnb.own-tooltip tooltip > contents {
+  border-radius: var(--gmnb-tooltip-radius);
+  background-color: var(--gmnb-tooltip-background-color);
+  background-image: var(--gmnb-tooltip-background-image);
+  color: var(--gmnb-tooltip-color);
+  box-shadow: none;
+  text-shadow: none;
+}
+
+window.gmnb.own-tooltip tooltip {
+  padding: var(--gmnb-tooltip-padding);
+  font-family: var(--gmnb-tooltip-font-family);
+  font-size: var(--gmnb-tooltip-font-size);
+  font-weight: var(--gmnb-tooltip-font-weight);
+  font-style: var(--gmnb-tooltip-font-style);
+  letter-spacing: var(--gmnb-tooltip-letter-spacing);
+  font-feature-settings: var(--gmnb-tooltip-font-features);
+  font-variation-settings: var(--gmnb-tooltip-font-variations);
+}
+
+/* Cards (Settings and About). */
+/* surface card .card scope=window.gmnb.own-card */
+window.gmnb.own-card .card {
+  background-color: var(--gmnb-card-background-color);
+  background-image: var(--gmnb-card-background-image);
+  box-shadow: var(--gmnb-card-shadow);
+  border-radius: var(--gmnb-card-radius);
+  padding: var(--gmnb-card-padding);
+  margin: var(--gmnb-card-margin);
+}
+/* end surface */
+
+/* surface card list.boxed-list scope=window.gmnb.own-card */
+window.gmnb.own-card list.boxed-list {
+  background-color: var(--gmnb-card-background-color);
+  background-image: var(--gmnb-card-background-image);
+  box-shadow: var(--gmnb-card-shadow);
+  border-radius: var(--gmnb-card-radius);
+  padding: var(--gmnb-card-padding);
+  margin: var(--gmnb-card-margin);
+}
+/* end surface */
+
+/* The toolkit's plain buttons: dialog buttons, drop-downs. */
+/* control button dialog+button:not(.flat):not(.circular):not(.image-button) scope=window.gmnb.own-button active=.keyboard-activating */
+window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button) {
+  background-color: var(--gmnb-button-background-color);
+  background-image: var(--gmnb-button-background-image);
+  color: var(--gmnb-button-color);
+  box-shadow: var(--gmnb-button-shadow);
+  opacity: var(--gmnb-button-opacity);
+  filter: var(--gmnb-button-filter);
+  transform: var(--gmnb-button-transform);
+  transition: var(--gmnb-button-transition);
+  border-radius: var(--gmnb-button-radius);
+  padding: var(--gmnb-button-padding);
+  margin: var(--gmnb-button-margin);
+  min-width: var(--gmnb-button-min-width);
+  min-height: var(--gmnb-button-min-height);
+  font-family: var(--gmnb-button-font-family);
+  font-size: var(--gmnb-button-font-size);
+  font-weight: var(--gmnb-button-font-weight);
+  font-style: var(--gmnb-button-font-style);
+  letter-spacing: var(--gmnb-button-letter-spacing);
+  font-feature-settings: var(--gmnb-button-font-features);
+  font-variation-settings: var(--gmnb-button-font-variations);
+}
+window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button):hover {
+  background-color: var(--gmnb-button-hover-background-color);
+  background-image: var(--gmnb-button-hover-background-image);
+  color: var(--gmnb-button-hover-color);
+  box-shadow: var(--gmnb-button-hover-shadow);
+  opacity: var(--gmnb-button-hover-opacity);
+  filter: var(--gmnb-button-hover-filter);
+  transform: var(--gmnb-button-hover-transform);
+  transition: var(--gmnb-button-hover-transition);
+  font-weight: var(--gmnb-button-hover-font-weight);
+}
+window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button):active,
+window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button).keyboard-activating {
+  background-color: var(--gmnb-button-active-background-color);
+  background-image: var(--gmnb-button-active-background-image);
+  color: var(--gmnb-button-active-color);
+  box-shadow: var(--gmnb-button-active-shadow);
+  opacity: var(--gmnb-button-active-opacity);
+  filter: var(--gmnb-button-active-filter);
+  transform: var(--gmnb-button-active-transform);
+  transition: var(--gmnb-button-active-transition);
+  font-weight: var(--gmnb-button-active-font-weight);
+}
+window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button):checked {
+  background-color: var(--gmnb-button-checked-background-color);
+  background-image: var(--gmnb-button-checked-background-image);
+  color: var(--gmnb-button-checked-color);
+  box-shadow: var(--gmnb-button-checked-shadow);
+  opacity: var(--gmnb-button-checked-opacity);
+  filter: var(--gmnb-button-checked-filter);
+  transform: var(--gmnb-button-checked-transform);
+  transition: var(--gmnb-button-checked-transition);
+  font-weight: var(--gmnb-button-checked-font-weight);
+}
+window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button):checked:hover {
+  background-color: var(--gmnb-button-checked-hover-background-color);
+  background-image: var(--gmnb-button-checked-hover-background-image);
+  color: var(--gmnb-button-checked-hover-color);
+  box-shadow: var(--gmnb-button-checked-hover-shadow);
+  opacity: var(--gmnb-button-checked-hover-opacity);
+  filter: var(--gmnb-button-checked-hover-filter);
+  transform: var(--gmnb-button-checked-hover-transform);
+  transition: var(--gmnb-button-checked-hover-transition);
+  font-weight: var(--gmnb-button-checked-hover-font-weight);
+}
+window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button):checked:active,
+window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button):checked.keyboard-activating {
+  background-color: var(--gmnb-button-checked-active-background-color);
+  background-image: var(--gmnb-button-checked-active-background-image);
+  color: var(--gmnb-button-checked-active-color);
+  box-shadow: var(--gmnb-button-checked-active-shadow);
+  opacity: var(--gmnb-button-checked-active-opacity);
+  filter: var(--gmnb-button-checked-active-filter);
+  transform: var(--gmnb-button-checked-active-transform);
+  transition: var(--gmnb-button-checked-active-transition);
+  font-weight: var(--gmnb-button-checked-active-font-weight);
+}
+window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button):disabled {
+  background-color: var(--gmnb-button-disabled-background-color);
+  background-image: var(--gmnb-button-disabled-background-image);
+  color: var(--gmnb-button-disabled-color);
+  box-shadow: var(--gmnb-button-disabled-shadow);
+  opacity: var(--gmnb-button-disabled-opacity);
+  filter: var(--gmnb-button-disabled-filter);
+  transform: var(--gmnb-button-disabled-transform);
+  transition: var(--gmnb-button-disabled-transition);
+  font-weight: var(--gmnb-button-disabled-font-weight);
+}
+window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button):checked:disabled {
+  background-color: var(--gmnb-button-checked-disabled-background-color);
+  background-image: var(--gmnb-button-checked-disabled-background-image);
+  color: var(--gmnb-button-checked-disabled-color);
+  box-shadow: var(--gmnb-button-checked-disabled-shadow);
+  opacity: var(--gmnb-button-checked-disabled-opacity);
+  filter: var(--gmnb-button-checked-disabled-filter);
+  transform: var(--gmnb-button-checked-disabled-transform);
+  transition: var(--gmnb-button-checked-disabled-transition);
+  font-weight: var(--gmnb-button-checked-disabled-font-weight);
+}
+window.gmnb.own-button .wc-inert dialog button:not(.flat):not(.circular):not(.image-button):disabled:not(.wc-off) {
+  background-color: var(--gmnb-button-background-color);
+  background-image: var(--gmnb-button-background-image);
+  color: var(--gmnb-button-color);
+  box-shadow: var(--gmnb-button-shadow);
+  opacity: var(--gmnb-button-opacity);
+  filter: var(--gmnb-button-filter);
+  transform: var(--gmnb-button-transform);
+  transition: var(--gmnb-button-transition);
+  font-weight: var(--gmnb-button-font-weight);
+}
+window.gmnb.own-button .wc-inert dialog button:not(.flat):not(.circular):not(.image-button):checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-button-checked-background-color);
+  background-image: var(--gmnb-button-checked-background-image);
+  color: var(--gmnb-button-checked-color);
+  box-shadow: var(--gmnb-button-checked-shadow);
+  opacity: var(--gmnb-button-checked-opacity);
+  filter: var(--gmnb-button-checked-filter);
+  transform: var(--gmnb-button-checked-transform);
+  transition: var(--gmnb-button-checked-transition);
+  font-weight: var(--gmnb-button-checked-font-weight);
+}
+/* end control */
 
 /* nav settings button */
 
