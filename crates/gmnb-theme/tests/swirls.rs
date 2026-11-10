@@ -1075,7 +1075,11 @@ fn every_page_fits_the_least_window() {
                 ("date.add_result", sized("date.add_result")),
                 ("converter.value", sized("converter.value")),
             ] {
-                assert_eq!(font.family.first().map(String::as_str), Some(INTER), "{what}");
+                assert_eq!(
+                    font.family.first().map(String::as_str),
+                    Some(INTER),
+                    "{what}"
+                );
                 let opsz: Vec<f32> = font
                     .variations
                     .iter()
