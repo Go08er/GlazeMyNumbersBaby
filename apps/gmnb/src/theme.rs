@@ -189,7 +189,7 @@ pub struct Hub {
     /// `style` has failed and the user has been told.
     style_failed: Cell<bool>,
     options: RefCell<BTreeMap<String, BTreeMap<String, OptionValue>>>,
-    run_options: Vec<(String, String)>,
+    run_options: RefCell<Vec<(String, String)>>,
     opacity: Cell<f32>,
     system_accent: Cell<bool>,
     accent_override: Option<Option<[f32; 3]>>,
@@ -241,7 +241,7 @@ impl Hub {
             notes: RefCell::default(),
             style_failed: Cell::new(false),
             options: RefCell::new(config.saved_options),
-            run_options: config.run_options,
+            run_options: RefCell::new(config.run_options),
             opacity: Cell::new(config.opacity),
             system_accent: Cell::new(config.system_accent),
             accent_override: config.accent,
@@ -541,7 +541,7 @@ impl Hub {
             .get(&theme.source.id)
             .cloned()
             .unwrap_or_default();
-        for (id, text) in &self.run_options {
+        for (id, text) in self.run_options.borrow().iter() {
             if let Some(def) = theme.def.options.iter().find(|o| o.id == *id) {
                 let value = match text.as_str() {
                     "true" => OptionValue::Bool(true),
@@ -568,6 +568,9 @@ impl Hub {
             .entry(theme)
             .or_default()
             .insert(id.to_string(), value);
+        // What the environment asked of this option stands only until
+        // the user changes it.
+        self.run_options.borrow_mut().retain(|(o, _)| o != id);
         self.apply(drag);
     }
 

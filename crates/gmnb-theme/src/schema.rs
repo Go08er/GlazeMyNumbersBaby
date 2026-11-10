@@ -437,6 +437,8 @@ pub static ROWS: &[Row] = &[
         Value::Control(Box::new(Control {
             background: Fill::color(c.surface2),
             min_height: metrics::controls::SEGMENTED_H,
+            // DGMNB keeps a button's label this far from its sides.
+            padding: Spacing::vh(0.0, metrics::controls::BUTTON_PAD_X),
             checked: State::filled(c.accent, c.on_accent),
             ..s.control(&s.t.text.small)
         }))
@@ -601,6 +603,7 @@ pub static ROWS: &[Row] = &[
         let c = &s.t.colors;
         Value::Control(Box::new(Control {
             min_height: metrics::panel::TAB_H,
+            padding: Spacing::vh(0.0, metrics::controls::BUTTON_PAD_X),
             checked: State::filled(c.accent, c.on_accent),
             ..s.control(&s.t.text.strong)
         }))

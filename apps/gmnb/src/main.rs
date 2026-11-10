@@ -192,7 +192,16 @@ fn activate(app: &adw::Application) {
     }
     if std::env::var("GMNB_PREFS").as_deref() == Ok("1") {
         let w = win.clone();
-        glib::timeout_add_local_once(Duration::from_millis(300), move || prefs::show(&w));
+        glib::timeout_add_local_once(Duration::from_millis(300), move || {
+            let start = std::time::Instant::now();
+            prefs::show(&w);
+            if std::env::var_os("GMNB_THEME_STATS").is_some() {
+                eprintln!(
+                    "theme: Settings built in {:.1} ms",
+                    start.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+        });
     }
     if std::env::var("GMNB_COMPACT").as_deref() == Ok("1") {
         let w = win.clone();

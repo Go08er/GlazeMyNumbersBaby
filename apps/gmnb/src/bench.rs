@@ -10,7 +10,10 @@
 //!   next painted frame;
 //! - `opacity`: the Background opacity from 1 down to 0.1 and back in
 //!   steps of 0.05, as the slider drags it, timing each step the same way,
-//!   then the fold back into the main provider.
+//!   then the fold back into the main provider;
+//! - `down`: the opacity dragged from 1 to 0.1 and left there, in the live
+//!   provider (to compare the picture with one started at 0.1);
+//! - `stay`: don't quit at the end.
 //!
 //! It prints its figures and the hub's counters to stderr, then quits.
 
@@ -35,6 +38,7 @@ struct Bench {
     steps: RefCell<VecDeque<Step>>,
     /// (the change itself, until painted), in milliseconds.
     opacity: RefCell<Vec<(f64, f64)>>,
+    stay: bool,
     handler: RefCell<Option<glib::SignalHandlerId>>,
     started: Cell<Option<(Instant, f64)>>,
 }
@@ -49,12 +53,15 @@ pub fn run(win: &Rc<Window>, spec: &str) {
             let up = (0..18).map(|i| 0.15 + i as f32 * 0.05);
             steps.extend(down.chain(up).map(Step::Opacity));
             steps.push_back(Step::Settle);
+        } else if part.trim() == "down" {
+            steps.extend((1..=18).map(|i| Step::Opacity(1.0 - i as f32 * 0.05)));
         }
     }
     let bench = Rc::new(Bench {
         win: win.clone(),
         steps: RefCell::new(steps),
         opacity: RefCell::default(),
+        stay: spec.split(';').any(|part| part.trim() == "stay"),
         handler: RefCell::new(None),
         started: Cell::new(None),
     });
@@ -134,7 +141,9 @@ impl Bench {
             );
         }
         eprintln!("bench: {:?}", self.win.ctx().hub.stats());
-        if let Some(app) = self.win.widget().application() {
+        if !self.stay
+            && let Some(app) = self.win.widget().application()
+        {
             app.quit();
         }
     }

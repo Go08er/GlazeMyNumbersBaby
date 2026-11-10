@@ -750,7 +750,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `flyout_button` | Control | as `text_button`, in `text.small`, min_height 30 (its row is 36 high, the button 3 px in from top and bottom), padding `{ 0, 6 }` | `button.wc-mem.wc-flyout-button`: Trigonometry ▾ and Function ▾ |
 | `button` | Control | background `surface2`; radius `shape.radius`; `text.body`; `fg`; min_height 34; padding `{ 0, 6 }`; `checked = { background accent, color on_accent }` | `window.gmnb.own-button button:not([class*="wc-"])` and dialog buttons |
 | `segmented.gap` | number | 4 | `toggle-group { border-spacing }` (half of it: see [what the toolkit was found to support](#what-the-toolkit-was-found-to-support)) |
-| `segmented.item` | Control | min_height 36; radius `shape.radius`; `text.small`; `fg`; background `surface2`; `checked = { background accent, color on_accent }` | `window.gmnb.own-segmented toggle-group > toggle` |
+| `segmented.item` | Control | min_height 36; padding `{ 0, 6 }`; radius `shape.radius`; `text.small`; `fg`; background `surface2`; `checked = { background accent, color on_accent }` | `window.gmnb.own-segmented toggle-group > toggle` |
 | `field` | Field | background `surface`; `fg`; border `{ 1, border }`; radius `shape.row_radius`; `text.body`; padding `{ 0, 10 }`; min_height 38; placeholder `fg_faint`; selection `accent` at 0.30; caret `fg`; `focus = { border { 2, accent_text } }`; `error = { border { 2, danger } }` | `window.gmnb.own-field entry, spinbutton` |
 | `row` | Control | radius `shape.row_radius`; min_height 36; `checked = { background accent at 0.16 }` | Rows of menus, dropdown lists, the bit-shift list |
 | `section` | Text | `text.caption`, `fg_dim` | `.wc-section` |
@@ -823,7 +823,7 @@ label's size (fixed).
 | `panel.sheet` | Surface | background `surface`; border `{ 1, border }`; radius 14; the popover's three-ring shadow | `.wc-sheet` and the bottom sheet's own surface (narrow window) |
 | `panel.tabs.stretch` | boolean | `true` | Rust: the switch fills the panel's width in equal halves, or hugs its labels at the start |
 | `panel.tabs.gap` | number | 0 | the switch's spacing |
-| `panel.tabs.item` | Control | min_height 34; radius `shape.radius`; `text.strong`; `fg`; no background; `checked = { background accent, color on_accent }` | `.wc-toggle-group.wc-panel-tabs > toggle` *(new class)* |
+| `panel.tabs.item` | Control | min_height 34; padding `{ 0, 6 }`; radius `shape.radius`; `text.strong`; `fg`; no background; `checked = { background accent, color on_accent }` | `.wc-toggle-group.wc-panel-tabs > toggle` *(new class)* |
 | `panel.title` | Text | `text.strong`, `fg` | `.wc-panel-title` (Programmer has memory only) |
 | `panel.row` | Control | radius `shape.row_radius`; min_height 64 (a memory row, with its three buttons under the value: 70); padding `{ 6, 10 }` | `.wc-panel-row` |
 | `panel.expression` | Text | `text.small`, `fg_dim` | `.wc-hist-expr` |

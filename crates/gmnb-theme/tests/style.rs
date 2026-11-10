@@ -135,6 +135,11 @@ fn the_base_is_dgmnbs() {
         assert_eq!(s.number("panel.tabs.gap"), 0.0);
         let seg = s.control("segmented.item").unwrap();
         assert_eq!(seg.min_height, metrics::controls::SEGMENTED_H);
+        assert_eq!(
+            seg.padding,
+            Spacing::vh(0.0, metrics::controls::BUTTON_PAD_X)
+        );
+        assert_eq!(tab.padding, seg.padding);
         assert_eq!(seg.background, Fill::color(p.surface2));
         assert_eq!(seg.font.size, metrics::text::SMALL.size);
         assert_eq!(s.number("segmented.gap"), metrics::controls::SEGMENTED_GAP);
