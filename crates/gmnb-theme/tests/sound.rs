@@ -855,6 +855,100 @@ fn what_sound_returns_is_checked() {
     }
 }
 
+// ---- Events ------------------------------------------------------------------------
+
+#[test]
+fn an_event_gets_its_name() {
+    use gmnb_theme::events::{Action, Event, EventKind, KeyKind, Page, Source as From, Via};
+    use gmnb_theme::sound::{across, answers, event_name, trigger};
+    let rect = [100.0, 50.0, 40.0, 20.0];
+    let at = |kind, page| Event::at(kind, page, rect);
+    let key = |kind| Event {
+        source: Some(From::Key),
+        via: Some(Via::Pointer),
+        key: Some((Some(7), kind)),
+        ..at(EventKind::Press, Page::Calculator)
+    };
+    for (kind, name) in [
+        (KeyKind::Number, EventName::Digit),
+        (KeyKind::Operator, EventName::Operator),
+        (KeyKind::Func, EventName::Func),
+        (KeyKind::Equals, EventName::Equals),
+        (KeyKind::Toggle, EventName::Toggle),
+        (KeyKind::Other, EventName::Func),
+    ] {
+        assert_eq!(event_name(&key(kind)), Some(name));
+    }
+    // What a control does comes before what it is: C is a function key.
+    let with = |action, kind| Event {
+        action: Some(action),
+        ..key(kind)
+    };
+    assert_eq!(
+        event_name(&with(Action::Clear, KeyKind::Func)),
+        Some(EventName::Clear)
+    );
+    assert_eq!(
+        event_name(&with(Action::Backspace, KeyKind::Other)),
+        Some(EventName::Backspace)
+    );
+    let button = Event {
+        source: Some(From::Button),
+        ..at(EventKind::Press, Page::Converter)
+    };
+    assert_eq!(event_name(&button), Some(EventName::Button));
+    let memory = Event {
+        action: Some(Action::Memory),
+        ..button.clone()
+    };
+    assert_eq!(event_name(&memory), Some(EventName::Memory));
+    // Results and errors are the Calculator page's; a mode is a mode.
+    assert_eq!(
+        event_name(&at(EventKind::Result, Page::Calculator)),
+        Some(EventName::Result)
+    );
+    assert_eq!(event_name(&at(EventKind::Result, Page::Converter)), None);
+    assert_eq!(
+        event_name(&at(EventKind::Error, Page::Calculator)),
+        Some(EventName::Error)
+    );
+    assert_eq!(event_name(&at(EventKind::Error, Page::Date)), None);
+    assert_eq!(
+        event_name(&at(EventKind::Mode, Page::Graphing)),
+        Some(EventName::Mode)
+    );
+    assert_eq!(event_name(&at(EventKind::Option, Page::Settings)), None);
+    assert_eq!(event_name(&at(EventKind::Show, Page::Calculator)), None);
+
+    // Sound answers these five kinds, however the control was used,
+    // except through the accessibility interface.
+    assert!(answers(&key(KeyKind::Number)));
+    assert!(answers(&at(EventKind::Option, Page::Settings)));
+    assert!(answers(&at(EventKind::Result, Page::Converter)));
+    assert!(!answers(&at(EventKind::Show, Page::Calculator)));
+    let keyboard = Event {
+        via: Some(Via::Keyboard),
+        ..key(KeyKind::Number)
+    };
+    assert!(answers(&keyboard));
+    let assistive = Event {
+        via: Some(Via::Assistive),
+        ..key(KeyKind::Number)
+    };
+    assert!(!answers(&assistive));
+
+    // Where it happened: the middle of its control, across a window.
+    let e = key(KeyKind::Number);
+    assert_eq!(e.x, 120.0);
+    assert_eq!(across(&e, 240.0), 0.0);
+    assert_eq!(across(&e, 480.0), -0.5);
+    assert_eq!(across(&e, 60.0), 1.0);
+    assert_eq!(across(&e, 0.0), 0.0);
+    let t = trigger(&e, 480.0);
+    assert_eq!((t.key, t.across), (Some(7), Some(0.25)));
+    assert_eq!(trigger(&button, 240.0).key, None);
+}
+
 // ---- Nothing a recipe holds can do harm --------------------------------------------
 
 /// A small generator for the random recipes.

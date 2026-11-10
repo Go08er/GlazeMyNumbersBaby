@@ -18,17 +18,81 @@ use std::time::Duration;
 
 use gmnb_sound::{
     Curve, Effect, Entry, Env, EventName, FileData, Filter, FilterKind, Fm, Glide, Layer, Lfo, Pan,
-    Pick, Play, PlayParams, Recipe, Slot, SoundId, SoundSource, SoundTable, ThemeSounds, Varied,
-    Wave, limits, note_name,
+    Pick, Play, PlayParams, Recipe, Slot, SoundId, SoundSource, SoundTable, ThemeSounds, Trigger,
+    Varied, Wave, limits, note_name,
 };
 use mlua::{Lua, Table, Value};
 
 use crate::ThemeValue;
 use crate::check::{Note, Notes};
+use crate::events::{Action, Event, EventKind, KeyKind, Page, Via};
 use crate::theme::{Theme, safe_relative};
 
 /// The time one `sound(event, ctx)` call has (`Budget::Custom`).
 pub const HOOK_TIME: Duration = Duration::from_millis(2);
+
+// ---- Events, as sound takes them ------------------------------------------------
+
+/// Whether sound answers an event at all ("From event to sound", step 1,
+/// the part that is the event's): a press, a result, an error, a change
+/// of mode or of an option, and not a control operated through the
+/// accessibility interface (speech is that person's feedback).
+pub fn answers(event: &Event) -> bool {
+    event.via != Some(Via::Assistive)
+        && matches!(
+            event.kind,
+            EventKind::Press
+                | EventKind::Result
+                | EventKind::Error
+                | EventKind::Mode
+                | EventKind::Option
+        )
+}
+
+/// The name an event goes by in the `sounds` table (step 3). `None`: the
+/// table plays nothing for it (an `option`; a result or an error on
+/// another page than the Calculator), though the theme's `sound` function
+/// is still asked.
+pub fn event_name(event: &Event) -> Option<EventName> {
+    let on_calculator = event.page == Page::Calculator;
+    match event.kind {
+        EventKind::Mode => Some(EventName::Mode),
+        EventKind::Result if on_calculator => Some(EventName::Result),
+        EventKind::Error if on_calculator => Some(EventName::Error),
+        EventKind::Press => Some(match (event.action, event.key) {
+            (Some(Action::Clear), _) => EventName::Clear,
+            (Some(Action::Backspace), _) => EventName::Backspace,
+            (Some(Action::Memory), _) => EventName::Memory,
+            (None, Some((_, KeyKind::Number))) => EventName::Digit,
+            (None, Some((_, KeyKind::Operator))) => EventName::Operator,
+            (None, Some((_, KeyKind::Equals))) => EventName::Equals,
+            (None, Some((_, KeyKind::Toggle))) => EventName::Toggle,
+            (None, Some((_, KeyKind::Func | KeyKind::Other))) => EventName::Func,
+            (None, None) => EventName::Button,
+        }),
+        _ => None,
+    }
+}
+
+/// Where an event happened across a window `width` wide: -1 at the left
+/// edge to 1 at the right. (The `pan` a `sound` function's event has; the
+/// event is in window coordinates.)
+pub fn across(event: &Event, width: f32) -> f32 {
+    if width > 0.0 && event.x.is_finite() {
+        (2.0 * event.x / width - 1.0).clamp(-1.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+/// What chooses an event's sound from a table entry: its key, and where
+/// it happened across the window.
+pub fn trigger(event: &Event, width: f32) -> Trigger {
+    Trigger {
+        key: event.key.and_then(|(id, _)| id).map(u64::from),
+        across: Some((across(event, width) + 1.0) / 2.0),
+    }
+}
 
 // ---- What a theme has declared ------------------------------------------------
 
