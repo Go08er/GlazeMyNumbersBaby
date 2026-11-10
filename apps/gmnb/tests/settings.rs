@@ -272,3 +272,25 @@ fn settings_has_a_sound_switch_and_a_volume_slider() {
         }
     }
 }
+
+/// Choosing another theme while Settings shows preview tiles: the tiles
+/// of the theme that was are not asked of the one that is (its engine
+/// refuses another's hooks), and that refusal is not a note of the new
+/// theme's ("preview: a function from another theme engine").
+#[test]
+fn choosing_a_theme_leaves_no_stray_note_from_the_old_tiles() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    let env = [
+        ("GMNB_THEME", "aurora"),
+        ("GMNB_PREFS", "1"),
+        ("GMNB_STEPS_AFTER_MS", "2500"),
+        ("GMNB_STEPS", "wait:500;theme:glazed;wait:500;quit"),
+    ];
+    let err = run(&display, "return { api = 1, name = \"Dev\" }", &env, 15_000);
+    assert!(err.contains("sound:"), "the steps did not run: {err}");
+    let notes: Vec<&str> = err.lines().filter(|l| l.starts_with("note: ")).collect();
+    assert!(notes.is_empty(), "stray notes after the switch: {notes:?}");
+}

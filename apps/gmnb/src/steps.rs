@@ -15,7 +15,8 @@
 //! - `theme:<id>`: that theme chosen, as Settings' list chooses it (`base`:
 //!   the base look), without saving the choice;
 //! - `quit`: what sound has done, a line on stderr (as `GMNB_THEME_STATS`
-//!   writes it), and the window closed.
+//!   writes it), then a line `note: ...` for each of the theme's notes
+//!   (what Settings lists under the themes), and the window closed.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -111,6 +112,9 @@ fn next(win: Rc<Window>, steps: std::cell::RefCell<VecDeque<Step>>, gap: u64) {
         Step::Theme(id) => win.ctx().hub.set_theme(&id),
         Step::Quit => {
             eprintln!("sound: {}", win.ctx().hub.sound_report());
+            for note in win.ctx().hub.notes() {
+                eprintln!("note: {note}");
+            }
             win.widget().close();
             return;
         }
