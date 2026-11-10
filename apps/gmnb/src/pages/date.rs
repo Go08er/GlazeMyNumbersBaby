@@ -569,6 +569,10 @@ impl DatePage {
                 let Some(button) = button.upgrade() else {
                     return;
                 };
+                // The press first, then what it came to: the result has
+                // its cause and its way.
+                let picked = crate::layers::Source::Date;
+                ctx.hub.layers().pressed(&button, picked, None);
                 {
                     let mut st = state.borrow_mut();
                     match which {
@@ -579,8 +583,6 @@ impl DatePage {
                 }
                 refresh(Change::Result);
                 button.popdown();
-                let picked = crate::layers::Source::Date;
-                ctx.hub.layers().pressed(&button, picked, None);
             });
         }
 

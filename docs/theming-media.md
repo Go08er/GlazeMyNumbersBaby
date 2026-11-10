@@ -1448,7 +1448,7 @@ well under any music playing.
 | `GMNB_SCREENSHOT` (existing) | Also: no sound (Settings still says what it would be); and the shot waits for no animation frame (animations show frame 1). |
 | `GMNB_SOUND_TRACE=1` | A line on stderr for each event sound hears: the event, its name, and what it played or why nothing (`sound: press (keyboard) key 137: digit: #1 volume 1.00 rate 0.969 pan -0.44 delay 0.00 Queued [0.012 ms]`). |
 | `GMNB_THEME_STATS` (existing) | Also a line for sound: the engine's state, whether its thread exists, the connections to a sound server attempted, plays queued, started and skipped. |
-| `GMNB_STEPS` | Dev/test hook: `keys:<script>` (typed, as `GMNB_KEYS`), `click:<id>` (a key clicked by the pointer at its middle), `activate:<id>` (activated as assistive technology does), `wait:<ms>`, separated by `;`, one every 250 ms from 1 s after the window is on screen. The app's sound test drives the window with it. |
+| `GMNB_STEPS` | Dev/test hook: `keys:<script>` (typed, as `GMNB_KEYS`), `click:<id>` (a key clicked by the pointer at its middle), `activate:<id>` (activated as assistive technology does), `wait:<ms>`, `quit` (the sound line of `GMNB_THEME_STATS` written, and the window closed), separated by `;`, one every 250 ms from 1 s after the window is on screen. The app's sound test drives the window with it. |
 
 ### Where the new events come from
 

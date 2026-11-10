@@ -754,12 +754,16 @@ impl Keypad {
                 (x, y)
             }
             _ => {
-                imp.via
-                    .set(if imp.last_activation.take().is_some_and(recent) {
-                        Via::Keyboard
-                    } else {
-                        Via::Assistive
-                    });
+                // Space or Enter on the key; or, with Shift or Ctrl held,
+                // which the window carries out itself, noted by the
+                // window.
+                let keyboard = imp.last_activation.take().is_some_and(recent)
+                    || Hub::current().is_some_and(|h| h.layers().keyboard_activated_lately());
+                imp.via.set(if keyboard {
+                    Via::Keyboard
+                } else {
+                    Via::Assistive
+                });
                 (
                     rect.x() + rect.width() / 2.0,
                     rect.y() + rect.height() / 2.0,

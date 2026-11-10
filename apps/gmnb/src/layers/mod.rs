@@ -392,6 +392,13 @@ impl Layers {
         self.key_activated.set(now());
     }
 
+    /// Whether Space or Enter activated a control within the last second
+    /// (one the window activated itself, with something held, is noted
+    /// only here: the key goes no further).
+    pub fn keyboard_activated_lately(&self) -> bool {
+        now() - self.key_activated.get() < 1.0
+    }
+
     /// Notes the pointer's presses and Space and Enter in `widget`, as
     /// the window's are noted: for a popover, whose grab keeps them from
     /// the window's controllers. A control used there is then known to

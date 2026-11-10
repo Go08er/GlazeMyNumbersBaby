@@ -161,7 +161,8 @@ fn run_while(
         // A headless compositor never says which window is in use.
         .env("GMNB_ACTIVE", "1")
         .env("GMNB_SOUND_TRACE", "1")
-        .env("GMNB_THEME_STATS", ms.saturating_sub(300).to_string())
+        // The steps end by closing it (`quit`); this is in case they never
+        // get there.
         .env("GMNB_AUTOCLOSE_MS", ms.to_string());
     if theme {
         cmd.env("GMNB_THEME_DIR", profile.path("theme"));
@@ -286,14 +287,14 @@ fn events_play_their_sounds() {
     let steps = format!(
         "keys:7;click:{SEVEN};activate:{SEVEN};wait:600;keys:=;wait:300;\
          keys:{{escape}};keys:1;keys:/;keys:0;keys:=;wait:300;\
-         keys:{{escape}};keys:2;keys:+;keys:3;activate:{EQUALS};wait:600;keys:{{alt+2}}"
+         keys:{{escape}};keys:2;keys:+;keys:3;activate:{EQUALS};wait:600;keys:{{alt+2}};quit"
     );
     let stderr = run(
         &display,
         &profile,
         true,
         &[("GMNB_SOUND", "null"), ("GMNB_STEPS", &steps)],
-        10_000,
+        60_000,
     );
     let lines = traced(&stderr);
     // Typed, then clicked: the same key, the same sound, pitch and place.
@@ -404,13 +405,13 @@ fn only_a_theme_with_sounds_connects() {
         eprintln!("GMNB_TEST_WAYLAND_DISPLAY not set; skipped");
         return;
     };
-    let steps = "keys:7;wait:400;keys:8";
+    let steps = "keys:7;wait:400;keys:8;quit";
     let nothing = "sound: status Off, thread no, threads 0, connections 0, queued 0";
 
     // The base look.
     let profile = Profile::new("base");
     let server = Server::start(&profile.socket());
-    let stderr = run(&display, &profile, false, &[("GMNB_STEPS", steps)], 2500);
+    let stderr = run(&display, &profile, false, &[("GMNB_STEPS", steps)], 60_000);
     assert!(
         report(&stderr)
             .starts_with("sound: status Idle, thread no, threads 0, connections 0, queued 0"),
@@ -430,7 +431,7 @@ fn only_a_theme_with_sounds_connects() {
     )
     .unwrap();
     let server = Server::start(&profile.socket());
-    let stderr = run(&display, &profile, true, &[("GMNB_STEPS", steps)], 2500);
+    let stderr = run(&display, &profile, true, &[("GMNB_STEPS", steps)], 60_000);
     assert!(report(&stderr).starts_with(nothing), "{stderr}");
     assert_eq!(server.connections(), 0);
     drop(server);
@@ -444,7 +445,7 @@ fn only_a_theme_with_sounds_connects() {
     )
     .unwrap();
     let server = Server::start(&profile.socket());
-    let stderr = run(&display, &profile, true, &[("GMNB_STEPS", steps)], 2500);
+    let stderr = run(&display, &profile, true, &[("GMNB_STEPS", steps)], 60_000);
     let summary = report(&stderr);
     assert!(summary.starts_with(nothing), "{stderr}");
     assert!(
@@ -458,7 +459,7 @@ fn only_a_theme_with_sounds_connects() {
     // and found only in the run's own folder.
     let profile = Profile::new("on");
     let server = Server::start(&profile.socket());
-    let stderr = run(&display, &profile, true, &[("GMNB_STEPS", steps)], 3000);
+    let stderr = run(&display, &profile, true, &[("GMNB_STEPS", steps)], 60_000);
     let summary = report(&stderr);
     assert!(
         summary.starts_with("sound: status Ready, thread yes, threads 1, connections 1,"),
@@ -506,8 +507,11 @@ fn at_rest_nothing_wakes() {
         &display,
         &profile,
         false,
-        &[("GMNB_THEME", "aurora"), ("GMNB_STEPS", "keys:7")],
-        14_000,
+        &[
+            ("GMNB_THEME", "aurora"),
+            ("GMNB_STEPS", "keys:7;wait:9000;quit"),
+        ],
+        60_000,
         |pid| {
             let deadline = Instant::now() + Duration::from_secs(12);
             while !corked() && Instant::now() < deadline {

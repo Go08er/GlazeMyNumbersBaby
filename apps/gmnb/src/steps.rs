@@ -11,7 +11,9 @@
 //!   at its middle;
 //! - `activate:<id>`: the same key activated as assistive technology
 //!   activates it (no pointer, no key);
-//! - `wait:<ms>`: a longer pause.
+//! - `wait:<ms>`: a longer pause;
+//! - `quit`: what sound has done, a line on stderr (as `GMNB_THEME_STATS`
+//!   writes it), and the window closed.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -28,11 +30,15 @@ enum Step {
     Click(u32),
     Activate(u32),
     Wait(u64),
+    Quit,
 }
 
 fn parse(spec: &str) -> VecDeque<Step> {
     spec.split(';')
         .filter_map(|part| {
+            if part.trim() == "quit" {
+                return Some(Step::Quit);
+            }
             let (what, arg) = part.trim().split_once(':')?;
             Some(match what {
                 "keys" => Step::Keys(arg.replace("\\n", "\n")),
@@ -98,6 +104,11 @@ fn next(win: Rc<Window>, steps: std::cell::RefCell<VecDeque<Step>>, gap: u64) {
             }
         }
         Step::Wait(ms) => pause = ms,
+        Step::Quit => {
+            eprintln!("sound: {}", win.ctx().hub.sound_report());
+            win.widget().close();
+            return;
+        }
     }
     glib::timeout_add_local_once(Duration::from_millis(pause), move || next(win, steps, gap));
 }
