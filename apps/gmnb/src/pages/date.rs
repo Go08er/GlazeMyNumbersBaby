@@ -17,6 +17,7 @@ use gtk::glib;
 
 use super::{Ctx, Page};
 use crate::widgets::day_grid::DayGrid;
+use crate::widgets::display::{Change, Display};
 use crate::widgets::fit::{Align, FitLabel, MaxWidth, Texts};
 use crate::widgets::icon::PathIcon;
 use appcore::modes::ViewMode;
@@ -220,9 +221,10 @@ fn spin(label: &str, texts: &Texts) -> (gtk::Box, gtk::SpinButton, Vec<PathIcon>
     (b, spin, icons)
 }
 
-/// A result (DGMNB's 28 px line, shrunk to fit).
-fn result_line() -> FitLabel {
-    let r = FitLabel::new();
+/// A result (DGMNB's 28 px line, shrunk to fit): a readout to a theme's
+/// `display` layer.
+fn result_line() -> Display {
+    let r = Display::line();
     r.add_css_class("wc-date-result");
     r.set_size_request(-1, md::RESULT_H as i32);
     r.set_hexpand(true);
@@ -454,18 +456,20 @@ impl DatePage {
                 (from.label.clone(), to.label.clone(), start.label.clone());
             let (diff_result, diff_days, date_result) =
                 (diff_result.clone(), diff_days.clone(), date_result.clone());
-            Rc::new(move || {
+            // `change`: how the results have changed, for a theme's
+            // `display` layer (and its `result` event).
+            Rc::new(move |change: Change| {
                 let st = state.borrow();
                 from_l.set_text(&datecalc::format_long_date(&st.from_date()));
                 to_l.set_text(&datecalc::format_long_date(&st.to_date()));
                 start_l.set_text(&datecalc::format_long_date(&st.start_date()));
-                diff_result.set_text(st.str_date_diff_result());
+                diff_result.set_value(st.str_date_diff_result(), change, false);
                 diff_result.update_property(&[gtk::accessible::Property::Label(
                     st.str_date_diff_result_automation_name(),
                 )]);
                 diff_days.set_text(st.str_date_diff_result_in_days());
                 diff_days.set_visible(!st.is_diff_in_days());
-                date_result.set_text(st.str_date_result());
+                date_result.set_value(st.str_date_result(), change, st.is_out_of_bound());
                 if st.is_out_of_bound() {
                     date_result.add_css_class("wc-error");
                 } else {
@@ -491,7 +495,7 @@ impl DatePage {
                 }
             })
         };
-        refresh();
+        refresh(Change::None);
 
         for (which, b) in [(0, &from), (1, &to), (2, &start)] {
             // Weak button: it owns the popover that owns these days.
@@ -509,7 +513,7 @@ impl DatePage {
                         _ => st.set_start_date(d),
                     }
                 }
-                refresh();
+                refresh(Change::Result);
                 button.popdown();
                 let picked = crate::layers::Source::Date;
                 ctx.hub.layers().pressed(&button, picked, None);
@@ -522,7 +526,7 @@ impl DatePage {
                 let diff = g.active_name().as_deref() == Some("diff");
                 state.borrow_mut().set_is_date_diff_mode(diff);
                 stack.set_visible_child_name(if diff { "diff" } else { "add" });
-                refresh();
+                refresh(Change::Replace);
             });
         }
         // Dev/screenshot hook: open on "Add or subtract days".
@@ -535,7 +539,7 @@ impl DatePage {
                 state
                     .borrow_mut()
                     .set_is_add_mode(g.active_name().as_deref() == Some("add"));
-                refresh();
+                refresh(Change::Result);
             });
         }
         for (which, spin) in [(0, &years), (1, &months), (2, &days)] {
@@ -550,7 +554,7 @@ impl DatePage {
                         _ => st.set_days_offset(v),
                     }
                 }
-                refresh();
+                refresh(Change::Typing);
             });
         }
         page

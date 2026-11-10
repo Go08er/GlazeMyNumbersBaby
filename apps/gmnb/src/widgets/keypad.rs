@@ -1,6 +1,11 @@
 //! `Keypad` — a homogeneous grid of keys. How a key looks is the
 //! stylesheet's (`keys.*` of the style); the grid's gap, the keys' corner
-//! radius and their icons' size come from the style here.
+//! radius, their icons' size and their labels' fonts come from the style
+//! here.
+//!
+//! A key's label is set as DGMNB sets it (a [`FitLabel`]): in its class's
+//! font, superscripts and subscripts at 0.62 of it, shrunk to the key's
+//! width less 8, its capitals centred on the middle of DGMNB's cell.
 //!
 //! A theme's `keypad` layer is drawn over the keys (docs/theming.md, "The
 //! keypad layer"): its `draw` hook is told every cell of the grid and its
@@ -19,10 +24,12 @@ use std::time::Instant;
 
 use gmnb_theme::events::{Action, KeyKind as CellKind, Via};
 use gmnb_theme::layer::{KeyCell, Keys, LayerKind};
+use gmnb_theme::types::{Font, Shadow};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{glib, graphene};
 
+use super::fit::{Align, FitLabel};
 use crate::layers::{self, Extra, Instance};
 use crate::theme::Hub;
 
@@ -37,6 +44,51 @@ fn kind_css(kind: KeyKind) -> &'static str {
         KeyKind::Equals => "wc-eq",
         KeyKind::Toggle => "wc-fn",
     }
+}
+
+/// The row of the style a key's label is set from.
+fn kind_path(kind: KeyKind) -> &'static str {
+    match kind {
+        KeyKind::Number => "keys.number",
+        KeyKind::Operator => "keys.operator",
+        KeyKind::Function | KeyKind::Toggle => "keys.func",
+        KeyKind::Equals => "keys.equals",
+    }
+}
+
+const KEY_PATHS: [&str; 4] = ["keys.number", "keys.func", "keys.operator", "keys.equals"];
+
+/// A key's label and what it is set from.
+struct KeyText {
+    label: FitLabel,
+    /// The row of the style its font is from.
+    path: &'static str,
+    /// The key has no name of its own (no tooltip either): it is called
+    /// what its label says.
+    named_by_label: bool,
+}
+
+/// A key class's font, and the weight each of its states gives it
+/// instead.
+struct KeyFont {
+    font: Font,
+    hover: Option<f32>,
+    active: Option<f32>,
+    checked: Option<f32>,
+    disabled: Option<f32>,
+}
+
+/// Whether something covers `widget` (crate::inert): what is insensitive
+/// only for that keeps its look.
+fn covered(widget: &gtk::Widget) -> bool {
+    let mut up = widget.parent();
+    while let Some(w) = up {
+        if w.has_css_class("wc-inert") {
+            return true;
+        }
+        up = w.parent();
+    }
+    false
 }
 
 /// What a key is to a theme.
@@ -101,6 +153,15 @@ mod imp {
         /// them (`keys.icon`).
         pub icons: RefCell<Vec<super::super::icon::PathIcon>>,
         pub icon: Cell<(f32, f32)>,
+        /// The keys' labels, and from the style what they are set in: each
+        /// class's font (`keys.number`, …) and the halo of text on what
+        /// is raised (`window.raised_text_halo`).
+        pub(super) texts: RefCell<HashMap<u32, KeyText>>,
+        pub(super) fonts: RefCell<HashMap<&'static str, KeyFont>>,
+        pub halo: RefCell<Vec<Shadow>>,
+        /// The grid's rows and columns, as the cells put in it so far
+        /// make them: the labels read it as they are drawn.
+        pub grid: Rc<Cell<(usize, usize)>>,
         /// The theme's `keypad` layer here, once it has been asked for.
         pub layer: OnceCell<Rc<Instance>>,
         /// This keypad's number among the window's, for the layer.
@@ -133,6 +194,10 @@ mod imp {
                 compact: Cell::new(false),
                 icons: RefCell::default(),
                 icon: Cell::new((appcore::metrics::controls::KEY_ICON, 1.5)),
+                texts: RefCell::default(),
+                fonts: RefCell::default(),
+                halo: RefCell::default(),
+                grid: Rc::default(),
                 layer: OnceCell::new(),
                 pad: Cell::new(0),
                 told: RefCell::default(),
@@ -284,9 +349,34 @@ impl Keypad {
     }
 
     /// What the keypad takes from the style in Rust: the grid's gaps, the
-    /// keys' radius (what a layer is told) and their icons.
+    /// keys' radius (what a layer is told), their icons and their labels'
+    /// fonts.
     pub fn set_style(&self, style: &gmnb_theme::Style) {
         let imp = self.imp();
+        {
+            let mut fonts = imp.fonts.borrow_mut();
+            fonts.clear();
+            for path in KEY_PATHS {
+                if let Some(c) = style.control(path) {
+                    fonts.insert(
+                        path,
+                        KeyFont {
+                            font: c.font.clone(),
+                            hover: c.hover.font_weight,
+                            active: c.active.font_weight,
+                            checked: c.checked.font_weight,
+                            disabled: c.disabled.font_weight,
+                        },
+                    );
+                }
+            }
+        }
+        imp.halo
+            .replace(style.shadows("window.raised_text_halo").to_vec());
+        let ids: Vec<u32> = imp.texts.borrow().keys().copied().collect();
+        for id in ids {
+            self.sync_text(id);
+        }
         imp.radius.set(style.radius("keys.radius").uniform());
         imp.gaps
             .set((style.number("keys.gap"), style.number("keys.gap_compact")));
@@ -301,9 +391,58 @@ impl Keypad {
         self.queue_draw();
     }
 
-    /// TRANSITION: the keypad draws nothing from the legacy scheme any
-    /// more; kept for the pages that still call it.
-    pub fn set_scheme(&self, _scheme: crate::theme::Scheme) {}
+    /// Key `id`'s label in the font and halo its key's state gives it:
+    /// its class's font, in the weight of the state the key is in (the
+    /// stylesheet's order: `checked`, then `hover` or `active`, then
+    /// `disabled`), and no halo on a key that can't be pressed (it
+    /// smears the faint glyphs), as the stylesheet has it for a button's
+    /// label.
+    fn sync_text(&self, id: u32) {
+        let imp = self.imp();
+        let texts = imp.texts.borrow();
+        let (Some(text), Some(button)) = (texts.get(&id), self.button(id)) else {
+            return;
+        };
+        let enabled = button.is_sensitive();
+        if enabled {
+            text.label.set_halo(&imp.halo.borrow());
+        } else {
+            text.label.set_halo(&[]);
+        }
+        let fonts = imp.fonts.borrow();
+        let Some(f) = fonts.get(text.path) else {
+            return;
+        };
+        let flags = button.state_flags();
+        let has = |class: &str| button.has_css_class(class);
+        let mut weight = f.font.weight;
+        if flags.contains(gtk::StateFlags::CHECKED) || has("wc-on") {
+            weight = f.checked.unwrap_or(weight);
+        }
+        if !enabled {
+            // Covered, not switched off: as it was.
+            if has("wc-off") || !covered(button.upcast_ref()) {
+                weight = f.disabled.unwrap_or(weight);
+            }
+        } else if flags.contains(gtk::StateFlags::ACTIVE)
+            || has("wc-flash")
+            || has("keyboard-activating")
+        {
+            weight = f.active.unwrap_or(weight);
+        } else if flags.contains(gtk::StateFlags::PRELIGHT) {
+            weight = f.hover.unwrap_or(weight);
+        }
+        // DGMNB shrinks a label to its key with no least size.
+        if weight == f.font.weight {
+            text.label.set_font(&f.font, 1.0);
+        } else {
+            let font = Font {
+                weight,
+                ..f.font.clone()
+            };
+            text.label.set_font(&font, 1.0);
+        }
+    }
 
     /// The theme's `keypad` layer drawn here.
     fn layer(&self) -> Option<Rc<Instance>> {
@@ -329,6 +468,7 @@ impl Keypad {
 
     /// Add a key at (row, col) spanning (rows, cols). Returns the button.
     pub fn add(&self, key: Key, row: i32, col: i32, rows: i32, cols: i32) -> gtk::Button {
+        let mut text = None;
         let child: gtk::Widget = match key.icon {
             Some(path) => {
                 let (size, stroke) = self.imp().icon.get();
@@ -338,8 +478,14 @@ impl Keypad {
                 icon.upcast()
             }
             None => {
-                let label = gtk::Label::new(None);
+                // Drawn only: the key is named below.
+                let label = FitLabel::drawn();
                 label.set_markup(&key.label);
+                label.set_align(Align::Center);
+                let inset = (appcore::metrics::controls::KEY_LABEL_MARGIN / 2.0) as i32;
+                label.set_margin_start(inset);
+                label.set_margin_end(inset);
+                text = Some(label.clone());
                 label.upcast()
             }
         };
@@ -365,9 +511,9 @@ impl Keypad {
         if let Some(tip) = &key.tooltip {
             button.set_tooltip_text(Some(tip));
         }
-        if let Some(name) = key.a11y.as_ref().or(key.tooltip.as_ref()) {
-            button.update_property(&[gtk::accessible::Property::Label(name)]);
-        }
+        // Its own name or its tooltip, else what its label says (which
+        // is drawn, not a label the toolkit could read it from).
+        button.update_property(&[gtk::accessible::Property::Label(&key.accessible_name())]);
         self.put(
             &button,
             (row, col, rows, cols),
@@ -377,13 +523,46 @@ impl Keypad {
         );
 
         let id = key.id;
+        self.imp().keys.borrow_mut().insert(id, button.clone());
+        if let Some(label) = text {
+            // About the middle of DGMNB's cell, not of the toolkit's
+            // whole-pixel allocation.
+            label.set_cell_of(
+                self,
+                &button,
+                self.imp().grid.clone(),
+                (row.max(0) as usize, col.max(0) as usize),
+                (rows.max(1) as usize, cols.max(1) as usize),
+            );
+            self.imp().texts.borrow_mut().insert(
+                id,
+                KeyText {
+                    label,
+                    path: kind_path(key.kind),
+                    named_by_label: key.a11y.is_none() && key.tooltip.is_none(),
+                },
+            );
+            self.sync_text(id);
+            // Its font's weight and its halo follow the key's state.
+            let weak = self.downgrade();
+            button.connect_state_flags_changed(move |_, _| {
+                if let Some(k) = weak.upgrade() {
+                    k.sync_text(id);
+                }
+            });
+            let weak = self.downgrade();
+            button.connect_css_classes_notify(move |_| {
+                if let Some(k) = weak.upgrade() {
+                    k.sync_text(id);
+                }
+            });
+        }
         let weak = self.downgrade();
         button.connect_clicked(move |b| {
             if let Some(k) = weak.upgrade() {
                 k.on_key_clicked(id, b);
             }
         });
-        self.imp().keys.borrow_mut().insert(id, button.clone());
         button
     }
 
@@ -411,6 +590,12 @@ impl Keypad {
         lc.set_row_span(rows);
         lc.set_column_span(cols);
         let widget = widget.clone().upcast::<gtk::Widget>();
+        let grid = &self.imp().grid;
+        let (r, c) = grid.get();
+        grid.set((
+            r.max((row + rows).max(0) as usize),
+            c.max((col + cols).max(0) as usize),
+        ));
         // What a layer is told of a cell changes with these.
         let weak = self.downgrade();
         widget.connect_state_flags_changed(move |_, _| {
@@ -458,19 +643,28 @@ impl Keypad {
             .map_or((CellKind::Other, None), |c| (c.kind, c.action))
     }
 
+    /// Relabel a key. One named by its label is called what the new one
+    /// says.
     pub fn set_key_label(&self, id: u32, markup: &str) {
-        if let Some(label) = self
-            .button(id)
-            .and_then(|b| b.child())
-            .and_downcast::<gtk::Label>()
+        let texts = self.imp().texts.borrow();
+        let Some(text) = texts.get(&id) else {
+            return;
+        };
+        text.label.set_markup(markup);
+        if text.named_by_label
+            && let Some(b) = self.button(id)
         {
-            label.set_markup(markup);
+            let name = appcore::keys::plain_label(markup);
+            b.update_property(&[gtk::accessible::Property::Label(&name)]);
         }
     }
 
     /// Relabel a key and keep its tooltip and accessible name in step.
     pub fn set_key(&self, id: u32, markup: &str, tip: &str) {
-        self.set_key_label(id, markup);
+        if let Some(text) = self.imp().texts.borrow_mut().get_mut(&id) {
+            text.label.set_markup(markup);
+            text.named_by_label = false;
+        }
         if let Some(b) = self.button(id) {
             b.set_tooltip_text(Some(tip));
             b.update_property(&[gtk::accessible::Property::Label(tip)]);

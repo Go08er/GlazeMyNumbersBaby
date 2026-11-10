@@ -26,32 +26,26 @@ use crate::layers::{Happened, Layers};
 // ---------------------------------------------------------------------------
 // TRANSITION: the legacy scheme.
 //
-// The surfaces not yet migrated to the style (the display, the graph, the
-// keypad's and the display's drawn effects, and the stylesheet's rules
-// outside the window, keys and segmented controls) still read a `Scheme`
-// and the `@wc_*` colours. Both are derived from the resolved style here,
-// so they follow whatever theme is active. Remove `Scheme`,
-// `legacy_scheme`, `legacy_colors`, `Hub::scheme` and `Hub::subscribe` once
-// nothing reads them (`Hub::subscribe_while` went with the date page's readouts).
+// The stylesheet's rules not yet migrated to the style still read the
+// `@wc_*` colours, which are written from a `Scheme`. Both are derived from
+// the resolved style here, so they follow whatever theme is active. Remove
+// `Scheme`, `legacy_scheme` and `legacy_colors` once no rule reads them.
+// (No widget reads a `Scheme` any more: `Hub::scheme` and `Hub::subscribe`
+// went with the keypad's and the readout's drawn effects, which are the
+// theme's layers now.)
 // ---------------------------------------------------------------------------
 
-/// TRANSITION: the colours the unmigrated surfaces draw with.
+/// TRANSITION: the colours the unmigrated rules are written from.
 #[derive(Clone, Copy, Debug)]
 pub struct Scheme {
-    pub dark: bool,
-    /// The window's background, top and bottom.
-    pub base_top: [f32; 3],
+    /// The window's background at its bottom.
     pub base_bottom: [f32; 3],
-    /// Foreground text.
-    pub fg: [f32; 3],
     /// The accent as text (operators, focus, selection).
     pub accent: [f32; 3],
     /// The equals key's fill, its two ends, and the text on it.
     pub hot_a: [f32; 3],
     pub hot_b: [f32; 3],
     pub on_hot: [f32; 3],
-    /// Graph equation colours.
-    pub series: [[f32; 3]; 6],
 }
 
 pub use appcore::color::{parse_hex, to_hex};
@@ -75,19 +69,15 @@ fn legacy_scheme(style: &Style) -> Scheme {
         ),
         None => (fallback, fallback),
     };
-    let (top, bottom) = ends(style.fill("window.background").0.last(), c.bg);
+    let (_, bottom) = ends(style.fill("window.background").0.last(), c.bg);
     let equals = style.control("keys.equals");
     let (hot_a, hot_b) = ends(equals.and_then(|e| e.background.0.first()), c.accent);
     Scheme {
-        dark: style.dark,
-        base_top: rgb3(top),
         base_bottom: rgb3(bottom),
-        fg: rgb3(c.fg),
         accent: rgb3(c.accent_text),
         hot_a: rgb3(hot_a),
         hot_b: rgb3(hot_b),
         on_hot: rgb3(equals.map_or(c.on_accent, |e| e.color)),
-        series: c.series.map(rgb3),
     }
 }
 
@@ -123,7 +113,6 @@ fn legacy_colors(style: &Style, scheme: &Scheme) -> String {
 // ---------------------------------------------------------------------------
 
 /// Returns false once it should be dropped (its widget is gone).
-type Subscriber = Box<dyn Fn(&Scheme) -> bool>;
 type StyleSubscriber = Box<dyn Fn(&Rc<Style>) -> bool>;
 /// How the user is told something (a toast).
 type Tell = Box<dyn Fn(&str)>;
@@ -205,7 +194,6 @@ pub struct Hub {
     live: gtk::CssProvider,
     windows: RefCell<Vec<glib::WeakRef<gtk::Window>>>,
     fonts: RefCell<HashSet<PathBuf>>,
-    subscribers: RefCell<Vec<Subscriber>>,
     style_subscribers: RefCell<Vec<StyleSubscriber>>,
     /// How the user is told of a theme that failed (a toast).
     tell: RefCell<Option<Tell>>,
@@ -271,7 +259,6 @@ impl Hub {
             live: provider(gtk::STYLE_PROVIDER_PRIORITY_USER + 3),
             windows: RefCell::default(),
             fonts: RefCell::default(),
-            subscribers: RefCell::default(),
             style_subscribers: RefCell::default(),
             tell: RefCell::new(None),
             stats: Cell::default(),
@@ -728,21 +715,12 @@ impl Hub {
         }
     }
 
-    /// The legacy scheme of the current style (TRANSITION).
-    pub fn scheme(&self) -> Scheme {
-        self.scheme_of(&self.style())
-    }
-
-    fn scheme_of(&self, style: &Style) -> Scheme {
-        legacy_scheme(style)
-    }
-
     /// Writes the style to the providers: the whole of it to the main one,
     /// or, for a step of a drag that changed few properties, those to the
     /// live one.
     fn write(&self, style: &Style, drag: bool) {
         let (mut preamble, stock) = css::stock(style);
-        preamble.push_str(&legacy_colors(style, &self.scheme_of(style)));
+        preamble.push_str(&legacy_colors(style, &legacy_scheme(style)));
         let mut properties = css::properties(style);
         properties.extend(stock);
         let mut writer = self.writer.borrow_mut();
@@ -942,12 +920,6 @@ impl Hub {
         let mut keep: Vec<StyleSubscriber> = subs.into_iter().filter(|f| f(style)).collect();
         keep.append(&mut self.style_subscribers.borrow_mut());
         *self.style_subscribers.borrow_mut() = keep;
-
-        let scheme = self.scheme_of(style);
-        let subs = std::mem::take(&mut *self.subscribers.borrow_mut());
-        let mut keep: Vec<Subscriber> = subs.into_iter().filter(|f| f(&scheme)).collect();
-        keep.append(&mut self.subscribers.borrow_mut());
-        *self.subscribers.borrow_mut() = keep;
     }
 
     /// Call `f` now and whenever the style changes, while `widget` is
@@ -968,15 +940,6 @@ impl Hub {
                 }
                 None => false,
             }));
-    }
-
-    /// TRANSITION: call `f` now and whenever the scheme changes.
-    pub fn subscribe(&self, f: impl Fn(&Scheme) + 'static) {
-        f(&self.scheme());
-        self.subscribers.borrow_mut().push(Box::new(move |s| {
-            f(s);
-            true
-        }));
     }
 
     pub fn stats(&self) -> Stats {
@@ -1184,7 +1147,6 @@ mod tests {
         let style = Style::base(&ctx);
         let s = legacy_scheme(&style);
         let c = &style.tokens.colors;
-        assert_eq!(s.base_top, rgb3(c.bg));
         assert_eq!(s.base_bottom, rgb3(c.bg));
         assert_eq!((s.hot_a, s.hot_b), (rgb3(c.accent), rgb3(c.accent)));
         assert_eq!(s.on_hot, rgb3(c.on_accent));

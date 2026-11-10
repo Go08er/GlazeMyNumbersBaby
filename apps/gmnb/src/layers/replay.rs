@@ -40,52 +40,11 @@ fn rounded(r: draw::Rect, radius: &Radius) -> gsk::RoundedRect {
     out
 }
 
-/// A font as Pango describes one. What a description can't say (letter
-/// spacing, OpenType features) goes on the layout ([`attributes`]).
-pub fn description(font: &Font) -> pango::FontDescription {
-    let mut d = pango::FontDescription::new();
-    d.set_family(&font.family.join(","));
-    d.set_absolute_size(f64::from(font.size) * f64::from(pango::SCALE));
-    d.set_weight(pango::Weight::__Unknown(font.weight.round() as i32));
-    if font.italic {
-        d.set_style(pango::Style::Italic);
-    }
-    let axes = font.effective_variations();
-    if !axes.is_empty() {
-        let text: Vec<String> = axes.iter().map(|(tag, v)| format!("{tag}={v}")).collect();
-        d.set_variations(Some(&text.join(",")));
-    }
-    d
-}
-
-/// The attributes a layout in `font` needs beside its description.
-pub fn attributes(font: &Font) -> Option<pango::AttrList> {
-    if font.features.is_empty() && font.spacing == 0.0 {
-        return None;
-    }
-    let attrs = pango::AttrList::new();
-    if !font.features.is_empty() {
-        let text: Vec<String> = font
-            .features
-            .iter()
-            .map(|(tag, v)| format!("\"{tag}\" {v}"))
-            .collect();
-        attrs.insert(pango::AttrFontFeatures::new(&text.join(", ")));
-    }
-    if font.spacing != 0.0 {
-        let units = font.spacing * font.size * pango::SCALE as f32;
-        attrs.insert(pango::AttrInt::new_letter_spacing(units.round() as i32));
-    }
-    Some(attrs)
-}
-
-/// A layout of `text` in `font`.
+/// A layout of `text` in `font`: the app's one way of setting a line in a
+/// style's font (`widgets/fit.rs`), so what a theme draws and measures is
+/// what the app's own text is.
 pub fn layout(context: &pango::Context, text: &str, font: &Font) -> pango::Layout {
-    let layout = pango::Layout::new(context);
-    layout.set_text(text);
-    layout.set_font_description(Some(&description(font)));
-    layout.set_attributes(attributes(font).as_ref());
-    layout
+    crate::widgets::fit::line_layout(context, text, font, font.size, false)
 }
 
 /// `draw:text_size`, measured by Pango.

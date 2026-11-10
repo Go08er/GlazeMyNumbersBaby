@@ -1,14 +1,19 @@
 //! `Display` — a readout: the calculator's, and the same widget for the
-//! converter's two values and the date page's results.
+//! converter's two values and the date page's results (a *line*:
+//! [`Display::line`]).
 //!
 //! The app lays the value out: it picks the size that fits, shapes the
-//! text in the style's font and places each character. Who paints it
-//! depends on the theme (docs/theming.md, "The display layer"):
+//! text in the style's font and places each character, as DGMNB sets a
+//! line (`widgets/fit.rs`: unhinted, the capitals centred with the
+//! baseline on a whole pixel, each glyph at the nearest quarter pixel).
+//! Who paints it depends on the theme (docs/theming.md, "The display
+//! layer"):
 //!
 //! * Without a `display` layer the value is painted the base way, from
 //!   the style: `display.value.color` (a gradient is spread over the
 //!   value's band), `error_color`, `glow`. In the base look that is
-//!   DGMNB's readout: one colour, no animation.
+//!   DGMNB's readout: one colour, no animation. A line is painted in the
+//!   colour the stylesheet gives it.
 //! * With one, the theme's `draw` paints the characters, and is told of
 //!   each change of the value while it shows it. If the hook fails, the
 //!   base painting stands in: a number is never missing.
@@ -18,6 +23,13 @@
 //! hears: the expression is drawn by hand, so it gets a separate,
 //! invisible child placed over it ("Expression is 7 +", as upstream names
 //! its CalculatorExpression text and DGMNB its node).
+//!
+//! A line is a [`super::fit::FitLabel`] to its page: its font, the least
+//! size it shrinks to, its halo and what is set before it (a currency's
+//! symbol) are the page's to give, it is as wide as its text and it has
+//! no expression line, no padding and no panel behind it. To a theme it
+//! is a readout like the calculator's, with `role` `"converter"` or
+//! `"date"`.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
@@ -31,6 +43,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene, gsk, pango};
 
+use super::fit::{self, Prefix};
 use crate::layers::{self, Extra, Instance, replay};
 use crate::theme::Hub;
 
@@ -174,11 +187,28 @@ impl Look {
     }
 }
 
+/// What a page gives a line of its own ([`Display::line`]).
+struct Line {
+    /// The font at its largest, and where shrinking it stops.
+    font: Font,
+    min_size: f32,
+    /// Shadows round the text (the window's halo on a see-through
+    /// window).
+    halo: Vec<Shadow>,
+    /// Set before the value, in a font and colour of its own.
+    prefix: Option<Prefix>,
+}
+
 /// A value laid out in the readout.
 struct Laid {
     /// The whole value as one layout, at its place: what the base
     /// painting draws.
     full: pango::Layout,
+    /// Where its baseline goes.
+    baseline: f32,
+    /// A line's prefix: its layout, its baseline and its colour. It
+    /// starts at the line's start.
+    prefix: Option<(pango::Layout, f32, gdk::RGBA)>,
     /// Each character as a layout of its own, at its place: what a
     /// theme's `draw:glyph` draws.
     glyphs: Vec<replay::Glyph>,
@@ -204,13 +234,13 @@ mod imp {
         pub change: Cell<Option<(ChangeKind, f64, u32)>>,
         /// Counts what a display layer's frame is told of the value.
         pub version: Cell<u64>,
-        /// The value's largest size when the page gives it
-        /// ([`super::Display::set_max_size`]); the calculator's readout
-        /// takes it from the style by `mode`.
+        /// The value's largest size until the page gives the readout a
+        /// mode ([`super::Display::set_mode`]): then it is the style's
+        /// for that mode.
         pub max_size: Cell<f32>,
         pub mode: Cell<Option<Mode>>,
-        /// A weight the page asked for, over the style's.
-        pub weight: Cell<Option<i32>>,
+        /// A page's own line, and what the page gave it.
+        pub(super) line: RefCell<Option<Line>>,
         pub(super) look: RefCell<Look>,
         /// `display.sizes` and `display.heights` (`None`: `"auto"`), by
         /// mode.
@@ -244,7 +274,7 @@ mod imp {
                 version: Cell::new(1),
                 max_size: Cell::new(full),
                 mode: Cell::new(None),
-                weight: Cell::new(None),
+                line: RefCell::new(None),
                 look: RefCell::new(Look::base()),
                 sizes: Cell::new([full, full, full, compact]),
                 heights: Cell::new([
@@ -303,6 +333,15 @@ mod imp {
 
     impl WidgetImpl for Display {
         fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
+            if let Some((w, h)) = self.obj().line_size() {
+                // A line is as wide as its text, and shrinks to whatever
+                // width it is given.
+                return if orientation == gtk::Orientation::Horizontal {
+                    (0, w, -1, -1)
+                } else {
+                    (h, h, -1, -1)
+                };
+            }
             if orientation == gtk::Orientation::Vertical {
                 let h = self.obj().natural_height();
                 (h, h, -1, -1)
@@ -350,17 +389,13 @@ impl Default for Display {
 /// The longest a change of the value is shown, in seconds.
 const CHANGE_MAX: f64 = 3.0;
 
-/// The cap height of `font` at its size, as Pango draws it: how tall the
-/// ink of an "H" is. DGMNB centres a line of text on it.
-fn cap_height(context: &pango::Context, font: &Font) -> f32 {
-    let (ink, _) = replay::layout(context, "H", font).extents();
-    ink.height() as f32 / pango::SCALE as f32
-}
-
 /// The context the readout's text is laid out in: the widget's, with
 /// glyphs unhinted and placed by their true widths. DGMNB's rasteriser
 /// hints nothing; left to the desktop's setting, small text here came out
-/// crisper and brighter than DGMNB's.
+/// crisper and brighter than DGMNB's. A context of its own, not the
+/// widget's with its options changed (`fit::unhinted`): the readout keeps
+/// its layouts from one frame to the next, and the toolkit puts its own
+/// options back into a widget's context when its style changes.
 fn text_context(widget: &impl IsA<gtk::Widget>) -> pango::Context {
     let context = widget.create_pango_context();
     if let Ok(mut options) = gtk::cairo::FontOptions::new() {
@@ -371,11 +406,12 @@ fn text_context(widget: &impl IsA<gtk::Widget>) -> pango::Context {
     context
 }
 
-/// Where a line's top goes for its capitals to be centred on `middle`,
-/// with its baseline on a whole pixel: DGMNB's placing of a line of text.
-fn line_top(context: &pango::Context, layout: &pango::Layout, font: &Font, middle: f32) -> f32 {
-    let baseline = (middle + cap_height(context, font) / 2.0).round();
-    baseline - layout.baseline() as f32 / pango::SCALE as f32
+fn px(units: i32) -> f32 {
+    units as f32 / pango::SCALE as f32
+}
+
+fn rgba(c: Rgba) -> gdk::RGBA {
+    gdk::RGBA::new(c[0], c[1], c[2], c[3])
 }
 
 impl Display {
@@ -387,26 +423,111 @@ impl Display {
         d
     }
 
-    /// A display that is also a control (a converter field, picked to
-    /// type into): a button to assistive technology, not a label, and a
-    /// stop for the keyboard's focus (Tab), ringed while it has it
+    /// A page's own line of a value (a date result): see the module's
+    /// notes. It starts empty.
+    pub fn line() -> Self {
+        let d = Self::default();
+        d.make_line();
+        d
+    }
+
+    /// A line that is also a control (a converter value, picked to type
+    /// into): a button to assistive technology, not a label, and a stop
+    /// for the keyboard's focus (Tab), ringed while it has it
     /// (style.css).
-    pub fn button(max_size: f32) -> Self {
+    pub fn line_button() -> Self {
         let d: Self = glib::Object::builder()
             .property("accessible-role", gtk::AccessibleRole::Button)
             .property("focusable", true)
             .build();
-        d.imp().max_size.set(max_size);
+        d.make_line();
         d
     }
 
-    /// The value's largest size, for a readout the page sizes itself.
-    pub fn set_max_size(&self, size: f32) {
-        if self.imp().max_size.get() != size {
-            self.imp().max_size.set(size);
-            self.relayout();
-            self.queue_resize();
+    fn make_line(&self) {
+        let imp = self.imp();
+        let font = Font {
+            size: 15.0,
+            ..imp.look.borrow().font.clone()
+        };
+        imp.line.replace(Some(Line {
+            font,
+            min_size: 1.0,
+            halo: Vec::new(),
+            prefix: None,
+        }));
+        imp.value.replace(String::new());
+        imp.show_expression.set(false);
+        imp.align_end.set(false);
+        self.set_hexpand(false);
+        // No panel behind it (style.css).
+        self.add_css_class("wc-line");
+        self.update_property(&[gtk::accessible::Property::Label("")]);
+    }
+
+    /// A line's font at its largest; it shrinks to fit down to
+    /// `min_size`.
+    pub fn set_font(&self, font: &Font, min_size: f32) {
+        {
+            let mut line = self.imp().line.borrow_mut();
+            let Some(line) = line.as_mut() else { return };
+            if line.font == *font && line.min_size == min_size {
+                return;
+            }
+            line.font = font.clone();
+            line.min_size = min_size;
         }
+        self.relayout();
+        self.queue_resize();
+    }
+
+    /// Shadows round a line's text: what `text-shadow` is for a label
+    /// (the window's halo on a see-through window).
+    pub fn set_halo(&self, halo: &[Shadow]) {
+        {
+            let mut line = self.imp().line.borrow_mut();
+            let Some(line) = line.as_mut() else { return };
+            if line.halo == halo {
+                return;
+            }
+            line.halo = halo.to_vec();
+        }
+        self.queue_draw();
+    }
+
+    /// Text set before a line's value in a font and colour of its own
+    /// (the converter's currency symbol).
+    pub fn set_prefix(&self, prefix: Option<Prefix>) {
+        {
+            let mut line = self.imp().line.borrow_mut();
+            let Some(line) = line.as_mut() else { return };
+            if line.prefix == prefix {
+                return;
+            }
+            line.prefix = prefix;
+        }
+        self.relayout();
+        self.queue_resize();
+    }
+
+    /// A line's natural size: its prefix and its text at the font's own
+    /// size. `None`: this is not a line.
+    fn line_size(&self) -> Option<(i32, i32)> {
+        let imp = self.imp();
+        let line = imp.line.borrow();
+        let line = line.as_ref()?;
+        let context = text_context(self);
+        let lead = line.prefix.as_ref().map_or(0.0, |p| {
+            let layout = fit::line_layout(&context, &p.text, &p.font, p.font.size, false);
+            px(layout.extents().1.width()) + p.gap
+        });
+        let text = imp.value.borrow();
+        let layout = fit::line_layout(&context, &text, &line.font, line.font.size, false);
+        let (_, logical) = layout.extents();
+        Some((
+            (lead + px(logical.width())).ceil() as i32,
+            px(logical.height()).ceil() as i32,
+        ))
     }
 
     /// The calculator's readout: its sizes and heights are the style's
@@ -416,24 +537,6 @@ impl Display {
             self.relayout();
             self.queue_resize();
         }
-    }
-
-    pub fn set_show_expression(&self, show: bool) {
-        self.imp().show_expression.set(show);
-        self.sync_expression_node();
-        self.relayout();
-        self.queue_resize();
-    }
-
-    pub fn set_align_end(&self, end: bool) {
-        self.imp().align_end.set(end);
-        self.relayout();
-    }
-
-    /// A weight for the value, over the style's.
-    pub fn set_weight(&self, weight: i32) {
-        self.imp().weight.set(Some(weight));
-        self.relayout();
     }
 
     /// What the readout takes from the style.
@@ -463,10 +566,6 @@ impl Display {
         self.relayout();
         self.queue_resize();
     }
-
-    /// TRANSITION: the readout draws nothing from the legacy scheme any
-    /// more; kept for the pages that still call it.
-    pub fn set_scheme(&self, _scheme: crate::theme::Scheme) {}
 
     fn slot(mode: Mode) -> usize {
         match mode {
@@ -591,8 +690,12 @@ impl Display {
     pub fn set_value(&self, text: &str, change: Change, is_error: bool) {
         let imp = self.imp();
         // What a calculation came to is news for the theme's layers,
-        // whether or not it changes what the readout shows.
-        if let Some(hub) = Hub::current() {
+        // whether or not it changes what the readout shows. Not from a
+        // readout that isn't on screen (another page's, or the date
+        // page's other result).
+        if self.is_mapped()
+            && let Some(hub) = Hub::current()
+        {
             match change {
                 Change::Error => hub.layers().outcome(self, true),
                 Change::Result if !is_error => hub.layers().outcome(self, false),
@@ -611,7 +714,14 @@ impl Display {
         let was = imp.laid.borrow().clone();
         imp.value.replace(text.to_string());
         imp.error.set(is_error);
-        self.update_property(&[gtk::accessible::Property::Label(&display_label(text))]);
+        // A line is named by what it says (its page names it afterwards).
+        let is_line = imp.line.borrow().is_some();
+        if is_line {
+            self.update_property(&[gtk::accessible::Property::Label(text)]);
+            self.queue_resize();
+        } else {
+            self.update_property(&[gtk::accessible::Property::Label(&display_label(text))]);
+        }
 
         // A change is shown by a theme's display layer, and only where
         // motion is allowed.
@@ -639,58 +749,70 @@ impl Display {
         self.relayout();
     }
 
-    /// The value's font at `size`.
-    fn font(&self, size: f32) -> Font {
-        let imp = self.imp();
-        let mut font = imp.look.borrow().font.clone();
-        font.size = size;
-        if let Some(weight) = imp.weight.get() {
-            font.weight = weight as f32;
-        }
-        font
-    }
-
     /// Lays the value out: fitted to the readout's width, set against
     /// its end or its start, its capitals' height centred in the room
-    /// under the expression line (as DGMNB places it).
+    /// under the expression line (as DGMNB places it). A line: after its
+    /// prefix, in the middle of its height.
     fn lay(&self) -> Laid {
         let imp = self.imp();
         let look = imp.look.borrow();
         let context = text_context(self);
         let text = imp.value.borrow().clone();
         let (w, h) = (self.width() as f32, self.height() as f32);
-        let avail = (w - look.pad_x * 2.0).max(10.0);
-        let max = if imp.error.get() {
-            self.size() * look.error_scale
-        } else {
-            self.size()
+        // The font it is set in, where it starts, the space kept at its
+        // end, and the height its capitals are centred on.
+        let mut prefix = None;
+        let (font, start, pad, middle) = match imp.line.borrow().as_ref() {
+            Some(line) => {
+                let mut lead = 0.0;
+                if let Some(p) = &line.prefix {
+                    let layout = fit::line_layout(&context, &p.text, &p.font, p.font.size, false);
+                    lead = px(layout.extents().1.width()) + p.gap;
+                    let cap = fit::cap_height(&context, &p.font, p.font.size);
+                    prefix = Some((layout, h / 2.0 + cap / 2.0, rgba(p.color)));
+                }
+                let size =
+                    fit::fitted_size(&context, &text, &line.font, w - lead, line.min_size, false);
+                let font = Font {
+                    size,
+                    ..line.font.clone()
+                };
+                (font, lead, 0.0, h / 2.0)
+            }
+            None => {
+                let avail = (w - look.pad_x * 2.0).max(10.0);
+                let max = if imp.error.get() {
+                    self.size() * look.error_scale
+                } else {
+                    self.size()
+                };
+                let mut font = look.font.clone();
+                font.size = max;
+                font.size = fit::fitted_size(&context, &text, &font, avail, look.min_size, false);
+                let top = self.expression_height();
+                (font, look.pad_x, look.pad_x, top + (h - top) / 2.0)
+            }
         };
-        let probe = replay::layout(&context, &text, &self.font(max));
-        let (pw, _) = probe.pixel_size();
-        let size = if pw as f32 > avail {
-            (max * avail / pw as f32).max(look.min_size)
-        } else {
-            max
-        };
-        let font = self.font(size);
+        let size = font.size;
         let full = replay::layout(&context, &text, &font);
         // The text's width as laid out, not rounded up to whole pixels:
         // its end is set against the readout's.
         let (_, logical) = full.extents();
-        let fw = logical.width() as f32 / pango::SCALE as f32;
-        let fh = logical.height() as f32 / pango::SCALE as f32;
+        let (fw, fh) = (px(logical.width()), px(logical.height()));
         let x = if imp.align_end.get() {
-            w - look.pad_x - fw
+            w - pad - fw
         } else {
-            look.pad_x
+            start
         };
-        let top = self.expression_height();
-        let y = line_top(&context, &full, &font, top + (h - top) / 2.0);
+        // The capitals centred on `middle`, the baseline on a whole
+        // pixel: DGMNB's placing of a line of text.
+        let baseline = (middle + fit::cap_height(&context, &font, size) / 2.0).round();
+        let y = baseline - px(full.baseline());
         let mut glyphs = Vec::new();
         let mut boxes = Vec::new();
         for (byte, ch) in text.char_indices() {
             let pos = full.index_to_pos(byte as i32);
-            let gx = x + pos.x() as f32 / pango::SCALE as f32;
+            let gx = x + px(pos.x());
             let layout = replay::layout(&context, ch.encode_utf8(&mut [0; 4]), &font);
             let (cw, _) = layout.pixel_size();
             boxes.push(GlyphBox {
@@ -703,6 +825,8 @@ impl Display {
         }
         Laid {
             full,
+            baseline,
+            prefix,
             glyphs,
             told: Glyphs {
                 glyphs: boxes,
@@ -725,12 +849,8 @@ impl Display {
         let context = text_context(self);
         let avail = (self.width() as f32 - look.pad_x * 2.0).max(10.0);
         let mut font = look.expression.clone();
-        let mut layout = replay::layout(&context, &expr, &font);
-        let (w, _) = layout.pixel_size();
-        if w as f32 > avail {
-            font.size = (font.size * avail / w as f32).max(look.expression_min);
-            layout = replay::layout(&context, &expr, &font);
-        }
+        font.size = fit::fitted_size(&context, &expr, &font, avail, look.expression_min, false);
+        let layout = replay::layout(&context, &expr, &font);
         layout.set_ellipsize(pango::EllipsizeMode::Start);
         layout.set_width((avail * pango::SCALE as f32) as i32);
         layout.set_alignment(if imp.align_end.get() {
@@ -738,12 +858,15 @@ impl Display {
         } else {
             pango::Alignment::Left
         });
-        let y = line_top(&context, &layout, &font, self.expression_height() / 2.0);
-        let c = look.expression_color;
-        s.save();
-        s.translate(&graphene::Point::new(look.pad_x, y));
-        s.append_layout(&layout, &gdk::RGBA::new(c[0], c[1], c[2], c[3]));
-        s.restore();
+        let cap = fit::cap_height(&context, &font, font.size);
+        let baseline = self.expression_height() / 2.0 + cap / 2.0;
+        fit::draw_line(
+            s,
+            &layout,
+            look.pad_x,
+            baseline,
+            &rgba(look.expression_color),
+        );
     }
 
     /// The value the base way: the style's colour (a gradient spread over
@@ -751,19 +874,18 @@ impl Display {
     fn draw_base(&self, s: &gtk::Snapshot, laid: &Laid) {
         let imp = self.imp();
         let look = imp.look.borrow();
-        let [x, y, _, _] = laid.told.rect;
-        let at = graphene::Point::new(x, y);
-        let append = |color: &gdk::RGBA| {
-            s.save();
-            s.translate(&at);
-            s.append_layout(&laid.full, color);
-            s.restore();
-        };
+        let [x, _, _, _] = laid.told.rect;
+        let append = |color: &gdk::RGBA| fit::draw_line(s, &laid.full, x, laid.baseline, color);
+        // A line: in the colour the stylesheet gives it.
+        if imp.line.borrow().is_some() {
+            append(&self.color());
+            return;
+        }
         if let Some((c, blur)) = look.glow
             && !laid.told.glyphs.is_empty()
         {
             s.push_blur(f64::from((blur * laid.told.size).clamp(0.0, 100.0)));
-            append(&gdk::RGBA::new(c[0], c[1], c[2], c[3]));
+            append(&rgba(c));
             s.pop();
         }
         let paint = if imp.error.get() {
@@ -772,7 +894,7 @@ impl Display {
             &look.color
         };
         match paint {
-            Paint::Color(c) => append(&gdk::RGBA::new(c[0], c[1], c[2], c[3])),
+            Paint::Color(c) => append(&rgba(*c)),
             gradient => {
                 let band = gmnb_theme::DisplayList {
                     ops: vec![gmnb_theme::Op::Rect {
@@ -825,21 +947,23 @@ impl Display {
             return;
         };
         // Over a see-through window the desktop can be anything: the
-        // style's halo keeps the numbers legible.
-        let halo: Vec<gsk::Shadow> = imp
-            .look
-            .borrow()
-            .halo
-            .iter()
-            .map(|h| {
-                let c = h.color;
-                gsk::Shadow::new(gdk::RGBA::new(c[0], c[1], c[2], c[3]), h.x, h.y, h.blur)
-            })
-            .collect();
+        // style's halo (a line's: its page's) keeps the numbers legible.
+        let halo: Vec<gsk::Shadow> = {
+            let (look, line) = (imp.look.borrow(), imp.line.borrow());
+            line.as_ref()
+                .map_or(&look.halo, |l| &l.halo)
+                .iter()
+                .map(|h| gsk::Shadow::new(rgba(h.color), h.x, h.y, h.blur))
+                .collect()
+        };
         if !halo.is_empty() {
             s.push_shadow(&halo);
         }
         self.draw_expression(s);
+        // A line's prefix is the app's, whoever paints the value.
+        if let Some((layout, baseline, color)) = &laid.prefix {
+            fit::draw_line(s, layout, 0.0, *baseline, color);
+        }
         if !self.draw_layer(s, &laid) {
             self.draw_base(s, &laid);
         }

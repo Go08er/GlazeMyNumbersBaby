@@ -10,6 +10,11 @@
 //!   than a most, at its start (DGMNB's columns and buttons are
 //!   `w.min(MAX)` from the left; `AdwClamp` centres).
 //! * [`SizeBin`]: a bin that tells its size, for layouts that follow it.
+//!
+//! How a line is set is defined once, here, as free functions, for the
+//! readout (`widgets/display.rs`) to set its value the same way:
+//! [`unhinted`], [`line_layout`], [`fitted_size`], [`cap_height`] and
+//! [`draw_line`].
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -85,12 +90,17 @@ pub struct Prefix {
     pub gap: f32,
 }
 
-/// A cell of a grid a FitLabel's line is set about.
+/// A cell of a grid a FitLabel's line is set about. The grid is a
+/// `gtk::Grid`, or any widget laid out by a `gtk::GridLayout` (a keypad).
 pub struct CellAt {
-    grid: glib::WeakRef<gtk::Grid>,
+    grid: glib::WeakRef<gtk::Widget>,
     key: glib::WeakRef<gtk::Widget>,
-    cells: (usize, usize),
+    /// The grid's rows and columns: shared, for a grid that learns them
+    /// as its cells are added.
+    cells: Rc<Cell<(usize, usize)>>,
     at: (usize, usize),
+    /// The rows and columns the cell is over (a key two cells wide).
+    span: (usize, usize),
 }
 
 impl CellAt {
@@ -102,13 +112,152 @@ impl CellAt {
         let Some(at) = key.compute_bounds(&grid) else {
             return (0.0, 0.0);
         };
+        let cells = self.cells.get();
+        if cells.0 == 0 || cells.1 == 0 {
+            return (0.0, 0.0);
+        }
+        let gap = match grid.downcast_ref::<gtk::Grid>() {
+            Some(g) => g.row_spacing(),
+            None => grid
+                .layout_manager()
+                .and_downcast::<gtk::GridLayout>()
+                .map_or(0, |l| l.row_spacing()),
+        };
         let size = (grid.width() as f32, grid.height() as f32);
-        let (x, y) = cell_middle(size, self.cells, self.at, grid.row_spacing() as f32);
+        // Over several cells: midway between the first's middle and the
+        // last's.
+        let last = (
+            self.at.0 + self.span.0.max(1) - 1,
+            self.at.1 + self.span.1.max(1) - 1,
+        );
+        let first = cell_middle(size, cells, self.at, gap as f32);
+        let last = cell_middle(size, cells, last, gap as f32);
+        let (x, y) = ((first.0 + last.0) / 2.0, (first.1 + last.1) / 2.0);
         (
             x - (at.x() + at.width() / 2.0),
             y - (at.y() + at.height() / 2.0),
         )
     }
+}
+
+/// A superscript or subscript in a key's label is this much of the
+/// label's size, raised or lowered by these parts of it (DGMNB's
+/// `layout_markup`).
+pub const SCRIPT_SCALE: f32 = 0.62;
+pub const SUP_RISE: f32 = 0.36;
+pub const SUB_DROP: f32 = 0.16;
+
+/// A key label's markup: `<sup>…</sup>` and `<sub>…</sub>` spans, as
+/// DGMNB reads it (any other `<` is text; `<small>` is taken out, the
+/// span it is in being small already). The text without its tags, and
+/// each span's bytes in it with whether it is raised.
+pub fn parse_markup(markup: &str) -> (String, Vec<(usize, usize, bool)>) {
+    const TAGS: [(&str, Option<Option<bool>>); 6] = [
+        ("<sup>", Some(Some(true))),
+        ("</sup>", Some(None)),
+        ("<sub>", Some(Some(false))),
+        ("</sub>", Some(None)),
+        ("<small>", None),
+        ("</small>", None),
+    ];
+    let mut plain = String::with_capacity(markup.len());
+    let mut spans = Vec::new();
+    let mut shift: Option<bool> = None;
+    let mut rest = markup;
+    while !rest.is_empty() {
+        if let Some((tag, change)) = TAGS.iter().find(|(tag, _)| rest.starts_with(tag)) {
+            if let Some(to) = change {
+                shift = *to;
+            }
+            rest = &rest[tag.len()..];
+            continue;
+        }
+        let next = TAGS
+            .iter()
+            .filter_map(|(tag, _)| rest.find(tag))
+            .min()
+            .unwrap_or(rest.len());
+        let start = plain.len();
+        plain.push_str(&rest[..next]);
+        if let Some(sup) = shift {
+            spans.push((start, plain.len(), sup));
+        }
+        rest = &rest[next..];
+    }
+    (plain, spans)
+}
+
+/// `widget`'s Pango context set as DGMNB sets text: glyphs unhinted,
+/// their widths unrounded.
+pub fn unhinted(widget: &impl IsA<gtk::Widget>) -> pango::Context {
+    let context = widget.pango_context();
+    let mut options = pangocairo::cairo::FontOptions::new().ok();
+    if let Some(o) = options.as_mut() {
+        o.set_hint_style(pangocairo::cairo::HintStyle::None);
+        o.set_hint_metrics(pangocairo::cairo::HintMetrics::Off);
+    }
+    pangocairo::functions::context_set_font_options(&context, options.as_ref());
+    context
+}
+
+/// One line of `text` in `font` at `size` pixels. `markup`: `text` is a
+/// key label's ([`parse_markup`]).
+pub fn line_layout(
+    context: &pango::Context,
+    text: &str,
+    font: &Font,
+    size: f32,
+    markup: bool,
+) -> pango::Layout {
+    let layout = pango::Layout::new(context);
+    let (fd, attrs) = pango_font(font, size);
+    layout.set_font_description(Some(&fd));
+    if markup {
+        let (plain, spans) = parse_markup(text);
+        layout.set_text(&plain);
+        for (start, end, sup) in spans {
+            let (small, _) = pango_font(font, size * SCRIPT_SCALE);
+            let mut desc = pango::AttrFontDesc::new(&small);
+            desc.set_start_index(start as u32);
+            desc.set_end_index(end as u32);
+            attrs.insert(desc);
+            let by = if sup { SUP_RISE } else { -SUB_DROP } * size;
+            let mut rise = pango::AttrInt::new_rise((by * pango::SCALE as f32).round() as i32);
+            rise.set_start_index(start as u32);
+            rise.set_end_index(end as u32);
+            attrs.insert(rise);
+        }
+    } else {
+        layout.set_text(text);
+    }
+    layout.set_attributes(Some(&attrs));
+    layout
+}
+
+/// The size `text` is set at in `width`: `font`'s own if it fits, else
+/// smaller by as much as it is too wide, down to `min`.
+pub fn fitted_size(
+    context: &pango::Context,
+    text: &str,
+    font: &Font,
+    width: f32,
+    min: f32,
+    markup: bool,
+) -> f32 {
+    let (_, logical) = line_layout(context, text, font, font.size, markup).extents();
+    let full = px(logical.width());
+    if full > width && full > 0.0 {
+        (font.size * width / full).max(min)
+    } else {
+        font.size
+    }
+}
+
+/// The height of `font`'s capitals at `size`: the ink of an `H`. DGMNB
+/// centres a line on it.
+pub fn cap_height(context: &pango::Context, font: &Font, size: f32) -> f32 {
+    let (ink, _) = line_layout(context, "H", font, size, false).extents();
+    px(ink.height())
 }
 
 /// Pixels from Pango units.
@@ -121,6 +270,8 @@ mod imp {
 
     pub struct FitLabel {
         pub text: RefCell<String>,
+        /// The text is a key label's markup ([`parse_markup`]).
+        pub markup: Cell<bool>,
         pub font: RefCell<Option<Font>>,
         pub min_size: Cell<f32>,
         pub align: Cell<Align>,
@@ -136,6 +287,7 @@ mod imp {
         fn default() -> Self {
             Self {
                 text: RefCell::default(),
+                markup: Cell::new(false),
                 font: RefCell::default(),
                 min_size: Cell::new(1.0),
                 align: Cell::new(Align::Start),
@@ -192,7 +344,7 @@ mod imp {
             let baseline = |font: Option<&Font>, size: f32| {
                 let probe = obj.layout_at_size(size, "H", font);
                 let (ink, _) = probe.extents();
-                (h / 2.0 + dy + px(ink.height()) / 2.0).round()
+                h / 2.0 + dy + px(ink.height()) / 2.0
             };
             let (_, logical) = layout.extents();
             let x = match self.align.get() {
@@ -230,8 +382,10 @@ fn rgba(c: gmnb_theme::types::Rgba) -> gtk::gdk::RGBA {
 }
 
 /// `layout`'s line at `x`, its baseline at `baseline`, each glyph placed
-/// at the nearest quarter pixel, as DGMNB places its glyphs (the
-/// toolkit's own rounding of a position put some a quarter pixel off).
+/// at the nearest quarter pixel across and each run's baseline on a
+/// whole pixel, as DGMNB places its glyphs (the toolkit's own rounding of
+/// a position put some a quarter pixel off). A raised or lowered run (a
+/// key label's superscript) is rounded with its shift, as DGMNB's is.
 pub fn draw_line(
     s: &gtk::Snapshot,
     layout: &pango::Layout,
@@ -241,9 +395,11 @@ pub fn draw_line(
 ) {
     let quarter = |v: f32| (v * 4.0).round() / 4.0;
     let mut iter = layout.iter();
+    let line = iter.baseline();
     loop {
         if let Some(run) = iter.run_readonly() {
             let (_, logical) = iter.run_extents();
+            let baseline = (baseline + px(iter.run_baseline() - line)).round();
             let origin = quarter(x + px(logical.x()));
             let font = run.item().analysis().font();
             let mut glyphs = run.glyph_string();
@@ -306,9 +462,22 @@ impl FitLabel {
     /// The text, which is also its name to assistive technology (a
     /// control that holds it names itself afterwards).
     pub fn set_text(&self, text: &str) {
-        if *self.imp().text.borrow() != text {
-            self.imp().text.replace(text.to_string());
+        let imp = self.imp();
+        if *imp.text.borrow() != text || imp.markup.get() {
+            imp.text.replace(text.to_string());
+            imp.markup.set(false);
             self.update_property(&[gtk::accessible::Property::Label(text)]);
+            self.queue_resize();
+        }
+    }
+
+    /// A key's label: text with `<sup>` and `<sub>` spans
+    /// ([`parse_markup`]).
+    pub fn set_markup(&self, markup: &str) {
+        let imp = self.imp();
+        if *imp.text.borrow() != markup || !imp.markup.get() {
+            imp.text.replace(markup.to_string());
+            imp.markup.set(true);
             self.queue_resize();
         }
     }
@@ -333,16 +502,32 @@ impl FitLabel {
     /// its own spacing apart), where `key` is the label's ancestor in it.
     pub fn set_cell(
         &self,
-        grid: &gtk::Grid,
+        grid: &impl IsA<gtk::Widget>,
         key: &impl IsA<gtk::Widget>,
         cells: (usize, usize),
         at: (usize, usize),
     ) {
+        self.set_cell_of(grid, key, Rc::new(Cell::new(cells)), at, (1, 1));
+    }
+
+    /// [`FitLabel::set_cell`] for a grid whose rows and columns are only
+    /// known once all its cells are in: `cells` is read as the label is
+    /// drawn. The grid is a `gtk::Grid` or laid out by a
+    /// `gtk::GridLayout`; `span`: the rows and columns the cell is over.
+    pub fn set_cell_of(
+        &self,
+        grid: &impl IsA<gtk::Widget>,
+        key: &impl IsA<gtk::Widget>,
+        cells: Rc<Cell<(usize, usize)>>,
+        at: (usize, usize),
+        span: (usize, usize),
+    ) {
         self.imp().cell.replace(Some(CellAt {
-            grid: grid.downgrade(),
+            grid: grid.upcast_ref::<gtk::Widget>().downgrade(),
             key: key.upcast_ref::<gtk::Widget>().downgrade(),
             cells,
             at,
+            span,
         }));
         self.queue_draw();
     }
@@ -379,17 +564,18 @@ impl FitLabel {
     /// The size the text is set at in `width` (its font's own if it fits).
     fn fitted_size(&self, width: f32) -> f32 {
         let imp = self.imp();
-        let Some(size) = imp.font.borrow().as_ref().map(|f| f.size) else {
+        let font = imp.font.borrow();
+        let Some(font) = font.as_ref() else {
             return 15.0;
         };
-        let text = imp.text.borrow();
-        let (_, logical) = self.layout_at_size(size, &text, None).extents();
-        let full = px(logical.width());
-        if full > width && full > 0.0 {
-            (size * width / full).max(imp.min_size.get())
-        } else {
-            size
-        }
+        fitted_size(
+            &unhinted(self),
+            &imp.text.borrow(),
+            font,
+            width,
+            imp.min_size.get(),
+            imp.markup.get(),
+        )
     }
 
     fn layout_at(&self, width: Option<f32>) -> pango::Layout {
@@ -404,22 +590,20 @@ impl FitLabel {
     /// `text` at `size` in `font` (the label's own if none). DGMNB's text
     /// is unhinted: so is this.
     fn layout_at_size(&self, size: f32, text: &str, font: Option<&Font>) -> pango::Layout {
-        let context = self.pango_context();
-        let mut options = pangocairo::cairo::FontOptions::new().ok();
-        if let Some(o) = options.as_mut() {
-            o.set_hint_style(pangocairo::cairo::HintStyle::None);
-            o.set_hint_metrics(pangocairo::cairo::HintMetrics::Off);
-        }
-        pangocairo::functions::context_set_font_options(&context, options.as_ref());
-        let layout = pango::Layout::new(&context);
-        layout.set_text(text);
+        let context = unhinted(self);
         let own = self.imp().font.borrow();
-        if let Some(font) = font.or(own.as_ref()) {
-            let (fd, attrs) = pango_font(font, size);
-            layout.set_font_description(Some(&fd));
-            layout.set_attributes(Some(&attrs));
+        // Only the label's own text is ever markup: not the probe for its
+        // capitals, nor its prefix.
+        let markup =
+            self.imp().markup.get() && font.is_none() && *text == *self.imp().text.borrow();
+        match font.or(own.as_ref()) {
+            Some(font) => line_layout(&context, text, font, size, markup),
+            None => {
+                let layout = pango::Layout::new(&context);
+                layout.set_text(text);
+                layout
+            }
         }
-        layout
     }
 }
 

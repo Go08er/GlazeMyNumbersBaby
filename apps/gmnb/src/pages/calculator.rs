@@ -230,21 +230,6 @@ impl CalculatorPage {
             }
         });
 
-        {
-            let weak = Rc::downgrade(&page);
-            ctx.hub.subscribe(move |s| {
-                if let Some(p) = weak.upgrade() {
-                    p.display.set_scheme(*s);
-                    for k in p.keypads.borrow().values() {
-                        k.set_scheme(*s);
-                    }
-                    for k in p.flyouts.borrow().iter() {
-                        k.set_scheme(*s);
-                    }
-                }
-            });
-        }
-
         if let Some(state) = ctx
             .store
             .page_state(appcore::settings::CALCULATOR_PAGE)
@@ -278,7 +263,6 @@ impl CalculatorPage {
             }
             None => self.flyouts.borrow_mut().push(pad.clone()),
         }
-        pad.set_scheme(self.ctx.hub.scheme());
         self.ctx
             .hub
             .subscribe_style(&pad, |pad, style| pad.set_style(style));

@@ -72,7 +72,8 @@ window.gmnb headerbar {
   background-image: var(--gmnb-header-background-image);
 }
 
-calcdisplay {
+/* (Not a page's own line of a value: widgets/display.rs, `Display::line`.) */
+calcdisplay:not(.wc-line) {
   background-color: var(--gmnb-display-background-color);
   background-image: var(--gmnb-display-background-image);
   border-radius: var(--gmnb-display-radius);
@@ -104,11 +105,6 @@ window.gmnb headerbar button {
 
 button.wc-key {
   border: none;
-}
-
-button.wc-key label sup,
-button.wc-key label sub {
-  font-size: 70%;
 }
 
 /* control keys.number button.wc-key.wc-num active=.wc-flash,.keyboard-activating icon=pathicon */
@@ -1457,12 +1453,13 @@ label.wc-subresult {
 }
 /* end text */
 
-/* The results (widgets/fit.rs draws them at the style's font). */
-fitlabel.wc-date-result {
+/* The results (widgets/display.rs draws them at the style's font, or the
+   theme's display layer does). */
+calcdisplay.wc-date-result {
   color: var(--gmnb-window-color);
 }
 
-fitlabel.wc-date-result.wc-error {
+calcdisplay.wc-date-result.wc-error {
   color: var(--error-color);
 }
 
@@ -2800,13 +2797,14 @@ button.wc-icon-button {
   background-repeat: no-repeat;
 }
 
-/* The values (widgets/fit.rs draws them at the style's font). */
-fitlabel.wc-conv-value {
+/* The values (widgets/display.rs draws them at the style's font, or the
+   theme's display layer does). */
+calcdisplay.wc-conv-value {
   color: var(--gmnb-window-color);
 }
 
 /* A value the keyboard's focus is on (Tab; Space or Enter picks it). */
-.wc-conv-field fitlabel.wc-conv-value:focus-visible {
+.wc-conv-field calcdisplay.wc-conv-value:focus-visible {
   outline-style: solid;
   outline-width: var(--gmnb-converter-value-focus-width);
   outline-color: var(--gmnb-converter-value-focus-color);
