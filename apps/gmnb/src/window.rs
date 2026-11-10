@@ -540,7 +540,9 @@ impl WindowControls {
 /// where the font puts them. (GTK's automatic choice at scale 1 hints them
 /// to the pixel grid, which moves and stretches every glyph by up to a
 /// pixel: docs/theming.md, "Text in its place".) Set for the app, over the
-/// desktop's own settings.
+/// desktop's own settings: a widget's own font options leave GTK's
+/// automatic rendering rounding glyphs to whole pixels, which the
+/// chrome's labels can't take.
 pub fn match_text_rendering() {
     let Some(s) = gtk::Settings::default() else {
         return;
@@ -758,10 +760,14 @@ impl Window {
         let title = gtk::Label::new(None);
         title.add_css_class("wc-title");
         title.set_xalign(0.0);
-        title.set_margin_start(
-            (wm::HEADER_BUTTON_STEP - ctl::ICON_BUTTON + wm::HEADER_TITLE_GAP) as i32,
-        );
-        start.append(&title);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let gap = wm::HEADER_BUTTON_STEP - ctl::ICON_BUTTON + wm::HEADER_TITLE_GAP;
+        title.set_margin_start(gap as i32);
+        // DGMNB's room for it, whatever the window's width: in the smallest
+        // window it runs under the buttons, as DGMNB's, rather than widen it.
+        let title_room = crate::widgets::width_bin::Strip::new();
+        title_room.append(&title, false, gap + wm::HEADER_TITLE_W, 0.0);
+        start.append(&title_room);
         let header_end = gtk::Box::new(gtk::Orientation::Horizontal, wm::HEADER_BUTTON_GAP as i32);
         header_end.set_margin_end((wm::HEADER_BUTTON_GAP + wm::HEADER_CONTROLS_GAP) as i32);
         header_end.set_valign(gtk::Align::Center);
