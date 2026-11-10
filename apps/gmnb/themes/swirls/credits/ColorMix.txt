@@ -1,21 +1,12 @@
 The swirl behind the Swirls theme
 
-The field this theme draws is the background of s0y b0y, the homepage
-of GMNB's owner, used here at the owner's wish. Its three colours
-(#ffcf29, #0ed6f0, #010609), its panels, its hover and its focus ring are
-that page's too.
+The field this theme draws is the background of s0y b0y, the homepage of GMNB's owner, used here at the owner's wish. Its three colours (#ffcf29, #0ed6f0, #010609), its panels, its hover and its focus ring are that page's too.
 
-The page's swirl is in turn adapted from the ColorMix animation of ly, a
-display manager for the console:
+The page's swirl is in turn adapted from the ColorMix animation of ly, a display manager for the console:
 
     ly, src/animations/ColorMix.zig
     https://github.com/fairyglade/ly
 
-ly is released under the WTFPL, version 2 (the file license.md in its
-repository; http://www.wtfpl.net/), which permits any use of it,
-modified or not, without conditions.
+ly is released under the WTFPL, version 2 (the file license.md in its repository; http://www.wtfpl.net/), which permits any use of it, modified or not, without conditions.
 
-What this theme takes from it is the arithmetic: a coordinate bent three
-times by sines and cosines of itself, and its length pushed through three
-bands of colour. The theme works that out in Luau on a coarse grid, and
-the app colours it (docs/theming-media.md, "Fields").
+What this theme takes from it is the arithmetic: a coordinate bent three times by sines and cosines of itself, and its length pushed through three bands of colour. The theme works that out in Luau on a coarse grid, and the app colours it (docs/theming-media.md, "Fields").
