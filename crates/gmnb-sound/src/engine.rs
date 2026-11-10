@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use crate::bank::{Budget, SoundSource, ThemeSounds, dump_name, prepare};
 use crate::mixer::{MixStats, Mixer, PlayParams, STOP_FADE};
-use crate::pulse::{self, Identity, Output, QUIET_FRAMES, Shared, lock};
+use crate::pulse::{self, Hangup, Identity, Output, QUIET_FRAMES, Shared, lock};
 use crate::recipe::limits;
 use crate::table::SoundId;
 
@@ -334,6 +334,8 @@ struct Link {
     shared: Mutex<Option<Arc<Shared>>>,
     /// Why there is no sound system, when there is none.
     reason: Mutex<String>,
+    /// Gets the thread back from a server that is slow to greet it.
+    hangup: Hangup,
 }
 
 struct PlayMsg {
@@ -540,6 +542,9 @@ impl SoundEngine {
     fn stop(&mut self) {
         if let Some(w) = self.worker.take() {
             w.tell(Ctl::Quit);
+            // A connection still being opened is hung up on: the thread
+            // is not held by a server that greets it a byte at a time.
+            w.link.hangup.hang_up();
             self.retired.push(w);
         }
         self.reap();
@@ -734,6 +739,7 @@ fn spawn(settings: &Settings, counters: &Arc<Counters>) -> Option<Worker> {
         tid: AtomicU32::new(0),
         shared: Mutex::new(None),
         reason: Mutex::new(String::new()),
+        hangup: Hangup::default(),
     });
     let (settings2, counters2, link2) = (settings.clone(), counters.clone(), link.clone());
     let join = std::thread::Builder::new()
@@ -950,6 +956,7 @@ impl Run {
                 &self.settings.identity,
                 &self.shared,
                 self.settings.server_limit,
+                &self.link.hangup,
             )
         });
         match opened {
@@ -957,6 +964,8 @@ impl Run {
                 self.out = Out::Server(out);
                 self.set_status(Status::Ready, "");
             }
+            // Hung up on, to stop: nothing to say.
+            Err(_) if self.link.hangup.asked() => {}
             Err(reason) => self.set_status(Status::Unavailable, &reason),
         }
     }
