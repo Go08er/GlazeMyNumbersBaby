@@ -1023,6 +1023,124 @@ fn host_tables_are_read_only_to_scripts() {
     assert!(ctx.table().is_readonly());
 }
 
+// ---- The host's allowance --------------------------------------------------
+
+/// Fills the theme's heap to its cap with tables of about 1 KiB, lets go
+/// of the last `spare` of them (the collection after the load frees them)
+/// and keeps the rest. The chunk returns a function that allocates 16 KiB
+/// more.
+const NEARLY_FULL: &str = "
+    local spare = ...
+    hold = table.create(12000)
+    local n = 0
+    pcall(function()
+        while true do
+            hold[n + 1] = table.create(60, n)
+            n += 1
+        end
+    end)
+    for i = n - spare + 1, n do
+        hold[i] = nil
+    end
+    return function() local t = table.create(1000, 0) return #t end";
+
+fn nearly_full(e: &Engine, spare: u32) -> FunctionHandle {
+    let src = NEARLY_FULL.replace("...", &spare.to_string());
+    hook(e, &src)
+}
+
+/// A host table of `n` numbers: 16 bytes each, in an array that doubles.
+fn host_numbers(e: &Engine, n: i64) -> Result<gmnb_theme::HostTable, ThemeError> {
+    let t = e.host_table(0, 4)?;
+    e.fill(&t, |t| {
+        for i in 1..=n {
+            t.raw_seti(i as usize, i as f64)?;
+        }
+        Ok(())
+    })?;
+    Ok(t)
+}
+
+/// A refill used to lift the heap cap and leave the heap above it, so the
+/// theme's next allocation, however small, was a (fatal) memory error.
+#[test]
+fn a_host_refill_never_costs_the_theme_its_room() {
+    let e = roomy();
+    let more = nearly_full(&e, 256);
+    let room = e.limits().memory - e.used_memory();
+    assert!(room < 512 << 10, "{room} bytes left");
+    // Far more than the theme has left.
+    let table = host_numbers(&e, 20_000).unwrap();
+    let held = e.host_memory();
+    // 20 000 numbers of 16 bytes, in an array that doubled to 32 768.
+    assert!(
+        (20_000 * 16..=40_000 * 16).contains(&held),
+        "the host holds {held} bytes"
+    );
+    assert!(e.used_memory() > e.limits().memory);
+    assert_eq!(e.call(&more, Budget::Style, ()), Ok(ThemeValue::Int(1000)));
+    assert!(!e.is_dead());
+    // A refill in place takes no more.
+    for round in 0..50 {
+        e.fill(&table, |t| t.raw_seti(1 + round, 0.5)).unwrap();
+    }
+    assert_eq!(e.host_memory(), held);
+    let none = hook(&e, "return function(t) return t[1] end");
+    assert_eq!(
+        e.call(&none, Budget::Style, table.table()),
+        Ok(ThemeValue::Number(0.5))
+    );
+}
+
+/// The allowance is the host's: with or without host tables, the theme's
+/// own code gets `Limits::memory` and no more.
+#[test]
+fn the_hosts_allowance_is_not_the_themes() {
+    const FILL: &str = "
+        hold = table.create(12000)
+        local n = 0
+        local ok = pcall(function()
+            while true do
+                n += 1
+                hold[n] = table.create(60, n)
+            end
+        end)
+        return ok";
+    for host in [0, 20_000] {
+        let e = roomy();
+        let _table = host_numbers(&e, host).unwrap();
+        // The theme caught its own memory error: the cap held.
+        assert_eq!(load(&e, FILL), Ok(ThemeValue::Bool(false)), "{host}");
+        let own = e.used_memory() - e.host_memory();
+        let cap = e.limits().memory;
+        assert!(own <= cap, "{host}: the theme holds {own} bytes");
+        // (Luau takes its memory a page at a time.)
+        assert!(own > cap - (256 << 10), "{host}: the theme holds {own} bytes");
+    }
+}
+
+#[test]
+fn a_host_overrun_is_a_limit_and_not_fatal() {
+    let long = Duration::from_secs(5);
+    let e = Engine::new(Limits {
+        host_memory: 64 << 10,
+        load: long,
+        style: long,
+        ..Limits::default()
+    })
+    .unwrap();
+    let more = nearly_full(&e, 256);
+    match host_numbers(&e, 20_000) {
+        Err(ThemeError::Limit(m)) => assert!(m.contains("the allowance is 65536"), "{m}"),
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    assert!(!e.is_dead());
+    // Within the allowance, the theme still has its room.
+    let _small = host_numbers(&e, 100).unwrap();
+    assert!(e.host_memory() <= 64 << 10);
+    assert_eq!(e.call(&more, Budget::Style, ()), Ok(ThemeValue::Int(1000)));
+}
+
 /// 1000 frame calls, each refilling a 300-entry context in place and
 /// running a hook that reads all of it: the mean refill, the mean call and
 /// the worst of the two together.

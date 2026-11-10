@@ -51,6 +51,11 @@
 //! reaching it is fatal ([`ThemeError::is_fatal`]): the engine stops, and
 //! the host unloads the theme. A memory error a script catches itself with
 //! `pcall` never reaches the host: the cap held, and the theme goes on.
+//! The tables the host builds for a call ([`HostTable`]) are counted apart,
+//! in a Luau memory category of their own, and have their own allowance
+//! ([`Limits::host_memory`]) on top of the cap: host work never pushes a
+//! theme into a memory error, and the allowance is never the theme's to
+//! use.
 //!
 //! Nothing a script does panics or aborts the process: errors come back as
 //! a [`ThemeError`], with messages and tracebacks capped in length.
@@ -59,16 +64,28 @@
 //! interrupt's reach: they must bound their own work, and must not call
 //! script functions except through [`Engine::call`].
 
+pub mod check;
 mod convert;
+pub mod css;
 mod engine;
 mod error;
+pub mod schema;
+pub mod states;
+pub mod style;
+pub mod tokens;
+pub mod types;
 mod value;
+pub mod writer;
 
 use std::time::Duration;
 
+pub use check::{Note, Notes};
 pub use engine::{Engine, HostTable, Log, Span};
 pub use error::ThemeError;
+pub use style::{Resolved, Style, resolve};
+pub use tokens::{Ctx, OptionValue, Tokens};
 pub use value::{FunctionHandle, ThemeValue};
+pub use writer::{Update, Writer};
 
 /// The Luau binding, for the API layer's globals and argument tables.
 pub use mlua;
@@ -78,8 +95,12 @@ pub use mlua;
 /// cut (only log lines are cut short).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Limits {
-    /// The Luau heap, in bytes.
+    /// The Luau heap, in bytes: what the theme's own code allocates.
     pub memory: usize,
+    /// What the host's own tables ([`HostTable`]: a call's `ctx`, a
+    /// frame) may hold in the same heap, on top of [`Limits::memory`], in
+    /// bytes.
+    pub host_memory: usize,
     /// Running the theme file's main chunk.
     pub load: Duration,
     /// A `style` call.
@@ -122,6 +143,7 @@ impl Default for Limits {
     fn default() -> Self {
         Limits {
             memory: 8 << 20,
+            host_memory: 1 << 20,
             load: Duration::from_millis(250),
             style: Duration::from_millis(50),
             frame: Duration::from_millis(8),
