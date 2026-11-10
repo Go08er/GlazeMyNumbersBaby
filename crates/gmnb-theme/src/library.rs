@@ -8,13 +8,12 @@
 //! table) and return `Rgba` tables.
 //!
 //! The drawing constructors (`gmnb.path`, `gmnb.svg_path`, `gmnb.image`,
-//! `gmnb.noise`) belong to the draw API: [`register`] takes the function
-//! that adds them, and [`placeholder_drawing`] adds stand-ins that only
-//! let a theme load.
+//! `gmnb.noise`) belong to the draw API ([`crate::draw`]): [`register`]
+//! takes the function that adds them.
 
 use appcore::color::{self, Rgb};
 use appcore::palette::Palette;
-use mlua::{Function, Lua, MultiValue, Table, Value};
+use mlua::{Function, Lua, Table, Value};
 
 use crate::check::parse_hex;
 use crate::types::{Rgba, TRANSPARENT};
@@ -220,52 +219,10 @@ return {
     out_back = function(p) return 1 + 2.70158 * (p - 1) ^ 3 + 1.70158 * (p - 1) ^ 2 end,
 }";
 
-/// Stand-ins for the draw API's constructors, so that a theme which makes
-/// its paths and pictures as it loads does load: a path whose methods do
-/// nothing, and pictures that are only a size.
-pub fn placeholder_drawing(lua: &Lua, gmnb: &Table) -> mlua::Result<()> {
-    let path = lua.create_function(|lua, _: MultiValue| {
-        let p = lua.create_table()?;
-        let chain = lua.create_function(|_, args: MultiValue| Ok(args.into_iter().next()))?;
-        for name in [
-            "move_to",
-            "line_to",
-            "quad_to",
-            "curve_to",
-            "close",
-            "rect",
-            "rounded_rect",
-            "circle",
-        ] {
-            p.raw_set(name, chain.clone())?;
-        }
-        Ok(p)
-    })?;
-    gmnb.raw_set("path", path.clone())?;
-    gmnb.raw_set("svg_path", path)?;
-    let picture = |lua: &Lua, size: f64| -> mlua::Result<Table> {
-        let t = lua.create_table()?;
-        t.raw_set("width", size)?;
-        t.raw_set("height", size)?;
-        Ok(t)
-    };
-    gmnb.raw_set(
-        "image",
-        lua.create_function(move |lua, _: MultiValue| picture(lua, 0.0))?,
-    )?;
-    gmnb.raw_set(
-        "noise",
-        lua.create_function(move |lua, spec: Value| {
-            let size = match &spec {
-                Value::Table(t) => match t.raw_get::<Value>("size")? {
-                    Value::Nil => 128.0,
-                    v => number("noise", &v)?.clamp(1.0, 512.0),
-                },
-                _ => 128.0,
-            };
-            picture(lua, f64::from(size))
-        })?,
-    )?;
+/// For an engine that draws nothing (a bare one, in a test): adds no
+/// drawing constructors. A theme's own engine gets the real ones
+/// ([`crate::draw::Api`]).
+pub fn without_drawing(_: &Lua, _: &Table) -> mlua::Result<()> {
     Ok(())
 }
 

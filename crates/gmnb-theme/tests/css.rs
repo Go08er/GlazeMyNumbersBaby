@@ -199,7 +199,7 @@ fn the_base_looks_properties() {
 #[test]
 fn a_themes_values_as_css() {
     let engine = Engine::with_globals(Limits::default(), |lua| {
-        gmnb_theme::library::register(lua, gmnb_theme::library::placeholder_drawing)
+        gmnb_theme::library::register(lua, gmnb_theme::library::without_drawing)
     })
     .unwrap();
     let value = engine
@@ -276,7 +276,7 @@ fn a_themes_values_as_css() {
 #[test]
 fn no_theme_string_reaches_the_stylesheet_as_text() {
     let engine = Engine::with_globals(Limits::default(), |lua| {
-        gmnb_theme::library::register(lua, gmnb_theme::library::placeholder_drawing)
+        gmnb_theme::library::register(lua, gmnb_theme::library::without_drawing)
     })
     .unwrap();
     let value = engine

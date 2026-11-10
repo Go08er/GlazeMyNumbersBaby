@@ -292,6 +292,18 @@ impl Engine {
         result
     }
 
+    /// Counts a failure the host found in what a hook did after its call
+    /// returned (a frame over a draw cap), as a failed call is counted:
+    /// after [`Limits::strikes`] of them the hook is disabled.
+    pub fn strike(&self, hook: &FunctionHandle) {
+        let h = &hook.0;
+        let strikes = h.strikes.get().saturating_add(1);
+        h.strikes.set(strikes);
+        if strikes >= self.limits.strikes {
+            h.disabled.set(true);
+        }
+    }
+
     /// Converts a Luau value (raw reads: no script code runs).
     pub fn convert(&self, value: Value) -> Result<ThemeValue, ThemeError> {
         self.alive()?;

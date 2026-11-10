@@ -67,9 +67,15 @@
 pub mod check;
 mod convert;
 pub mod css;
+pub mod draw;
 mod engine;
 mod error;
+pub mod events;
+pub mod layer;
 pub mod library;
+pub mod path;
+pub mod picture;
+pub mod sched;
 pub mod schema;
 pub mod states;
 pub mod style;
@@ -82,6 +88,7 @@ pub mod writer;
 use std::time::Duration;
 
 pub use check::{Note, Notes};
+pub use draw::{DisplayList, DrawLimits, Op, TextMeasure};
 pub use engine::{Engine, HostTable, Log, Span};
 pub use error::ThemeError;
 pub use style::{Resolved, Style, resolve};
@@ -139,6 +146,8 @@ pub struct Limits {
     pub string_bytes: usize,
     /// All strings and map keys of a converted tree together, in bytes.
     pub total_string_bytes: usize,
+    /// The draw API's caps.
+    pub draw: DrawLimits,
 }
 
 impl Default for Limits {
@@ -163,6 +172,7 @@ impl Default for Limits {
             nodes: 20_000,
             string_bytes: 4 << 10,
             total_string_bytes: 1 << 20,
+            draw: DrawLimits::default(),
         }
     }
 }
