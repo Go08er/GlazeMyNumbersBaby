@@ -5,7 +5,7 @@ written against is [docs/theming.md](../../../docs/theming.md).
 
 | Folder | What it is |
 |---|---|
-| `aurora/` | The look GMNB had up to 0.2, grown since: an aurora behind glass keys, in seven palettes. It uses every part of the API (style, three draw layers, options with drawn previews, its own font), and works its colours out from each palette so that all of them stay readable. |
+| `aurora/` | The look GMNB had up to 0.2, grown since: an aurora behind glass keys, in seven palettes. It uses every part of the API (style, three draw layers, options with drawn previews, its own font, sounds), and works its colours out from each palette so that all of them stay readable. Its sounds are glass and breath, synthesised from two recipes, with a chord for each palette. |
 | `mono/` | The base look with a different accent, corners and typeface, in twenty lines. Start here. |
 
 GMNB's base look is not a theme. It is what a theme that returns `{}` looks
@@ -34,3 +34,9 @@ drift, grain, pulses, ripples, pointer light, key cascade and every
 effect of its readout are in its `theme.luau`. Pictures from files
 (`gmnb.image`) are sized and counted but not drawn yet: decoding them
 comes with the media chapter's code.
+
+Sounds are declared and checked (`sounds`, `sound`, `gmnb.synth`), and the
+engine that plays them is built (`crates/gmnb-sound`), but the app does
+not hand it a theme's events yet. Until it does, Aurora's sounds can be
+rendered to WAV files, measured and drawn without the app:
+[Designing sounds](../../../docs/theming-media.md#designing-sounds-a-few-rules-that-work).
