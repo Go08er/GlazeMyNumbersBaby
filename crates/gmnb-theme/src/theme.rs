@@ -436,6 +436,10 @@ pub struct ThemeDef {
     pub style: Option<FunctionHandle>,
     /// By name ([`LAYERS`]).
     pub layers: BTreeMap<&'static str, Layer>,
+    /// Which sound for which event ([`crate::sound`]).
+    pub sounds: gmnb_sound::SoundTable,
+    /// `sound(event, ctx)`: what to play for one event.
+    pub sound: Option<FunctionHandle>,
 }
 
 fn text_field(
@@ -703,7 +707,7 @@ fn parse_layer(v: &ThemeValue, path: &str, notes: &mut Notes) -> Layer {
 /// Checks what `theme.luau` returned. Only what makes a theme unusable is
 /// an error; the rest is noted and left out.
 pub fn parse(v: &ThemeValue, notes: &mut Notes) -> Result<ThemeDef, LoadError> {
-    const KEYS: [&str; 11] = [
+    const KEYS: [&str; 13] = [
         "api",
         "name",
         "description",
@@ -715,6 +719,8 @@ pub fn parse(v: &ThemeValue, notes: &mut Notes) -> Result<ThemeDef, LoadError> {
         "options",
         "style",
         "layers",
+        "sounds",
+        "sound",
     ];
     let ThemeValue::Map(m) = v else {
         return Err(LoadError::NotATable);
@@ -819,6 +825,8 @@ pub fn parse(v: &ThemeValue, notes: &mut Notes) -> Result<ThemeDef, LoadError> {
         }
         Some(_) => notes.push("layers", "expected a table of layers"),
     }
+    def.sounds = crate::sound::parse_table(v.get("sounds"), notes);
+    def.sound = function_field(v, "sound", "", notes);
     Ok(def)
 }
 

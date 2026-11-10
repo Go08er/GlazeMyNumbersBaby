@@ -229,6 +229,13 @@ fn activate(app: &adw::Application) {
             }
         });
     }
+    // Dev/screenshot hook: About, as Settings' row opens it.
+    if std::env::var("GMNB_PREFS").as_deref() == Ok("about") {
+        let w = win.clone();
+        glib::timeout_add_local_once(Duration::from_millis(300), move || {
+            prefs::about(&w.widget(), &w.ctx().hub.credits());
+        });
+    }
     if std::env::var("GMNB_COMPACT").as_deref() == Ok("1") {
         let w = win.clone();
         glib::timeout_add_local_once(Duration::from_millis(300), move || {
@@ -256,9 +263,34 @@ fn activate(app: &adw::Application) {
             eprintln!("theme hooks: {:?}", hub.hooks());
         });
     }
+    if let Ok(class) = std::env::var("GMNB_FOCUS") {
+        focus_by_class(win.widget(), class);
+    }
     if let Ok(path) = std::env::var("GMNB_SCREENSHOT") {
         schedule_screenshot(win.widget(), PathBuf::from(path));
     }
+}
+
+/// Dev/screenshot hook: `GMNB_FOCUS=<css class>` gives the keyboard's
+/// focus, ring shown, to the first widget with that class, as Tab to it
+/// would (DGMNB: `DGMNB_KEYS` with `{tab}`s).
+fn focus_by_class(win: adw::ApplicationWindow, class: String) {
+    glib::timeout_add_local_once(Duration::from_millis(600), move || {
+        let mut todo = vec![win.clone().upcast::<gtk::Widget>()];
+        while let Some(w) = todo.pop() {
+            // (A text field takes it in its text, which grab_focus says.)
+            if w.has_css_class(&class) && w.grab_focus() {
+                win.set_focus_visible(true);
+                return;
+            }
+            let mut child = w.last_child();
+            while let Some(c) = child {
+                child = c.prev_sibling();
+                todo.push(c);
+            }
+        }
+        eprintln!("GMNB_FOCUS: nothing focusable with class {class}");
+    });
 }
 
 /// Whether another GMNB owns the application's bus name.

@@ -13,6 +13,7 @@ members = [
     "crates/appcore",
     "crates/gmnb-theme",
     "crates/gmnb-media",
+    "crates/gmnb-sound",
     "apps/gmnb",
     "apps/gmnb-launcher",
     "apps/dgmnb",
@@ -37,6 +38,7 @@ calcvm = { path = "crates/calcvm" }
 appcore = { path = "crates/appcore" }
 gmnb-theme = { path = "crates/gmnb-theme" }
 gmnb-media = { path = "crates/gmnb-media" }
+gmnb-sound = { path = "crates/gmnb-sound" }
 
 # Arbitrary-precision math is painfully slow unoptimised; keep tests usable.
 [profile.dev]

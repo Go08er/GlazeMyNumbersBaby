@@ -18,7 +18,7 @@ use gtk::glib;
 use super::{Ctx, Page};
 use crate::widgets::day_grid::DayGrid;
 use crate::widgets::display::{Change, Display};
-use crate::widgets::fit::{Align, FitLabel, MaxWidth, Texts};
+use crate::widgets::fit::{Align, FitLabel, MaxWidth, Texts, rest_line};
 use crate::widgets::icon::PathIcon;
 use appcore::modes::ViewMode;
 
@@ -38,24 +38,21 @@ struct DateButton {
     /// The button at its most width, from the left.
     bin: MaxWidth,
     button: gtk::MenuButton,
-    label: gtk::Label,
+    /// "Tuesday, November 10, 2026  ▾", drawn: the button is named by its
+    /// caption and the date ([`DateButton::shower`]).
+    label: FitLabel,
+    /// The caption over it ("From").
+    caption: Rc<RefCell<String>>,
     days: Rc<DayGrid>,
 }
 
-fn date_button() -> DateButton {
-    // "Tuesday, November 10, 2026  ▾", centred, as DGMNB's: the arrow is
-    // drawn, not read (the date alone names the button with its caption).
-    let label = gtk::Label::new(None);
-    // A narrow window cuts it rather than overflow (DGMNB shrinks it).
-    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    let arrow = gtk::Label::builder()
-        .label("  ▾")
-        .accessible_role(gtk::AccessibleRole::Presentation)
-        .build();
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    content.set_halign(gtk::Align::Center);
-    content.append(&label);
-    content.append(&arrow);
+fn date_button(texts: &Texts) -> DateButton {
+    // "Tuesday, November 10, 2026  ▾", centred and shrunk to fit, as
+    // DGMNB sets it: the arrow is drawn, not read.
+    let label = FitLabel::drawn();
+    label.set_align(Align::Center);
+    label.set_hexpand(true);
+    texts.add(&label, "date.field", txt::BUTTON_MIN_SIZE);
     // Not GTK's calendar, which assistive technology can't read a day of:
     // each day a named button (DayGrid).
     let days = DayGrid::new();
@@ -85,7 +82,7 @@ fn date_button() -> DateButton {
         });
     }
     let button = gtk::MenuButton::builder()
-        .child(&content)
+        .child(&label)
         .popover(&popover)
         .css_classes(["wc-field"])
         .build();
@@ -95,25 +92,32 @@ fn date_button() -> DateButton {
         bin,
         button,
         label,
+        caption: Rc::default(),
         days,
     }
 }
 
 impl DateButton {
-    /// Name the picker by its caption and the date it shows ("From Sunday,
-    /// October 4, 2026"), as upstream's CalendarDatePicker reads its header
-    /// and date. The menu button's inner toggle is what takes focus, so it
-    /// gets the same relation.
+    /// The picker is named by its caption and the date it shows ("From
+    /// Sunday, October 4, 2026"), as upstream's CalendarDatePicker reads
+    /// its header and date (and DGMNB's node).
     fn labelled_by(&self, caption: &FitLabel) {
-        let by: [&gtk::Accessible; 2] = [caption.upcast_ref(), self.label.upcast_ref()];
-        let relation = [gtk::accessible::Relation::LabelledBy(&by)];
-        self.button.update_relation(&relation);
-        let mut child = self.button.first_child();
-        while let Some(c) = child {
-            if c.is::<gtk::ToggleButton>() {
-                c.update_relation(&relation);
+        self.caption.replace(caption.text());
+    }
+
+    /// What shows a date ("Sunday, October 4, 2026") on the button and
+    /// names the picker by it: the menu button, and the toggle inside it
+    /// that takes focus. (The button weakly: it owns the popover that
+    /// owns the days, whose callbacks hold this.)
+    fn shower(&self) -> impl Fn(&str) + use<> {
+        let (label, caption) = (self.label.clone(), self.caption.clone());
+        let button = self.button.downgrade();
+        move |date| {
+            label.set_text(&format!("{date}  ▾"));
+            if let Some(button) = button.upgrade() {
+                let name = format!("{} {date}", caption.borrow());
+                crate::a11y::name_menu_button(&button, &name);
             }
-            child = c.next_sibling();
         }
     }
 }
@@ -176,8 +180,12 @@ fn step_button(button: &gtk::Widget, icon: &str) -> Option<PathIcon> {
     Some(icon)
 }
 
-/// A year, month or day box: its caption over DGMNB's [−][box][+].
-fn spin(label: &str, texts: &Texts) -> (gtk::Box, gtk::SpinButton, Vec<PathIcon>) {
+/// A year, month or day box: its caption over DGMNB's [−][box][+]; and
+/// the line its number is set in at rest.
+fn spin(
+    label: &str,
+    texts: &Texts,
+) -> (gtk::Box, gtk::SpinButton, Vec<PathIcon>, Option<FitLabel>) {
     let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let caption = section_label(label, texts);
     below(&caption, md::OFFSET_LINE_TOP - md::OFFSET_LABEL_H);
@@ -203,8 +211,8 @@ fn spin(label: &str, texts: &Texts) -> (gtk::Box, gtk::SpinButton, Vec<PathIcon>
         }
     }
     let mut icons = Vec::new();
-    if let (Some(text), [down, up]) = (text, buttons.as_slice()) {
-        down.insert_before(&spin, Some(&text));
+    if let (Some(text), [down, up]) = (&text, buttons.as_slice()) {
+        down.insert_before(&spin, Some(text));
         let inset = md::OFFSET_FIELD_INSET as i32;
         text.set_margin_start(inset);
         text.set_margin_end(inset);
@@ -217,8 +225,21 @@ fn spin(label: &str, texts: &Texts) -> (gtk::Box, gtk::SpinButton, Vec<PathIcon>
     spin.update_relation(&[gtk::accessible::Relation::LabelledBy(&[
         caption.upcast_ref()
     ])]);
-    b.append(&spin);
-    (b, spin, icons)
+    // At rest its number is set as DGMNB's field sets it (fit.rs
+    // `rest_line`); the box's own shows while it has the focus.
+    let line = match text.and_downcast::<gtk::Text>() {
+        Some(text) => {
+            let rest = rest_line(&spin, &text, &text, "", ctl::FIELD_PAD_X, "wc-spin-rest");
+            texts.add(&rest.line, "field", 1.0);
+            b.append(&rest.overlay);
+            Some(rest.line)
+        }
+        None => {
+            b.append(&spin);
+            None
+        }
+    };
+    (b, spin, icons, line)
 }
 
 /// A result (DGMNB's 28 px line, shrunk to fit): a readout to a theme's
@@ -229,6 +250,18 @@ fn result_line() -> Display {
     r.set_size_request(-1, md::RESULT_H as i32);
     r.set_hexpand(true);
     r
+}
+
+/// What holds a result: its caption, the result and the line under it,
+/// one under the other as they were. `date.result_panel` styles it; in the
+/// base look it is nothing and takes no room.
+fn result_panel(parts: &[&gtk::Widget]) -> gtk::Box {
+    let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    panel.add_css_class("wc-result-panel");
+    for part in parts {
+        panel.append(*part);
+    }
+    panel
 }
 
 /// The `{ size, font }` at `path`.
@@ -292,8 +325,8 @@ impl DatePage {
         let caption_gap = md::FIELD_TOP - md::FIELD_LABEL_H;
 
         // --- difference mode
-        let from = date_button();
-        let to = date_button();
+        let from = date_button(&texts);
+        let to = date_button(&texts);
         let diff_result = result_line();
         let diff_days = gtk::Label::new(None);
         diff_days.set_xalign(0.0);
@@ -315,13 +348,15 @@ impl DatePage {
         below(&to.bin, md::STEP_TO_LABEL - md::FIELD_TOP - md::FIELD_H);
         let diff_caption = section_label(S::DATE_DIFFERENCE_LABEL, &texts);
         below(&diff_caption, md::STEP_LABEL_RESULT - md::FIELD_LABEL_H);
-        diff_box.append(&diff_caption);
-        diff_box.append(&diff_result);
         below(&diff_result, md::STEP_RESULT_NEXT - md::RESULT_H);
-        diff_box.append(&diff_days);
+        diff_box.append(&result_panel(&[
+            diff_caption.upcast_ref(),
+            diff_result.upcast_ref(),
+            diff_days.upcast_ref(),
+        ]));
 
         // --- add/subtract mode
-        let start = date_button();
+        let start = date_button(&texts);
         below(&start.bin, md::STEP_FROM_OP - md::FIELD_TOP - md::FIELD_H);
         let op = adw::ToggleGroup::new();
         op.add(toggle("add", S::ADD_OPTION, &texts));
@@ -336,14 +371,36 @@ impl DatePage {
         op.set_size_request(-1, md::OP_SWITCH_H as i32);
         let op_bin = MaxWidth::new(&op, md::OP_SWITCH_W as i32);
         below(&op_bin, md::STEP_OP_OFFSETS - md::OP_SWITCH_H);
-        let (yb, years, yi) = spin(S::YEARS_LABEL, &texts);
-        let (mb, months, mi) = spin(S::MONTHS_LABEL, &texts);
-        let (db, days, di) = spin(S::DAYS_LABEL, &texts);
+        let (yb, years, yi, yl) = spin(S::YEARS_LABEL, &texts);
+        let (mb, months, mi, ml) = spin(S::MONTHS_LABEL, &texts);
+        let (db, days, di, dl) = spin(S::DAYS_LABEL, &texts);
         let spins = gtk::Box::new(gtk::Orientation::Horizontal, md::OFFSETS_GAP as i32);
         spins.set_homogeneous(true);
         spins.append(&yb);
         spins.append(&mb);
         spins.append(&db);
+        // DGMNB's three cells fall on fractions of a pixel, the toolkit's
+        // boxes on whole ones: each number is set where DGMNB's field puts
+        // it, past its step button and the field's inset and padding.
+        for (i, line) in [yl, ml, dl].into_iter().enumerate() {
+            let (Some(line), row) = (line, spins.downgrade()) else {
+                continue;
+            };
+            line.set_shift(move |l| {
+                let Some(row) = row.upgrade() else {
+                    return (0.0, 0.0);
+                };
+                let gap = md::OFFSETS_GAP;
+                let cell = (row.width() as f32 - 2.0 * gap) / 3.0;
+                let want = i as f32 * (cell + gap)
+                    + md::OFFSET_STEP_W
+                    + md::OFFSET_FIELD_INSET
+                    + ctl::FIELD_PAD_X;
+                let at = gtk::graphene::Point::new(0.0, 0.0);
+                let have = l.compute_point(&row, &at).map_or(want, |p| p.x());
+                (want - have, 0.0)
+            });
+        }
         // The toolkit's boxes need room for their largest value: in a
         // window narrower than that they are cut at the right rather than
         // widen the page.
@@ -371,8 +428,10 @@ impl DatePage {
         add_box.append(&spins_bin);
         let date_caption = section_label(S::DATE_LABEL, &texts);
         below(&date_caption, md::STEP_LABEL_RESULT - md::FIELD_LABEL_H);
-        add_box.append(&date_caption);
-        add_box.append(&date_result);
+        add_box.append(&result_panel(&[
+            date_caption.upcast_ref(),
+            date_result.upcast_ref(),
+        ]));
 
         let stack = gtk::Stack::new();
         stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
@@ -452,17 +511,16 @@ impl DatePage {
             let state = state.clone();
             // What the shown result was when it was last told.
             let told = RefCell::new(None::<String>);
-            let (from_l, to_l, start_l) =
-                (from.label.clone(), to.label.clone(), start.label.clone());
+            let (from_b, to_b, start_b) = (from.shower(), to.shower(), start.shower());
             let (diff_result, diff_days, date_result) =
                 (diff_result.clone(), diff_days.clone(), date_result.clone());
             // `change`: how the results have changed, for a theme's
             // `display` layer (and its `result` event).
             Rc::new(move |change: Change| {
                 let st = state.borrow();
-                from_l.set_text(&datecalc::format_long_date(&st.from_date()));
-                to_l.set_text(&datecalc::format_long_date(&st.to_date()));
-                start_l.set_text(&datecalc::format_long_date(&st.start_date()));
+                from_b(&datecalc::format_long_date(&st.from_date()));
+                to_b(&datecalc::format_long_date(&st.to_date()));
+                start_b(&datecalc::format_long_date(&st.start_date()));
                 diff_result.set_value(st.str_date_diff_result(), change, false);
                 diff_result.update_property(&[gtk::accessible::Property::Label(
                     st.str_date_diff_result_automation_name(),

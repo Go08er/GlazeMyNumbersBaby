@@ -525,18 +525,21 @@ about it:
 | Outlines | Unhinted, grey levels (`text.rs`) | At scale 1 GTK's automatic font rendering hints them: every glyph moved and stretched to the pixel grid, by up to a pixel | `window.rs` `match_text_rendering`: manual rendering, no hinting (outlines or metrics), grey levels, for the whole app |
 | Across | A line at `cx − width / 2`, to a quarter of a pixel | A label rounds its text's place down to a whole pixel | `window.rs` `exact_text`: a centred or end-aligned label is laid out across its whole width (it may be ellipsized), and Pango places the line there to the fraction |
 | Down | The baseline at the place's middle plus half the capitals' height, rounded to a pixel (`ui.rs` `draw_line`) | A label centres its line box in its place, rounding down; the baseline is half the leading below the font's ascent. Inter's ascent less its descent is its cap height, so only the rounding differs | Each font's `--P-line-height` and `--P-text-nudge` (`css.rs` `text_line`): a line box and a pixel of padding above it that land the baseline on DGMNB's in any place an even number of pixels high |
-| Scripts | 62% of the label's size, raised 0.36 of it or lowered 0.16, at their own optical size | Pango's `<sup>` uses the font's own superscript size and shift (60%, 0.35), and an absolute line height is given to every run, so a raised run makes the line taller | A key's label is not the toolkit's: `widgets/fit.rs` reads the keys' own `<sup>` / `<sub>` (`parse_markup`) and sets each script in the label's font at 62%, risen or dropped by those parts of the size, its baseline rounded with its shift as DGMNB's (`line_layout`, `draw_line`). A fallback font's glyph in a toolkit label (the ▾ of the flyout buttons) is given a line box a pixel high (`line_height="1025"`: Pango reads a `line_height` above 1024 as Pango units, up to 1024 as a factor) |
-| Cells | Rows of equal cells (`Rect::columns`, `Rect::cell`) fall on fractions of a pixel | Whole pixels, the spare ones to the first cells: a label up to a pixel off | `width_bin.rs` `Cells` (the memory row), `Strip` (the programmer bar) and `bitflip.rs`'s grid place children to the fraction with an allocation transform, and the bits' baselines on DGMNB's pixel. A key stays on the toolkit's whole pixels and its label is set about the middle of DGMNB's cell (`fit.rs` `set_cell`, `cell_middle`): the keypads (`widgets/keypad.rs`) and the graph pad |
-| Overlap | A narrow window's rows overlap | Children ask for their width, and the window grows | `Strip` asks for none of its own |
+| Scripts | 62% of the label's size, raised 0.36 of it or lowered 0.16, at their own optical size | Pango's `<sup>` uses the font's own superscript size and shift (60%, 0.35), and an absolute line height is given to every run, so a raised run makes the line taller | A key's label is not the toolkit's: `widgets/fit.rs` reads the keys' own `<sup>` / `<sub>` (`parse_markup`) and sets each script in the label's font at 62%, risen or dropped by those parts of the size, its baseline rounded with its shift as DGMNB's (`line_layout`, `draw_line`) |
+| Cells | Rows of equal cells (`Rect::columns`, `Rect::cell`) fall on fractions of a pixel | Whole pixels, the spare ones to the first cells: a label up to a pixel off, a key up to two at 300×400 | `width_bin.rs` `Cells` (the memory row), `Strip` (the programmer bar) and `bitflip.rs`'s grid place children to the fraction with an allocation transform, and the bits' baselines on DGMNB's pixel. The keypads (`widgets/keypad.rs`) lay their keys out themselves: DGMNB's cells, each edge rounded to the nearest pixel. A key's label is set about the middle of DGMNB's cell (`fit.rs` `set_cell`, `cell_middle`): the keypads and the graph pad |
+| Overlap | A narrow window's rows overlap | Children ask for their width, and the window grows | `Strip` asks for none of its own, and takes its slots apart as DGMNB's `take_left` and `take_right` do: each from what is left of the row, the last ones down to none |
+| Buttons | A button's label shrunk to its width less its padding, centred (`button`); a unit button as wide as the unit and `UNIT_ARROW` more, "Update rates" the gap after the time's text, both to the fraction | A label at its size, on whole pixels | The labels of the converter's, the date page's, the graph's and the calculator's text buttons are `FitLabel`s; `FitLabel::set_shift` moves a line to where DGMNB's fractional geometry puts it |
+| Fields | A field's text at its box's start less its padding, its capitals centred, cut at the box, the caret kept in view (`text_field`) | The toolkit's text field | At rest the text is drawn by a `FitLabel` over the field (`fit.rs` `rest_line`), and the field's own text is hidden (`.wc-rest`); with the focus the field shows its own, and it is always the field that is edited, shows the caret, selection and input method, and is read by assistive technology. A theme that hands the `field` family back to the toolkit keeps the toolkit's text |
 
 The text the app places itself needs none of the toolkit's part of this:
 a key's label, a page's line (`widgets/fit.rs` `FitLabel`) and the
 readouts (`widgets/display.rs`) are laid out unhinted in grey levels
 (`fit.rs` `set_unhinted`, whatever the settings say), shrunk to their
 width, their capitals centred with each run's baseline on a whole pixel
-and each glyph at the nearest quarter pixel (`fit.rs` `draw_line`). A
-key's label and icon ask for no least height, so keys shrink below what
-they show, as DGMNB's do.
+and each glyph at the nearest quarter pixel (`fit.rs` `draw_line`), the
+quarters and whole pixels being the window's wherever the label is
+placed. A key's label and icon ask for no least height, so keys shrink
+below what they show, as DGMNB's do; so does the bit grid.
 
 ### Toolkit-drawn families: `native`
 
@@ -676,7 +679,7 @@ through `Style` (not CSS).
 | `layout.converter.keypad_width` | 300 | 300 |
 | `layout.date.margin` | `{ 8, 16, 8, 16 }` | `{ 4, 16, 16, 16 }` |
 | `layout.date.gap` | 8 | 14 |
-| `layout.date.max_width` | 480 | unlimited |
+| `layout.date.max_width` | 480 | 480 |
 | `layout.graph.margin` | `{ 4, 8, 4, 8 }` | `{ 0, 10, 10, 10 }` |
 | `layout.graph.gap` | 8 | 10 |
 | `layout.graph.side_width` | 340 | 340 |
@@ -746,7 +749,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `window.font` | Font | `text.body` | `window.gmnb`; inherited by every widget, popover and dialog in it |
 | `window.text_halo` | Shadow list | none; see-through: `{ blur 3, bg 0.9 }, { blur 10, bg 0.75 }` | `text-shadow` on `window.gmnb` (inherited) |
 | `window.raised_text_halo` | Shadow list | none | `text-shadow` on keys, buttons, fields, the panel, cards, popovers, the sidebar. Disabled controls get `none` always. |
-| `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph side panel, empty-state texts |
+| `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph's equation column. (An empty list's text in the History panel lies on the panel, a surface of the style's.) |
 | `plain.radius` | Radius | `shape.card_radius` | same |
 | `scrim` | Color | black at 0.30 | The shade over what the sidebar or a sheet covers |
 | `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius |
@@ -894,7 +897,7 @@ The trash button under the list is an `icon_button`.
 | `programmer.radix.name_checked` | Color | `accent_text` | `.wc-radix-active .wc-radix-name` |
 | `programmer.radix.value` | Text | 14 / 400 with `{ "tnum" }`, `fg` | `.wc-radix-value` |
 | `programmer.bit` | Control | radius `shape.radius`; 16 / 400; `fg`; no background; `checked = { background accent, color on_accent, font { weight 700 } }` | `button.wc-bit`, on DGMNB's fractional grid (`bitflip.rs`) |
-| `programmer.bit_index` | Text | `text.caption`, `fg_faint` | `.wc-bit-index` |
+| `programmer.bit_index` | Text | `text.caption`, `fg_faint`; see-through: deepened toward `fg_dim` until it reaches 2.45 on the scrim over both desktops (`appcore::palette::faint_text`) | `.wc-bit-index` |
 
 Word size, Bitwise and Bit shift are `text_button`s (DGMNB sets them in
 its caption style, unlike Scientific's two flyout buttons); their flyouts
@@ -906,7 +909,7 @@ are `popover`s.
 |---|---|---|---|
 | `date.label` | Text | `text.caption`, `fg_dim` | `.wc-section` on this page |
 | `date.field` | Control | min_height 38; radius `shape.radius`; background `surface2`; `text.body`; `fg`; padding `{ 0, 6 }`; `checked = { background accent, color on_accent }` (while its calendar is open) | `menubutton.wc-field > button.toggle`: "Tuesday, November 10, 2026  ▾", centred, at most 320 wide |
-| `date.result_panel` | Surface | nothing: no background, no padding | `.wc-result-panel` |
+| `date.result_panel` | Surface | nothing: no background, no padding | `.wc-result-panel`: the box around a result's caption, the result and the line under it |
 | `date.result`, `date.add_result` | `{ size, font }` | 28, weight 400; the same | The page's results (Rust, `widgets/display.rs`: a readout, `role = "date"`), shrunk to fit down to 14; out of range, the error colour |
 | `date.subresult` | Text | `text.body`, `fg_dim` | `.wc-subresult` |
 | `date.calendar.title` | Text | `text.strong`, `fg` | `.wc-days-title` |
@@ -1514,8 +1517,8 @@ How each of Aurora's effects is made:
 | The seven palettes; System and Freestyle generated from one or two colours | **Scripted** (`style`, with the `gmnb` colour functions) | Pure data and arithmetic. |
 | Glass keys, glass panels, the equals key's glow, lit bits, the whimsy chip, the sidebar's and flyouts' tints | **Declared** (style values: gradients, shadow lists) | They are the toolkit's own box drawing. |
 | Hover brightness, the press that springs back, the swap button's turn | **Declared** (states and transitions) | The toolkit animates them, and stops for reduced motion. |
-| See-through tints and halos | **Declared**, switched on `ctx.opacity` | |
-| Aurora blobs and their drift, vignette, pulses | **Scripted** (`background` layer) | A few gradients a frame; all of its numbers are the theme's. |
+| The see-through frost and halos | **Scripted** (`style`): how much of the desktop each palette's inks need hidden is worked out from the palette, and the frost under every surface that carries text follows `ctx.opacity` | A fixed tint is too much at 0.9 and, for some palette, too little at 0.1. |
+| Aurora blobs and their drift, the two veils, vignette, pulses | **Scripted** (`background` layer) | A few gradients a frame; all of its numbers are the theme's. |
 | Grain | **Scripted placement** of a **built-in** texture (`gmnb.noise`, `draw:tile`) | Filling 36 864 pixels per call is no job for a script; the recipe is specified so it never changes. |
 | Ripples, the pointer's light on key borders | **Scripted** (`keypad` layer) | |
 | The key cascade | **Scripted** (`place`) | One small function per key per frame while it plays. |
@@ -1609,7 +1612,13 @@ Where 0.3's structure changed for the base look, Aurora follows it:
 | Toolkit-drawn text fields | libadwaita's entry | Aurora's `field` values, matched to it by eye |
 | Thresholds and sizes not in `layout` (wide at 620 px, the new-window size) | 0.2's | DGMNB's |
 | The drift's phase | Starts at 0 s when animated | Starts from the still frame (37 s) |
-| Readability under see-through | Judged by eye | Any tint the [see-through test](#readability-rules) fails is raised until it passes, and the change is noted in the theme |
+| Readability under see-through | Judged by eye: a fixed tint under the keys, the readout and the panels, a halo around the rest | A frost of the palette's own background under every surface that carries text, `plain` panes included, as strong as that palette needs at that opacity to pass the [see-through rule](#readability-rules) (none above about four fifths); the graph's canvas turns almost solid |
+| Text that steps back (captions, expressions, the number bases' names) | The text colour at about 0.6 whatever the palette: 4.1 to 4.4:1 in the light ones | The least opacity, from 0.62 up, that reaches 4.5:1 on that palette's background, its blobs and its glass |
+| Errors | The equals key's first colour as it came: 2:1 in the light Aurora, teal in Abyss | A rose, moved until it reaches 4.5:1 |
+| A lit text button, the current number base, the operators' glyphs | The accent on a tint of itself: under 4.5:1 in the light palettes | The accent deepened until it reaches 4.5:1 on that tint |
+| A key that can't be used | The whole key at 0.32 | Thinner glass and a faint glyph: on a see-through window the key keeps its frost |
+| The aurora | Four blobs | Four blobs under two veils of light in the palette's hot colours |
+| A pulse | One bloom | A bloom; the equals key's, a result's and a new palette's also send a wavefront ahead |
 | A toggle key that is on (2nd, hyp) | The equals key's gradient at 0.85: its small text fell to 2.5:1 in the light palettes | The gradient solid, deepened until the text reaches 4.5:1 |
 
 ## Readability rules
@@ -1652,17 +1661,21 @@ rest and checked; `field` text and placeholder (placeholder: 2.45, see
 open point 9); chips
 and the whimsy chip; lit bits; radix names and values; calendar days at
 rest and checked; the toast; the graph's labels, axes and each series
-colour on the canvas. (Not yet for Aurora: the chrome's pairs, the
-header title to the bits, are checked for the base look and Mono. Aurora's
-own values for them fail in its light palettes, and on a see-through
-window, where its `plain` has no scrim; they wait, with the pages'
-pairs, in the ignored `auroras_page_texts_read` for its polish pass.)
+colour on the canvas (which lies on the backdrop, not in a `plain`
+container); the readout's value, its error colour and its expression on
+the readout's own scrim; a card's heading. For Aurora the whole table is
+`auroras_page_texts_read`, and `auroras_generated_palettes_read` runs it
+again for System and Freestyle generated from rule 2's colours. The
+bits' indexes need 2.45, as the placeholder does (open point 9):
+`the_bits_indexes_read`.
 
 **4. See-through** (new; 0.2 judged this by eye). The same table at
 opacity 0.1 and 0.5, each stack composited over
 `over(alpha(window.background, opacity), desktop)` for a black and for a
 white desktop. Every pair must reach **3**; in the base look, `fg` pairs
-must reach 4.5 (its scrim is computed to). Halos are not counted.
+must reach 4.5 (its scrim is computed to). Halos are not counted. Text
+straight on a page counts wherever the style puts something under it in
+`plain.background`: the base look's scrim, Aurora's frost.
 
 ## For implementers
 
@@ -1685,6 +1698,8 @@ must reach 4.5 (its scrim is computed to). Halos are not counted.
 | `GMNB_SOUND_DUMP=<folder>` | Every sound the theme makes is written there as a WAV file. |
 | `GMNB_DATE_TO=YYYY-MM-DD` | The date page's "To" date (the comparison's "Date with a result"). |
 | `GMNB_DATE_ADD` | Open the date page on "Add or subtract days". |
+| `GMNB_PREFS=about` | Open About, as `GMNB_PREFS=1` opens Settings. |
+| `GMNB_FOCUS=<css class>` | Give the keyboard's focus, its ring shown, to the first focusable widget with that class (`wc-conv-value`: the converter's first value), as Tab to it would. |
 
 `GMNB_DARK`, `GMNB_OPACITY`, `GMNB_SIZE`, `GMNB_MODE`, `GMNB_KEYS` and the
 rest keep working.
@@ -1767,14 +1782,14 @@ toolkit code knows Aurora.
 
 Measured for the language choice: 1000 frames of 300 calls into the app,
 with the sandbox, memory limit and deadline on, averaged 76 µs. Aurora
-makes 7 draw calls for a still background and 20 with thirteen pulses at
+makes 9 draw calls for a still background and 22 with thirteen pulses at
 once, about 30 for a keypad with the pointer over it, and about 115 for
 a nine-digit readout mid-animation in the dark (each digit twice, its
 glow and itself, each inside a save and three transforms).
 
 Measured in the real engine, under the real limits (`tests/draw.rs`,
-medians of 200 frames): the background with thirteen pulses 0.21 ms, a
-keypad with the pointer over it and a ripple 0.10 ms, the readout
+medians of 200 frames): the background with thirteen pulses 0.26 ms, a
+keypad with the pointer over it and a ripple 0.13 ms, the readout
 mid-result 0.06 ms; the limit is 8 ms. Most of a frame is the theme
 making colours and gradients: the `gmnb` library's functions therefore
 run with the heap cap lifted (each builds one small value), which more
@@ -1844,10 +1859,13 @@ Decided here, and worth a second look by the owner:
    file to a font map but not take it out).
 8. **Media and sound** have their own list:
    [Open points](theming-media.md#open-points).
-9. **A placeholder needs 2.45:1**, not 3. DGMNB's light palette puts
-   `fg_faint` on `surface` at 2.49:1, and the base look is DGMNB's. The
-   alternative is to raise `fg_faint` in `appcore`, which changes DGMNB's
-   pixels.
+9. **A placeholder and the bits' indexes need 2.45:1**, not 3. DGMNB's
+   light palette puts `fg_faint` on `surface` at 2.49:1 and on `bg` (the
+   indexes) at 2.46:1, and the base look is DGMNB's. The alternative is to
+   raise `fg_faint` in `appcore`, which changes DGMNB's pixels. On a
+   see-through window the base look deepens the indexes toward `fg_dim`
+   just enough to keep 2.45 over a black desktop (2.28 otherwise), rather
+   than thicken the scrim under every `plain` container for them.
 10. **The base look's text is set as DGMNB sets it** where the pages draw
    it (`widgets/fit.rs`): unhinted, each glyph at the nearest quarter
    pixel, the capitals centred on a whole pixel, a key's line about

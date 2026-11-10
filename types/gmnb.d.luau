@@ -997,6 +997,9 @@ export type SynthLayer = {
 }
 
 -- One effect on the whole mix. Which fields are read depends on `type`.
+-- A number left out is: delay time 0.25, feedback 0.35, mix 0.3; reverb
+-- size 0.5, damp 0.5, mix 0.3; drive amount 0.5; crush bits 8, rate 12000;
+-- a filter's q 0.707 (its freq is required).
 -- (In strict mode luau-lsp may reject a list of differing effects written
 -- in place. Give the list a type: `local fx: { SynthEffect } = { ... }`.)
 export type SynthEffect = {

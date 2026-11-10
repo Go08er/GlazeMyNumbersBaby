@@ -80,6 +80,7 @@ pub mod path;
 pub mod picture;
 pub mod sched;
 pub mod schema;
+pub mod sound;
 pub mod states;
 pub mod style;
 pub mod theme;

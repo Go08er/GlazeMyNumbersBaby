@@ -3,6 +3,12 @@
 //! radius, their icons' size and their labels' fonts come from the style
 //! here.
 //!
+//! Its cells are DGMNB's (`Rect::cell_span`): equal, the gap apart, on
+//! fractions of a pixel; each key is given its cell's edges rounded to the
+//! nearest pixel (the toolkit's grid gives the spare pixels to the first
+//! rows and columns instead, up to two pixels off DGMNB's in a small
+//! window).
+//!
 //! A key's label is set as DGMNB sets it (a [`FitLabel`]): in its class's
 //! font, superscripts and subscripts at 0.62 of it, shrunk to the key's
 //! width less 8, its capitals centred on the middle of DGMNB's cell.
@@ -124,6 +130,9 @@ struct Cell_ {
     widget: gtk::Widget,
     row: i32,
     col: i32,
+    /// The rows and columns it is over.
+    rows: i32,
+    cols: i32,
     /// A calculator key's number.
     id: Option<u32>,
     kind: CellKind,
@@ -149,6 +158,8 @@ mod imp {
         pub radius: Cell<f32>,
         pub gaps: Cell<(f32, f32)>,
         pub compact: Cell<bool>,
+        /// The gap in use, in whole pixels.
+        pub gap: Cell<i32>,
         /// The keys' icons, and the size and line width the style gives
         /// them (`keys.icon`).
         pub icons: RefCell<Vec<super::super::icon::PathIcon>>,
@@ -192,6 +203,7 @@ mod imp {
                     appcore::metrics::calc::KEY_GAP_COMPACT,
                 )),
                 compact: Cell::new(false),
+                gap: Cell::new(0),
                 icons: RefCell::default(),
                 icon: Cell::new((appcore::metrics::controls::KEY_ICON, 1.5)),
                 texts: RefCell::default(),
@@ -214,7 +226,6 @@ mod imp {
         type ParentType = gtk::Widget;
 
         fn class_init(klass: &mut Self::Class) {
-            klass.set_layout_manager_type::<gtk::GridLayout>();
             klass.set_css_name("keypad");
         }
     }
@@ -223,9 +234,6 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
             let obj = self.obj();
-            let grid = obj.grid_layout();
-            grid.set_row_homogeneous(true);
-            grid.set_column_homogeneous(true);
             obj.sync_gap();
 
             // Where the pointer is, for a layer that asked for it.
@@ -299,7 +307,60 @@ mod imp {
         }
     }
 
+    // No layout manager: with one, GTK never calls size_allocate.
     impl WidgetImpl for Keypad {
+        /// As a homogeneous grid: every row (column) as tall as the
+        /// tallest key needs, a key over several sharing out its need.
+        fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
+            let gap = self.gap.get();
+            let (rows, cols) = self.grid.get();
+            let lines = if orientation == gtk::Orientation::Horizontal {
+                cols
+            } else {
+                rows
+            } as i32;
+            let (mut least, mut natural) = (0, 0);
+            for c in self.cells.borrow().iter() {
+                if !c.widget.should_layout() {
+                    continue;
+                }
+                let span = if orientation == gtk::Orientation::Horizontal {
+                    c.cols
+                } else {
+                    c.rows
+                }
+                .max(1);
+                let (min, nat, _, _) = c.widget.measure(orientation, -1);
+                let share = |v: i32| ((v - gap * (span - 1)).max(0) + span - 1) / span;
+                least = least.max(share(min));
+                natural = natural.max(share(nat));
+            }
+            let total = |line: i32| line * lines + gap * (lines - 1).max(0);
+            (total(least), total(natural), -1, -1)
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
+            let gap = self.gap.get() as f32;
+            let (rows, cols) = self.grid.get();
+            let (rows, cols) = (rows.max(1) as f32, cols.max(1) as f32);
+            let cw = (width as f32 - gap * (cols - 1.0)) / cols;
+            let ch = (height as f32 - gap * (rows - 1.0)) / rows;
+            for c in self.cells.borrow().iter() {
+                if !c.widget.should_layout() {
+                    continue;
+                }
+                let (span_r, span_c) = (c.rows.max(1) as f32, c.cols.max(1) as f32);
+                let x0 = c.col as f32 * (cw + gap);
+                let y0 = c.row as f32 * (ch + gap);
+                let x1 = x0 + cw * span_c + gap * (span_c - 1.0);
+                let y1 = y0 + ch * span_r + gap * (span_r - 1.0);
+                let (x0, y0, x1, y1) = (x0.round(), y0.round(), x1.round(), y1.round());
+                let at = gtk::gsk::Transform::new().translate(&graphene::Point::new(x0, y0));
+                c.widget
+                    .allocate((x1 - x0) as i32, (y1 - y0) as i32, -1, Some(at));
+            }
+        }
+
         fn snapshot(&self, s: &gtk::Snapshot) {
             self.obj().draw(s);
         }
@@ -323,12 +384,6 @@ impl Keypad {
         Self::default()
     }
 
-    fn grid_layout(&self) -> gtk::GridLayout {
-        self.layout_manager()
-            .and_downcast::<gtk::GridLayout>()
-            .expect("grid layout")
-    }
-
     fn sync_gap(&self) {
         let (gap, compact) = self.imp().gaps.get();
         let gap = if self.imp().compact.get() {
@@ -336,10 +391,15 @@ impl Keypad {
         } else {
             gap
         };
-        let gap = gap.round().max(0.0) as u32;
-        let g = self.grid_layout();
-        g.set_row_spacing(gap);
-        g.set_column_spacing(gap);
+        let gap = gap.round().max(0.0) as i32;
+        if self.imp().gap.replace(gap) != gap {
+            self.queue_resize();
+        }
+    }
+
+    /// The gap between its keys, in pixels.
+    pub fn gap(&self) -> i32 {
+        self.imp().gap.get()
     }
 
     /// The compact window's keypad: `keys.gap_compact` between its keys.
@@ -584,15 +644,7 @@ impl Keypad {
         action: Option<Action>,
     ) {
         widget.set_parent(self);
-        let lc = self
-            .grid_layout()
-            .layout_child(widget)
-            .downcast::<gtk::GridLayoutChild>()
-            .expect("grid layout child");
-        lc.set_row(row);
-        lc.set_column(col);
-        lc.set_row_span(rows);
-        lc.set_column_span(cols);
+        self.queue_resize();
         let widget = widget.clone().upcast::<gtk::Widget>();
         let grid = &self.imp().grid;
         let (r, c) = grid.get();
@@ -621,6 +673,8 @@ impl Keypad {
                 widget,
                 row,
                 col,
+                rows,
+                cols,
                 id,
                 kind,
                 action,

@@ -152,7 +152,8 @@ pids+=($!)
 sleep 1.5
 
 # The app. GMNB is told not to look for a GPU.
-GSK_RENDERER=cairo GMNB_STILL=1 "$bin" >"$rt/app.log" 2>&1 &
+# No sound reaches a real device: the theme sounds go to the null sink.
+GSK_RENDERER=cairo GMNB_STILL=1 GMNB_SOUND=null "$bin" >"$rt/app.log" 2>&1 &
 apppid=$!
 pids+=($apppid)
 # The app can be on the bus a moment before its display is in the tree.

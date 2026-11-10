@@ -16,96 +16,16 @@ use gmnb_theme::draw::DisplayList;
 use gmnb_theme::events::{EventKind, Page};
 use gmnb_theme::layer::{Drawn, Failure, Frame, LayerKind};
 use gmnb_theme::theme::{self as themes, Action, FontFile, OptionDef, Origin, Source, Theme};
-use gmnb_theme::types::{Paint, Rgba};
 use gmnb_theme::{Ctx, Limits, Note, OptionValue, Style, TextMeasure, Update, Writer, css, schema};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::layers::{Happened, Layers};
 
-// ---------------------------------------------------------------------------
-// TRANSITION: the legacy scheme.
-//
-// The stylesheet's rules not yet migrated to the style still read the
-// `@wc_*` colours, which are written from a `Scheme`. Both are derived from
-// the resolved style here, so they follow whatever theme is active. Remove
-// `Scheme`, `legacy_scheme` and `legacy_colors` once no rule reads them.
-// (No widget reads a `Scheme` any more: `Hub::scheme` and `Hub::subscribe`
-// went with the keypad's and the readout's drawn effects, which are the
-// theme's layers now.)
-// ---------------------------------------------------------------------------
-
-/// TRANSITION: the colours the unmigrated rules are written from.
-#[derive(Clone, Copy, Debug)]
-pub struct Scheme {
-    /// The window's background at its bottom.
-    pub base_bottom: [f32; 3],
-    /// The accent as text (operators, focus, selection).
-    pub accent: [f32; 3],
-    /// The equals key's fill, its two ends, and the text on it.
-    pub hot_a: [f32; 3],
-    pub hot_b: [f32; 3],
-    pub on_hot: [f32; 3],
-}
-
 pub use appcore::color::{parse_hex, to_hex};
 
 pub fn rgba(c: [f32; 3], a: f32) -> gdk::RGBA {
     gdk::RGBA::new(c[0], c[1], c[2], a)
-}
-
-fn rgb3(c: Rgba) -> [f32; 3] {
-    [c[0], c[1], c[2]]
-}
-
-/// TRANSITION: a [`Scheme`] from the style.
-fn legacy_scheme(style: &Style) -> Scheme {
-    let c = &style.tokens.colors;
-    let ends = |paint: Option<&Paint>, fallback: Rgba| match paint {
-        Some(Paint::Color(c)) => (*c, *c),
-        Some(Paint::Gradient(g)) => (
-            g.colors.first().copied().unwrap_or(fallback),
-            g.colors.last().copied().unwrap_or(fallback),
-        ),
-        None => (fallback, fallback),
-    };
-    let (_, bottom) = ends(style.fill("window.background").0.last(), c.bg);
-    let equals = style.control("keys.equals");
-    let (hot_a, hot_b) = ends(equals.and_then(|e| e.background.0.first()), c.accent);
-    Scheme {
-        base_bottom: rgb3(bottom),
-        accent: rgb3(c.accent_text),
-        hot_a: rgb3(hot_a),
-        hot_b: rgb3(hot_b),
-        on_hot: rgb3(equals.map_or(c.on_accent, |e| e.color)),
-    }
-}
-
-/// TRANSITION: the `@wc_*` colours of the stylesheet's unmigrated rules,
-/// from the style's tokens. What 0.2 drew as glass is the tokens' second
-/// surface, flat.
-fn legacy_colors(style: &Style, scheme: &Scheme) -> String {
-    let c = &style.tokens.colors;
-    let rgb = |c: [f32; 3]| css::color([c[0], c[1], c[2], 1.0]);
-    let mut out = String::new();
-    for (name, value) in [
-        ("wc_fg", css::color(c.fg)),
-        ("wc_fg_dim", css::color(c.fg_dim)),
-        ("wc_fg_faint", css::color(c.fg_faint)),
-        ("wc_glass", css::color(c.surface2)),
-        ("wc_glass_hi", css::color(c.surface2)),
-        ("wc_glass_num", css::color(c.surface)),
-        ("wc_glass_border", "transparent".to_string()),
-        ("wc_shade", "transparent".to_string()),
-        ("wc_accent", rgb(scheme.accent)),
-        ("wc_hot_a", rgb(scheme.hot_a)),
-        ("wc_hot_b", rgb(scheme.hot_b)),
-        ("wc_on_hot", rgb(scheme.on_hot)),
-        ("wc_base", rgb(scheme.base_bottom)),
-    ] {
-        out.push_str(&format!("@define-color {name} {value};\n"));
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -721,8 +641,7 @@ impl Hub {
     /// or, for a step of a drag that changed few properties, those to the
     /// live one.
     fn write(&self, style: &Style, drag: bool) {
-        let (mut preamble, stock) = css::stock(style);
-        preamble.push_str(&legacy_colors(style, &legacy_scheme(style)));
+        let (preamble, stock) = css::stock(style);
         let mut properties = css::properties(style);
         properties.extend(stock);
         let mut writer = self.writer.borrow_mut();
@@ -1146,28 +1065,5 @@ mod tests {
                 assert_eq!(found, 1, "{name}: {call} in `{inside}`");
             }
         }
-    }
-
-    /// TRANSITION: the legacy scheme follows the style, for the base look
-    /// and for a theme with a gradient on its equals key.
-    #[test]
-    fn the_legacy_scheme_follows_the_style() {
-        let ctx = Ctx {
-            dark: true,
-            ..Ctx::default()
-        };
-        let style = Style::base(&ctx);
-        let s = legacy_scheme(&style);
-        let c = &style.tokens.colors;
-        assert_eq!(s.base_bottom, rgb3(c.bg));
-        assert_eq!((s.hot_a, s.hot_b), (rgb3(c.accent), rgb3(c.accent)));
-        assert_eq!(s.on_hot, rgb3(c.on_accent));
-        assert_eq!(s.accent, rgb3(c.accent_text));
-        let colors = legacy_colors(&style, &s);
-        assert!(
-            colors.contains("@define-color wc_base rgb(29,29,32);"),
-            "{colors}"
-        );
-        assert!(colors.contains("@define-color wc_fg_dim rgba(242,242,245,0.66);"));
     }
 }

@@ -14,6 +14,7 @@ use super::{Ctx, Page};
 use crate::widgets::bitflip::BitFlip;
 use crate::widgets::calc_panel::{CalcPanel, MemOp};
 use crate::widgets::display::{Change, Display, Mode};
+use crate::widgets::fit::{self, FitLabel};
 use crate::widgets::icon::{PathIcon, icon_toggle, paths};
 use crate::widgets::keypad::Keypad;
 use crate::widgets::width_bin::{Cells, FixedBin, Strip, WidthBin};
@@ -74,10 +75,32 @@ pub struct CalculatorPage {
 }
 
 fn text_button(label: &str, tip: &str) -> gtk::Button {
-    let b = gtk::Button::with_label(label);
-    b.add_css_class("wc-mem");
-    b.set_tooltip_text(Some(tip));
+    let b = gtk::Button::builder()
+        .child(&button_text(label, "text_button"))
+        .css_classes(["wc-mem"])
+        .tooltip_text(tip)
+        .build();
+    // Called what it shows unless it is named (a11y::name_button).
+    b.update_property(&[gtk::accessible::Property::Label(label)]);
     b
+}
+
+/// A text button's label, set as DGMNB's `button` sets it: centred and
+/// shrunk to fit its button (down to `BUTTON_MIN_SIZE`), in `path`'s
+/// font, unhinted, each glyph on a quarter pixel. Drawn only: its button
+/// is named. Its text is on the window (these buttons have no fill at
+/// rest), so it has the window's halo.
+fn button_text(text: &str, path: &'static str) -> FitLabel {
+    let l = FitLabel::drawn();
+    l.set_text(text);
+    l.set_align(fit::Align::Center);
+    fit::follow(
+        &l,
+        path,
+        appcore::metrics::text::BUTTON_MIN_SIZE,
+        Some("window.text_halo"),
+    );
+    l
 }
 
 /// A button that opens a flyout, DGMNB's: one label ending in "▾" (read
@@ -88,11 +111,12 @@ fn chevron_menu(ctx: &Ctx, label: &str, class: &str, popover: &gtk::Popover) -> 
     // The arrow (from a fallback font) in a line box of its own, a pixel
     // high: the label's line keeps Inter's height (Pango reads a
     // `line_height` above 1024 as Pango units).
-    let text = gtk::Label::new(None);
-    text.set_markup(&format!(
-        "{} <span line_height=\"1025\">▾</span>",
-        glib::markup_escape_text(label)
-    ));
+    let path = if class == "wc-flyout-button" {
+        "flyout_button"
+    } else {
+        "text_button"
+    };
+    let text = button_text(&format!("{label} ▾"), path);
     let button = gtk::MenuButton::builder()
         .child(&text)
         .popover(popover)
@@ -506,8 +530,11 @@ impl CalculatorPage {
                 p.set_angle(next);
             }
         });
-        let fe = gtk::ToggleButton::with_label("F-E");
-        fe.add_css_class("wc-mem");
+        let fe = gtk::ToggleButton::builder()
+            .child(&button_text("F-E", "text_button"))
+            .css_classes(["wc-mem"])
+            .build();
+        fe.update_property(&[gtk::accessible::Property::Label("F-E")]);
         fe.set_width_request(mc::FE_W as i32);
         fe.set_tooltip_text(Some("Scientific notation (V)"));
         let weak = Rc::downgrade(self);
@@ -1264,12 +1291,10 @@ impl CalculatorPage {
     }
 }
 
-/// A button's label, set anew (GTK makes a new label for it) and laid
-/// out to the fraction of a pixel again (`exact_text`).
+/// A text button's label set anew ([`button_text`]).
 fn set_text(button: &gtk::Button, text: &str) {
-    if button.label().as_deref() != Some(text) {
-        button.set_label(text);
-        crate::window::exact_text(button);
+    if let Some(label) = button.child().and_downcast::<FitLabel>() {
+        label.set_text(text);
     }
 }
 

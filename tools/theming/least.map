@@ -1,0 +1,10 @@
+# Scientific and Programmer at DGMNB's least window, 300x400 (goldens.sh
+# OUT BIN base captures them too, and compares them after base.map). Not
+# in the contract's set (docs/theming.md, "How it is measured"), and not
+# what goldens.sh's exit status says: a check that both pages lay out as
+# DGMNB's do at that size, with what still differs said in
+# tools/theming/README.md.
+dgmnb-scientific-least-d0 gmnb-scientific-least-d0
+dgmnb-scientific-least-d1 gmnb-scientific-least-d1
+dgmnb-programmer-least-d0 gmnb-programmer-least-d0
+dgmnb-programmer-least-d1 gmnb-programmer-least-d1

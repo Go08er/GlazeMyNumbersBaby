@@ -1630,11 +1630,12 @@ fn auroras_layers_draw_within_their_limits() {
         let still = aurora_ctx(dark, palette, false);
         let f = Frame::sized(760.0, 640.0);
         let drawn = ok(theme.draw(LayerKind::Background, &still, &f));
-        // The base, four blobs, the vignette and the grain; and it stands.
-        assert_eq!(drawn.list.ops.len(), 7, "{palette}");
+        // The base, four blobs, two veils, the vignette and the grain; and
+        // it stands.
+        assert_eq!(drawn.list.ops.len(), 9, "{palette}");
         assert_eq!(drawn.again, None);
         assert!(
-            matches!(drawn.list.ops[6], Op::Tile { rect, .. } if rect == [0.0, 0.0, 760.0, 640.0])
+            matches!(drawn.list.ops[8], Op::Tile { rect, .. } if rect == [0.0, 0.0, 760.0, 640.0])
         );
         // Living: again in a fifteenth of a second.
         let living = aurora_ctx(dark, palette, true);
@@ -1650,7 +1651,7 @@ fn auroras_layers_draw_within_their_limits() {
                 .list
                 .ops
                 .len(),
-            7
+            9
         );
     }
     let living = aurora_ctx(true, "aurora", true);
@@ -1676,7 +1677,8 @@ fn auroras_layers_draw_within_their_limits() {
         ..Frame::sized(760.0, 640.0)
     };
     let pulsing = ok(theme.draw(LayerKind::Background, &living, &f));
-    assert_eq!(pulsing.list.ops.len(), 7 + 13);
+    // A number key's pulse is one bloom.
+    assert_eq!(pulsing.list.ops.len(), 9 + 13);
     assert_eq!(pulsing.again, Some(0.0));
     let mut times = Vec::new();
     for _ in 0..200 {
@@ -1685,13 +1687,15 @@ fn auroras_layers_draw_within_their_limits() {
         times.push(t.elapsed().as_secs_f64() * 1000.0);
     }
     let background_ms = median(times);
+    // A result's, and each of the four a new palette sends, is a bloom
+    // and the wavefront ahead of it.
     f.events = vec![(0.2, &result), (0.4, &option)];
     assert_eq!(
         ok(theme.draw(LayerKind::Background, &living, &f))
             .list
             .ops
             .len(),
-        7 + 1 + 4
+        9 + 2 + 4 * 2
     );
 
     // ---- Keypad: the cascade, a ripple, the pointer's light.
@@ -1841,7 +1845,7 @@ fn auroras_layers_draw_within_their_limits() {
         "aurora", "ember", "abyss", "orchard", "graphite", "system", "custom",
     ] {
         let tile = theme.preview(option, choice, &living).unwrap();
-        assert_eq!(tile.ops.len(), 8, "{choice}");
+        assert_eq!(tile.ops.len(), 9, "{choice}");
     }
 
     println!(

@@ -1,17 +1,9 @@
 /* GMNB — the structure stylesheet: selectors and layout, loaded once.
 
-   Every look property of a migrated surface reads a custom property that
-   the theme engine writes from the checked style (crates/gmnb-theme;
-   docs/theming.md, "How style reaches the app"): no colour, size or font
-   is written here for them. Migrated so far: the window (and what goes
-   under text on a see-through one), the header and its buttons, the
-   sidebar, the keys, segmented controls, the calculator's rows and
-   buttons, the History/Memory panel, the programmer's radix list and
-   bits, the focus ring and the scrollbars.
-
-   Rules that still name @wc_* colours or literal sizes belong to surfaces
-   that are not migrated yet; theme.rs derives those colours from the
-   style meanwhile (TRANSITION). */
+   Every look property reads a custom property that the theme engine
+   writes from the checked style (crates/gmnb-theme; docs/theming.md, "How
+   style reaches the app"): no colour, size or font of a surface is written
+   here. */
 
 /* ------------------------------------------------------------- window */
 
@@ -1562,17 +1554,6 @@ window.gmnb.own-segmented .wc-inert toggle-group.wc-panel-tabs>toggle:checked:di
   font-weight: var(--gmnb-panel-tabs-item-checked-font-weight);
 }
 /* end control */
-
-/* -------------------------------------------------------- glass panels */
-
-.wc-glass-panel {
-  border-radius: 20px;
-  background-image: linear-gradient(to bottom, @wc_glass_hi, @wc_glass);
-  box-shadow:
-    inset 0 1px alpha(white, 0.10),
-    inset 0 0 0 1px @wc_glass_border,
-    0 18px 50px -28px @wc_shade;
-}
 
 /* ------------------------------------------------------------ sidebar */
 
@@ -3534,6 +3515,19 @@ label.wc-subresult {
 }
 /* end text */
 
+/* What holds a result: its caption, the result and the line under it
+   (nothing in the base look; a theme's card). */
+/* surface date.result_panel .wc-result-panel */
+.wc-result-panel {
+  background-color: var(--gmnb-date-result-panel-background-color);
+  background-image: var(--gmnb-date-result-panel-background-image);
+  box-shadow: var(--gmnb-date-result-panel-shadow);
+  border-radius: var(--gmnb-date-result-panel-radius);
+  padding: var(--gmnb-date-result-panel-padding);
+  margin: var(--gmnb-date-result-panel-margin);
+}
+/* end surface */
+
 /* The results (widgets/display.rs draws them at the style's font, or the
    theme's display layer does). */
 calcdisplay.wc-date-result {
@@ -3625,7 +3619,10 @@ window.gmnb.own-field spinbutton.wc-spin>text.error:focus-within {
 }
 /* end field */
 
-window.gmnb spinbutton.wc-spin > text {
+/* The box is DGMNB's 36 px line (date.rs sizes the spin button), not a
+   field's height: as particular as the field's own rule, after it. */
+window.gmnb spinbutton.wc-spin > text,
+window.gmnb.own-field spinbutton.wc-spin > text {
   min-height: 0;
   outline: none;
 }
@@ -5602,6 +5599,41 @@ window.gmnb entry.wc-eq-entry,
 window.gmnb entry.wc-eq-entry:focus-within {
   border: none;
   outline-color: transparent;
+}
+
+/* A text field's text at rest (widgets/fit.rs `rest_line`): the line over
+   the field sets it as DGMNB does, and the toolkit's own text, there for
+   the focus, editing, the caret, a selection, an input method and
+   assistive technology, is hidden until the field has the focus. A theme
+   that hands the field family back to the toolkit keeps its text. */
+window.gmnb .wc-rest > fitlabel {
+  opacity: 0;
+}
+window.gmnb.own-field .wc-rest:not(:focus-within) > fitlabel {
+  opacity: 1;
+}
+window.gmnb.own-field .wc-rest:not(:focus-within) text,
+window.gmnb.own-field .wc-rest:not(:focus-within) text > placeholder {
+  color: transparent;
+}
+window.gmnb.own-field .wc-rest:not(:focus-within) text > selection {
+  color: transparent;
+  background-color: transparent;
+}
+window.gmnb .wc-eq-rest > fitlabel {
+  color: var(--gmnb-graph-entry-color);
+}
+window.gmnb .wc-eq-rest.wc-error > fitlabel {
+  color: var(--gmnb-graph-entry-error-color);
+}
+window.gmnb .wc-eq-rest > fitlabel.wc-placeholder {
+  color: var(--gmnb-graph-entry-placeholder);
+}
+window.gmnb .wc-spin-rest > fitlabel {
+  color: var(--gmnb-field-color);
+}
+window.gmnb .wc-spin-rest > fitlabel.wc-placeholder {
+  color: var(--gmnb-field-placeholder);
 }
 
 /* control graph.row_button button.wc-row-button scope=window.gmnb */
