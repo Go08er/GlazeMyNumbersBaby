@@ -606,7 +606,15 @@ local function style(ctx: Ctx): Style
 				active = press,
 			},
 			empty = { color = dim },
-			sheet = { background = s.card, border = outline, radius = 6, shadow = { { y = -2, color = s.shadow } } },
+			-- The narrow window's sheet: its switch clear of the handle the
+			-- toolkit draws at its top, which would lie across the icing.
+			sheet = {
+				background = s.card,
+				border = outline,
+				radius = 6,
+				shadow = { { y = -2, color = s.shadow } },
+				padding = { 24, 8, 8, 8 },
+			},
 		},
 
 		programmer = {
@@ -637,8 +645,10 @@ local function style(ctx: Ctx): Style
 			calendar = {
 				title = { font = jersey(1.5), color = ink },
 				weekday = { font = jersey(1), color = dim },
+				-- Numbers, so the pixel face, as everywhere else.
 				day = {
 					radius = 4,
+					font = jersey(1),
 					color = ink,
 					hover = { background = alpha(ink, 0.08) },
 					active = { background = alpha(ink, 0.16) },
