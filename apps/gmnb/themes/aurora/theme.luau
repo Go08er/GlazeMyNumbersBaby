@@ -14,9 +14,7 @@
 --   5. Keypad          ripples, the light that follows the pointer, the cascade
 --   6. Display         gradient digits, their glow and their animations
 --   7. Options         what Settings offers, and the palette tiles
---
--- Sounds will get a section of their own once the app plays them; the
--- places they hang from are the events the layers below already react to.
+--   8. Sound           glass under the keys, a chime for a result, a chord per palette
 
 local hex, hsl, mix, alpha, over = gmnb.hex, gmnb.hsl, gmnb.mix, gmnb.alpha, gmnb.over
 local white, black = gmnb.white, gmnb.black
@@ -1772,6 +1770,376 @@ local options: { Option } = {
 	},
 }
 
+---------------------------------------------------------------------------
+-- 8. Sound
+---------------------------------------------------------------------------
+--
+-- Aurora is glass with light behind it, and sounds like it: a fingernail
+-- on a pane under each key, a struck pane in a small room for a result, a
+-- breath for what is cleared away. It is the theme to leave on, so every
+-- sound is short, soft at the top and quieter than the sound chapter's
+-- examples (docs/theming-media.md, "Designing sounds").
+--
+-- Two recipes make all of it:
+--   a pane   a sine that rings, with a bright edge that is gone long before
+--            the ring is, and a grain of noise for the touch. Short and dry
+--            it is a key; long, doubled and in a room, a bell.
+--   air      noise through a band that moves: clear, and a change of page.
+--
+-- And the notes. Every palette has a chord (`VOICES`). Number keys ring
+-- its notes, each key its own, as each has a blob's colour in the
+-- background; a result after = is two of them, rising; a palette newly
+-- chosen plays all four. Every chord has an A in it, so the sounds that
+-- don't change with the palette (they are on A and E) fit them all.
+
+-- A pane's ring at `pitch`, `seconds` long. `shine` is how bright its edge
+-- is (the index of an FM pair at `ratio`: 2.76 and 3.5 are glass, 2 is
+-- hollow, like wood) and `edge` how many seconds that takes to go.
+local function ring(pitch: Pitch | PitchGlide, seconds: number, shine: number, ratio: number, edge: number): SynthLayer
+	local index: Glide = { shine, 0.02, time = edge }
+	return {
+		freq = pitch,
+		fm = { ratio = ratio, index = index },
+		env = { attack = 0.0015, decay = seconds },
+	}
+end
+
+-- The touch itself: a grain of noise around `freq` hertz.
+local function grain(seed: number, freq: number, level: number, seconds: number): SynthLayer
+	return {
+		wave = "noise",
+		seed = seed,
+		filter = { type = "bandpass", freq = freq, q = 1.2 },
+		env = { attack = 0, decay = seconds },
+		gain = level,
+	}
+end
+
+-- `layer` with what `more` says instead.
+local function with(layer: SynthLayer, more: SynthLayer): SynthLayer
+	local out = table.clone(layer)
+	for key, value in more :: { [string]: any } do
+		(out :: { [string]: any })[key] = value
+	end
+	return out
+end
+
+-- Number keys: two takes of one tick, played in turn so that no two
+-- presses are the same sound.
+local tick_a = gmnb.synth({
+	gain = 0.27,
+	layers = { ring("E6", 0.04, 1.1, 2.76, 0.014), grain(11, 4200, 0.10, 0.006) },
+})
+local tick_b = gmnb.synth({
+	gain = 0.27,
+	layers = { ring("E6", 0.042, 0.8, 2.76, 0.018), grain(12, 4800, 0.08, 0.006) },
+})
+
+-- Operators: rounder. Lower than any key's note (on A5), a softer attack,
+-- a hollow edge.
+local tock = gmnb.synth({
+	gain = 0.26,
+	layers = {
+		with(ring("A5", 0.05, 0.6, 2, 0.02), { env = { attack = 0.003, decay = 0.05 } }),
+		grain(13, 2400, 0.05, 0.008),
+	},
+})
+
+-- Function keys and buttons: drier and shorter, more touch than ring.
+local tap = gmnb.synth({
+	gain = 0.24,
+	layers = { ring("E6", 0.03, 0.5, 2.76, 0.008), grain(14, 3000, 0.16, 0.007) },
+})
+
+-- The equals key: the tick and the tock at once, on A. Dry: the chime
+-- that follows is the result's.
+local set = gmnb.synth({
+	gain = 0.32,
+	layers = {
+		ring("A5", 0.062, 0.7, 2, 0.02),
+		with(ring("A6", 0.05, 1.0, 2.76, 0.012), { gain = 0.6 }),
+		grain(15, 3600, 0.10, 0.006),
+	},
+})
+
+-- 2nd and hyp: two ticks, the second a fourth up.
+local flip = gmnb.synth({
+	gain = 0.24,
+	layers = {
+		ring("E6", 0.028, 0.8, 2.76, 0.01),
+		with(ring("A6", 0.036, 0.6, 2.76, 0.01), { at = 0.034, gain = 0.8 }),
+		grain(16, 4200, 0.08, 0.006),
+	},
+})
+
+-- Backspace: a tick that falls away.
+local back = gmnb.synth({
+	gain = 0.22,
+	layers = {
+		ring({ "B6", "E6", time = 0.028 } :: PitchGlide, 0.04, 0.4, 2.76, 0.01),
+		grain(17, 3200, 0.07, 0.006),
+	},
+})
+
+-- Clear: a breath that falls, and a thread of glass falling with it.
+local sweep = gmnb.synth({
+	gain = 0.26,
+	layers = {
+		{
+			wave = "noise",
+			seed = 21,
+			filter = { type = "bandpass", freq = { 3400, 650, time = 0.07 } :: Glide, q = 1.5 },
+			env = { attack = 0.008, decay = 0.066 },
+		},
+		{ freq = { "A6", "A5", time = 0.06 } :: PitchGlide, env = { attack = 0.004, decay = 0.06 }, gain = 0.12 },
+	},
+})
+
+-- A change of page or mode: air rising, and a fifth of glass coming up
+-- under it and going.
+local swell_fx: { SynthEffect } = {
+	{ type = "highpass", freq = 200 },
+	{ type = "reverb", size = 0.5, damp = 0.4, mix = 0.22 },
+}
+local swell = gmnb.synth({
+	gain = 0.15,
+	length = 0.8,
+	layers = {
+		{
+			wave = "noise",
+			seed = 22,
+			filter = { type = "bandpass", freq = { 500, 2600, time = 0.18 } :: Glide, q = 1.3 },
+			env = { attack = 0.08, decay = 0.2 },
+			gain = 0.8,
+		},
+		{ freq = "A5", detune = -4, pan = -0.4, env = { attack = 0.09, decay = 0.3 }, gain = 0.5 },
+		{ freq = "E6", detune = 4, pan = 0.4, env = { attack = 0.11, decay = 0.28 }, gain = 0.35 },
+	},
+	effects = swell_fx,
+})
+
+-- An error: two soft knocks, low, each falling, the second lower and
+-- fainter. They are as far apart as the swings of the readout's shaken
+-- head (46 radians a second there: 137 ms a swing). Triangles, so that
+-- small speakers, which have nothing this low, still get their overtones;
+-- and nothing under 120 Hz for the speakers that do.
+local function knock(from: string, to: string, at: number, level: number, seed: number): (SynthLayer, SynthLayer)
+	return {
+		wave = "triangle",
+		freq = { from, to, time = 0.1 } :: PitchGlide,
+		env = { attack = 0.004, decay = 0.22 },
+		at = at,
+		gain = level,
+	}, {
+		wave = "noise",
+		seed = seed,
+		filter = { type = "lowpass", freq = 700, q = 0.7 },
+		env = { attack = 0.001, decay = 0.03 },
+		at = at,
+		gain = level * 0.3,
+	}
+end
+local knock_1, thump_1 = knock("E4", "B3", 0, 1, 23)
+local knock_2, thump_2 = knock("B3", "F#3", 0.137, 0.7, 24)
+local thud_fx: { SynthEffect } = { { type = "highpass", freq = 140 } }
+local thud = gmnb.synth({
+	gain = 0.22,
+	layers = { knock_1, thump_1, knock_2, thump_2 },
+	effects = thud_fx,
+})
+
+-- A bell: two panes on A5 a few cents apart, left and right, so that the
+-- ring beats slowly and shimmers; one more partial, `colour`, that says
+-- what it is made of; in a small room. One note: chords and chimes are
+-- made by playing it at other speeds (`rate`), which also makes high
+-- notes short and low ones long, as struck things are. `level` is its
+-- gain: the purer a bell, the lower, to sound as loud as the others.
+local bell_fx: { SynthEffect } = {
+	{ type = "highpass", freq = 250 },
+	{ type = "reverb", size = 0.55, damp = 0.35, mix = 0.25 },
+}
+local function bell(level: number, shine: number, ratio: number, attack: number, seed: number, colour: SynthLayer): Sound
+	local function pane(detune: number, pan: number): SynthLayer
+		return with(ring("A5", 1.0, shine, ratio, 0.25), {
+			detune = detune,
+			pan = pan,
+			env = { attack = attack, decay = 1.0 },
+		})
+	end
+	return gmnb.synth({
+		gain = level,
+		length = 1.25,
+		layers = { pane(-3, -0.6), pane(3, 0.6), colour, grain(seed, 5200, 0.06, 0.008) },
+		effects = bell_fx,
+	})
+end
+-- Glass: a bright edge, and the partial a struck bar or pane has at 2.76
+-- times its note, which is no note of any scale.
+local bell_glass = bell(0.16, 1.6, 3.5, 0.002, 31, {
+	freq = 880 * 2.76,
+	env = { attack = 0.002, decay = 0.45 },
+	gain = 0.15,
+})
+-- Warm: a hollow edge and a hum an octave under, like a wooden bar.
+local bell_warm = bell(0.165, 0.9, 2, 0.004, 32, {
+	freq = "A4",
+	env = { attack = 0.006, decay = 0.6 },
+	gain = 0.45,
+})
+-- A bowl: almost no edge, a slow start, a quiet octave above. A rubbed rim.
+local bell_bowl = bell(0.14, 0.25, 3.5, 0.02, 33, {
+	freq = "A6",
+	detune = 5,
+	env = { attack = 0.03, decay = 0.7 },
+	gain = 0.2,
+})
+
+-- A palette's voice: its bell, the chord it introduces itself with, the
+-- two notes of its chime, and the notes its number keys ring.
+type Voice = { bell: Sound, chord: { number }, chime: { number }, keys: { number } }
+
+-- Notes as speeds: of the bell (it is on A5), and of the ticks (on E6).
+local function speeds(notes: { string }, home: string): { number }
+	local out = {}
+	for i, note in notes do
+		out[i] = gmnb.note(note) / gmnb.note(home)
+	end
+	return out
+end
+
+local function voice(bell_sound: Sound, chord: { string }, chime: { string }, keys: { string }): Voice
+	return {
+		bell = bell_sound,
+		chord = speeds(chord, "A5"),
+		chime = speeds(chime, "A5"),
+		keys = speeds(keys, "E6"),
+	}
+end
+
+-- System and Freestyle are whatever colours you bring: an open chord.
+local YOURS = voice(bell_glass, { "A5", "B5", "E6", "F#6" }, { "B5", "E6" }, { "E6", "F#6", "A6", "B6" })
+local VOICES: { [string]: Voice } = {
+	-- A major seventh, close: luminous, unresolved.
+	aurora = voice(bell_glass, { "A5", "C#6", "E6", "G#6" }, { "E6", "A6" }, { "C#6", "E6", "G#6", "A6" }),
+	-- F sharp minor seventh, low and warm.
+	ember = voice(bell_warm, { "F#5", "A5", "C#6", "E6" }, { "C#6", "F#6" }, { "C#6", "E6", "F#6", "A6" }),
+	-- Fifths and fourths, wide apart: depth.
+	abyss = voice(bell_bowl, { "G5", "D6", "G6", "A6" }, { "G5", "D6" }, { "D6", "E6", "G6", "A6" }),
+	-- From D major's five-note scale: sunny.
+	orchard = voice(bell_glass, { "A5", "B5", "D6", "F#6" }, { "D6", "F#6" }, { "D6", "F#6", "A6", "B6" }),
+	-- No third at all: neither major nor minor, as grey is no colour.
+	graphite = voice(bell_bowl, { "A5", "D6", "E6", "A6" }, { "A5", "A6" }, { "D6", "E6", "A6" }),
+	system = YOURS,
+	custom = YOURS,
+}
+
+local function voice_for(ctx: Ctx): Voice
+	local id = ctx.options.palette
+	return (if type(id) == "string" then VOICES[id] else nil) or VOICES.aurora
+end
+
+-- Which sound for which event. This table is the whole of it for most
+-- events, and all of it if `sound` below is ever switched off.
+local sounds: Sounds = {
+	-- Each key keeps its pitch and its place across the window.
+	digit = { sound = { tick_a, tick_b }, pick = "key", rate = { 0.92, 1.09 }, pan = "position" },
+	operator = { sound = tock, rate = { 0.985, 1.015 }, pan = "position" },
+	func = { sound = tap, pick = "key", rate = { 0.95, 1.05 }, pan = "position" },
+	equals = { sound = set, pan = "position" },
+	toggle = { sound = flip, pan = "position" },
+	clear = sweep,
+	backspace = { sound = back, rate = { 0.97, 1.03 }, pan = "position" },
+	-- The memory row: the operators' tock, a fifth up.
+	memory = { sound = tock, rate = 1.498, volume = 0.9, pan = "position" },
+	button = { sound = tap, volume = 0.9, pan = "position" },
+	-- Any result, when `sound` isn't there to tell one after = from one
+	-- after +: a single soft note, high.
+	result = { sound = bell_glass, rate = 2, volume = 0.5, delay = 0.05 },
+	-- It starts as the readout reaches the end of its first swing.
+	error = { sound = thud, delay = 0.034 },
+	mode = swell,
+}
+
+-- What the table can't know.
+--
+-- The app calls a result whatever gives a new value: = does, but so does
+-- + after a number, and so does sin. A chime for each would be a lot of
+-- chiming, so `sound` remembers the key pressed last.
+local last_key = ""
+-- Results in a row from = alone (pressed again, it repeats the operation).
+local repeats = 0
+-- Number keys pressed so far.
+local turn = 0
+
+-- One note of a palette's bell.
+local function note(v: Voice, speed: number, volume: number, pan: number, delay: number): Play
+	return { sound = v.bell, rate = speed, volume = volume, pan = pan, delay = delay }
+end
+
+local function sound(event: SoundEvent, ctx: Ctx): SoundChoice
+	if event.kind == "press" then
+		local key = event.key
+		last_key = if event.action then event.action elseif key then key.kind else "button"
+		if last_key ~= "equals" then
+			repeats = 0
+		end
+		if key and last_key == "number" then
+			-- The key's note in this palette's chord: the same choice the
+			-- background makes of a blob's colour for the key's pulse.
+			local keys = voice_for(ctx).keys
+			local id = key.id or 0
+			local speed = keys[id * (if event.page == "converter" then 5 else 7) % #keys + 1]
+			-- Never the same sound twice running, even on one key: the two
+			-- takes in turn, and a breath of difference in pitch (a tenth
+			-- of a semitone at most) and in loudness.
+			turn += 1
+			local play: Play = {
+				sound = if turn % 2 == 0 then tick_a else tick_b,
+				rate = speed * (0.994 + 0.012 * (turn * 0.618034 % 1)),
+				volume = 0.86 + 0.14 * (turn * 0.414214 % 1),
+				pan = event.pan * 0.6,
+			}
+			return play
+		end
+		return nil
+	elseif event.kind == "result" and event.page == "calculator" then
+		local v = voice_for(ctx)
+		if last_key == "equals" then
+			repeats += 1
+			if repeats == 1 then
+				-- The chime: two notes, rising. The first comes just after
+				-- the key's own sound, the second while the wavefront the
+				-- key sent out is in full flight.
+				local chime: { Play } = {
+					note(v, v.chime[1], 0.8, -0.25, 0.05),
+					note(v, v.chime[2], 0.95, 0.25, 0.19),
+				}
+				return chime
+			end
+			-- = again and again: one soft note each time, up the chord.
+			return note(v, v.chord[(repeats - 2) % #v.chord + 1], 0.5, 0, 0.05)
+		elseif last_key == "operator" then
+			-- The operator's own tock said it.
+			return false
+		end
+		-- A function's result (sin, a square root): one soft note.
+		return note(v, v.chime[2], 0.5, 0, 0.05)
+	elseif event.kind == "error" then
+		repeats = 0
+	elseif event.kind == "option" and event.id == "palette" then
+		-- A new palette introduces itself: its chord, left to right, where
+		-- the background sends up its four pulses.
+		local value = event.value
+		local v = (if type(value) == "string" then VOICES[value] else nil) or VOICES.aurora
+		local chord: { Play } = {}
+		for i, speed in v.chord do
+			chord[i] = note(v, speed, 0.6, (0.4 * i - 1) * 0.6, 0.09 * (i - 1))
+		end
+		return chord
+	end
+	return nil
+end
+
 local theme: Theme = {
 	api = 1,
 	name = "Aurora",
@@ -1782,10 +2150,11 @@ local theme: Theme = {
 	credits = { { title = "Outfit typeface", file = "fonts/OFL-Outfit.txt" } },
 	options = options,
 	style = style,
+	sounds = sounds,
+	sound = sound,
 	layers = {
 		-- Which events each layer is told of, and for how many seconds it
-		-- keeps them. (A sound for each of these would hang from the same
-		-- events: see the header.)
+		-- keeps them. (The sounds of section 8 hang from the same events.)
 		background = { draw = background, events = { press = PULSE_LIFE, result = PULSE_LIFE, error = PULSE_LIFE, option = PULSE_LIFE } },
 		keypad = { draw = keypad, place = place, pointer = true, events = { press = RIPPLE_LIFE, show = 1.5 } },
 		display = { draw = display },
