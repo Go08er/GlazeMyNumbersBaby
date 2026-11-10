@@ -779,6 +779,27 @@ impl Keypad {
         self.imp().via.get()
     }
 
+    /// Dev/test hook (`GMNB_STEPS`): key `id`, if it is drawn, clicked by
+    /// the pointer at its middle (what the pointer's press records, then
+    /// the click), or (`pointer` false) activated as assistive technology
+    /// activates it: no pointer and no key before it.
+    pub fn press_for_test(&self, id: u32, pointer: bool) -> bool {
+        let Some(button) = self.button(id).filter(|b| b.is_drawable()) else {
+            return false;
+        };
+        if pointer {
+            if let Some(r) = button.compute_bounds(self) {
+                let (x, y) = (r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
+                self.imp().last_press.set(Some((x, y, Instant::now())));
+            }
+            button.emit_clicked();
+        } else {
+            // What AT-SPI's "click" action does: the widget's activate.
+            button.activate();
+        }
+        true
+    }
+
     /// A key typed on the keyboard: it is shown `active` for 110 ms.
     /// Returns the key's middle (keypad coordinates) if it is on screen.
     pub fn flash(&self, id: u32) -> Option<(f32, f32)> {

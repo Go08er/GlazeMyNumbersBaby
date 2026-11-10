@@ -621,6 +621,8 @@ fn theme_config(settings: &crate::settings::Settings) -> crate::theme::Config {
         system_accent: settings.system_accent,
         accent: env("GMNB_ACCENT").and_then(|v| crate::theme::accent_from_env(&v)),
         dev_dir,
+        sound: settings.sound,
+        sound_volume: crate::settings::sound_volume(settings.sound_volume),
     }
 }
 

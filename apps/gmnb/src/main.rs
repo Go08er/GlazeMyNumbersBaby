@@ -8,6 +8,8 @@ mod pages;
 mod paste;
 mod prefs;
 mod settings;
+mod sound;
+mod steps;
 mod theme;
 mod undo;
 mod widgets;
@@ -242,6 +244,9 @@ fn activate(app: &adw::Application) {
             w.handle_key(&appcore::KeyPress::named(appcore::Named::Up).alt());
         });
     }
+    if let Ok(steps) = std::env::var("GMNB_STEPS") {
+        steps::run(&win, &steps);
+    }
     if let Ok(keys) = std::env::var("GMNB_KEYS") {
         let w = win.clone();
         glib::timeout_add_local_once(Duration::from_millis(400), move || {
@@ -261,6 +266,7 @@ fn activate(app: &adw::Application) {
             eprintln!("theme: {:?}", hub.stats());
             // Each layer hook: its failures, and whether it was switched off.
             eprintln!("theme hooks: {:?}", hub.hooks());
+            eprintln!("sound: {}", hub.sound_report());
         });
     }
     if let Ok(class) = std::env::var("GMNB_FOCUS") {

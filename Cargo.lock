@@ -1224,6 +1224,7 @@ dependencies = [
  "calcvm",
  "chrono",
  "datecalc",
+ "gmnb-sound",
  "gmnb-theme",
  "graphing",
  "gtk4",
