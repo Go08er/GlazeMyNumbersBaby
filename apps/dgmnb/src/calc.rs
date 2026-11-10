@@ -3,14 +3,17 @@
 use appcore::KeyPress;
 use appcore::input::{self, Action};
 use appcore::keys::{self, KEY_HYP, KEY_SECOND, KEY_TRIG_SECOND, Key, KeyKind};
+use appcore::metrics::{
+    calc as mc, controls as ctl, panel as mp, programmer as mpg, shape, text as txt,
+};
 use calcvm::{AngleUnit, Button as B, CalcMode, CalculatorViewModel, Radix, ShiftMode, WordSize};
 
 use crate::app::{Cx, Msg as AppMsg};
 use crate::gfx::Rect;
 use crate::ui::{self, Align, CAPTION, Frame, KeyLook, SMALL, STRONG, Style, id};
 
-pub const WIDE: f32 = 620.0;
-const PANEL_W: f32 = 300.0;
+pub const WIDE: f32 = mc::WIDE;
+const PANEL_W: f32 = mc::PANEL_W;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
@@ -501,14 +504,14 @@ impl CalcPage {
         } else {
             (area, None)
         };
-        let main = main.inset_xy(8.0, 4.0);
+        let main = main.inset_xy(mc::MARGIN_X, mc::MARGIN_Y);
         let display_h = if compact {
-            86.0
+            mc::DISPLAY_H_COMPACT
         } else {
             match mode {
-                CalcMode::Standard => 116.0,
-                CalcMode::Scientific => 104.0,
-                CalcMode::Programmer => 84.0,
+                CalcMode::Standard => mc::DISPLAY_H_STANDARD,
+                CalcMode::Scientific => mc::DISPLAY_H_SCIENTIFIC,
+                CalcMode::Programmer => mc::DISPLAY_H_PROGRAMMER,
             }
         };
         let open = id(("keypad", B::OpenParenthesis.id()));
@@ -521,14 +524,14 @@ impl CalcPage {
         self.display(f, display, compact);
 
         if mode == CalcMode::Scientific {
-            let (row, r) = rest.take_top(32.0);
+            let (row, r) = rest.take_top(mc::ANGLE_ROW_H);
             rest = r;
             let unit = match self.vm.angle_unit() {
                 AngleUnit::Degrees => "DEG",
                 AngleUnit::Radians => "RAD",
                 AngleUnit::Gradians => "GRAD",
             };
-            let (a, row) = row.take_left(64.0);
+            let (a, row) = row.take_left(mc::ANGLE_W);
             f.button(
                 id("angle"),
                 a,
@@ -544,7 +547,7 @@ impl CalcPage {
                 appcore::keys::angle_button_name(self.vm.angle_unit()),
                 "Switch angle unit (F3/F4/F5)",
             );
-            let (b, _) = row.take_left(52.0);
+            let (b, _) = row.take_left(mc::FE_W);
             f.button(
                 id("fe"),
                 b,
@@ -562,24 +565,25 @@ impl CalcPage {
             );
         }
         if mode == CalcMode::Programmer {
-            let (radix, r) = rest.take_top(4.0 * 26.0 + 4.0);
+            let (radix, r) =
+                rest.take_top(mpg::RADIX_ROWS * mpg::RADIX_ROW_H + mpg::RADIX_LIST_PAD);
             rest = r;
             self.radix_list(f, radix);
-            let (bar, r) = rest.take_top(36.0);
+            let (bar, r) = rest.take_top(mpg::BAR_H);
             rest = r;
             self.programmer_bar(f, bar);
         } else if !compact {
-            let (row, r) = rest.take_top(34.0);
+            let (row, r) = rest.take_top(ctl::TEXT_BUTTON_H);
             rest = r;
             self.memory_row(f, row, !wide);
         }
         if mode == CalcMode::Scientific {
-            let (row, r) = rest.take_top(36.0);
+            let (row, r) = rest.take_top(mc::FLYOUT_ROW_H);
             rest = r;
-            let (t, row) = row.take_left(130.0);
+            let (t, row) = row.take_left(mc::TRIG_W);
             f.button(
                 id("trig-btn"),
-                t.inset_xy(0.0, 3.0),
+                t.inset_xy(0.0, mc::FLYOUT_BUTTON_PAD_Y),
                 "Trigonometry ▾",
                 SMALL,
                 msg(Msg::Popup(Some(Popup::Trig))),
@@ -587,10 +591,10 @@ impl CalcPage {
                 Some(self.popup == Some(Popup::Trig)),
                 false,
             );
-            let (fu, _) = row.take_left(110.0);
+            let (fu, _) = row.take_left(mc::FUNCTION_W);
             f.button(
                 id("func-btn"),
-                fu.inset_xy(4.0, 3.0),
+                fu.inset_xy(mc::FUNCTION_INSET_X, mc::FLYOUT_BUTTON_PAD_Y),
                 "Function ▾",
                 SMALL,
                 msg(Msg::Popup(Some(Popup::Functions))),
@@ -599,7 +603,7 @@ impl CalcPage {
                 false,
             );
         }
-        let pad = rest.inset_xy(0.0, 4.0);
+        let pad = rest.inset_xy(0.0, mc::KEYPAD_PAD_Y);
         if mode == CalcMode::Programmer && self.bit_view {
             self.bit_flip(f, pad);
         } else {
@@ -608,27 +612,51 @@ impl CalcPage {
                 CalcMode::Scientific => keys::scientific(),
                 CalcMode::Programmer => keys::programmer(),
             };
-            let gap = if compact { 3.0 } else { 4.0 };
+            let gap = if compact {
+                mc::KEY_GAP_COMPACT
+            } else {
+                mc::KEY_GAP
+            };
             self.keypad(f, pad, &layout, gap, "keypad");
         }
         if let Some(p) = panel {
-            self.side_panel(f, p.inset_xy(0.0, 4.0).take_right(PANEL_W - 8.0).0);
+            self.side_panel(
+                f,
+                p.inset_xy(0.0, mc::PANEL_MARGIN_Y)
+                    .take_right(PANEL_W - mc::PANEL_MARGIN_LEFT)
+                    .0,
+            );
         }
     }
 
     fn display(&mut self, f: &mut Frame, r: Rect, compact: bool) {
         let t = f.t;
-        let r = r.inset_xy(8.0, 0.0);
-        let (expr, value) = r.take_top(if compact { 24.0 } else { 30.0 });
+        let r = r.inset_xy(mc::DISPLAY_PAD_X, 0.0);
+        let (expr, value) = r.take_top(if compact {
+            mc::EXPRESSION_H_COMPACT
+        } else {
+            mc::EXPRESSION_H
+        });
         let e = self.vm.expression();
-        f.label_fit(expr, &e, SMALL, 9.0, t.fg_dim, Align::End);
-        let max = if compact { 40.0 } else { 52.0 };
+        f.label_fit(
+            expr,
+            &e,
+            SMALL,
+            txt::EXPRESSION_MIN_SIZE,
+            t.fg_dim,
+            Align::End,
+        );
+        let max = if compact {
+            txt::DISPLAY_VALUE_COMPACT.size
+        } else {
+            txt::DISPLAY_VALUE.size
+        };
         let shown = self.vm.display_value();
         f.label_fit(
             value,
             &shown,
-            Style::new(max, 400.0).tabular(),
-            16.0,
+            Style::new(max, txt::DISPLAY_VALUE.weight).tabular(),
+            txt::DISPLAY_MIN_SIZE,
             t.fg,
             Align::End,
         );
@@ -773,7 +801,7 @@ impl CalcPage {
         let has = !self.vm.memory().is_empty();
         let items = MEMORY;
         let n = items.len() + usize::from(toggle);
-        let cells = r.columns(n, 2.0);
+        let cells = r.columns(n, ctl::TEXT_BUTTON_GAP);
         for (i, (b, label, name, tip)) in items.iter().enumerate() {
             let enabled = self.vm.is_enabled(*b);
             let mid = id(("mem", *b as u32));
@@ -809,7 +837,12 @@ impl CalcPage {
         let t = f.t;
         let cur = self.vm.radix();
         for (i, radix) in Radix::ALL.into_iter().enumerate() {
-            let row = Rect::new(r.x, r.y + i as f32 * 26.0, r.w, 26.0);
+            let row = Rect::new(
+                r.x,
+                r.y + i as f32 * mpg::RADIX_ROW_H,
+                r.w,
+                mpg::RADIX_ROW_H,
+            );
             let rid = id(("radix", radix.label()));
             let value = self.vm.radix_value(radix);
             f.row(
@@ -819,7 +852,9 @@ impl CalcPage {
                 radix == cur,
                 &format!("{} {value}", radix.label()),
             );
-            let (name, val) = row.inset_xy(8.0, 0.0).take_left(52.0);
+            let (name, val) = row
+                .inset_xy(mpg::RADIX_PAD_X, 0.0)
+                .take_left(mpg::RADIX_NAME_W);
             f.label(
                 name,
                 radix.label(),
@@ -834,8 +869,8 @@ impl CalcPage {
             f.label_fit(
                 val,
                 &value,
-                Style::new(14.0, 400.0).tabular(),
-                9.0,
+                ui::style(txt::RADIX_VALUE).tabular(),
+                txt::RADIX_VALUE_MIN_SIZE,
                 t.fg,
                 Align::Start,
             );
@@ -843,8 +878,8 @@ impl CalcPage {
     }
 
     fn programmer_bar(&mut self, f: &mut Frame, r: Rect) {
-        let r = r.inset_xy(0.0, 2.0);
-        let (full, rest) = r.take_left(36.0);
+        let r = r.inset_xy(0.0, mpg::BAR_PAD_Y);
+        let (full, rest) = r.take_left(mpg::BAR_SWITCH_W);
         f.icon_button(
             id("full-keypad"),
             full,
@@ -854,7 +889,7 @@ impl CalcPage {
             true,
             Some(!self.bit_view),
         );
-        let (bits, rest) = rest.take_left(36.0);
+        let (bits, rest) = rest.take_left(mpg::BAR_SWITCH_W);
         f.icon_button(
             id("bit-keypad"),
             bits,
@@ -870,10 +905,10 @@ impl CalcPage {
             WordSize::Word => "WORD",
             WordSize::Byte => "BYTE",
         };
-        let (w, rest) = rest.take_left(76.0);
+        let (w, rest) = rest.take_left(mpg::WORD_W);
         f.button(
             id("word"),
-            w.inset_xy(4.0, 0.0),
+            w.inset_xy(mpg::WORD_INSET, 0.0),
             word,
             CAPTION,
             msg(Msg::Word),
@@ -886,10 +921,10 @@ impl CalcPage {
             appcore::keys::word_size_button_name(self.vm.word_size()),
             "Word size (F2/F3/F4/F12)",
         );
-        let (bw, rest) = rest.take_left(86.0);
+        let (bw, rest) = rest.take_left(mpg::BITWISE_W);
         f.button(
             id("bitwise-btn"),
-            bw.inset_xy(2.0, 0.0),
+            bw.inset_xy(mpg::BAR_BUTTON_INSET, 0.0),
             "Bitwise ▾",
             CAPTION,
             msg(Msg::Popup(Some(Popup::Bitwise))),
@@ -897,10 +932,10 @@ impl CalcPage {
             Some(self.popup == Some(Popup::Bitwise)),
             false,
         );
-        let (sh, rest) = rest.take_left(86.0);
+        let (sh, rest) = rest.take_left(mpg::SHIFT_W);
         f.button(
             id("shift-btn"),
-            sh.inset_xy(2.0, 0.0),
+            sh.inset_xy(mpg::BAR_BUTTON_INSET, 0.0),
             "Bit shift ▾",
             CAPTION,
             msg(Msg::Popup(Some(Popup::Shift))),
@@ -908,7 +943,7 @@ impl CalcPage {
             Some(self.popup == Some(Popup::Shift)),
             false,
         );
-        let (mt, rest) = rest.take_right(40.0);
+        let (mt, rest) = rest.take_right(mpg::MEMORY_BUTTON_W);
         f.button(
             id("mem-toggle"),
             mt,
@@ -920,7 +955,7 @@ impl CalcPage {
             false,
         );
         describe(f, "Memory", "Memory");
-        let (ms, _) = rest.take_right(40.0);
+        let (ms, _) = rest.take_right(mpg::MEMORY_BUTTON_W);
         let mid = id(("mem", B::Memory as u32));
         f.button(
             mid,
@@ -939,26 +974,28 @@ impl CalcPage {
     fn bit_flip(&mut self, f: &mut Frame, r: Rect) {
         let t = f.t;
         let width = self.vm.word_size().bits();
-        let r = r.inset_xy(0.0, 8.0);
+        let r = r.inset_xy(0.0, mpg::BITS_PAD_Y);
         f.group(id("bits"), accesskit::Role::Group, "Bit toggling keypad", r);
-        let rows = r.h / 4.0;
+        let rows = r.h / mpg::BITS_ROWS;
         for row in 0..4u32 {
             let rr = Rect::new(r.x, r.y + row as f32 * rows, r.w, rows);
             for nib in 0..4u32 {
-                let nr = rr.cell(1, 4, 0, nib as usize, 10.0);
-                let (idx_r, bits_r) = nr.take_bottom(16.0);
+                let nr = rr.cell(1, 4, 0, nib as usize, mpg::NIBBLE_GAP);
+                let (idx_r, bits_r) = nr.take_bottom(mpg::BIT_INDEX_H);
                 let top = 63 - (row * 16 + nib * 4);
                 f.label(idx_r, &top.to_string(), CAPTION, t.fg_faint, Align::Start);
                 for j in 0..4u32 {
                     let bit = top - j;
-                    let cell = bits_r.cell(1, 4, 0, j as usize, 2.0).inset_xy(0.0, 4.0);
+                    let cell = bits_r
+                        .cell(1, 4, 0, j as usize, mpg::BIT_GAP)
+                        .inset_xy(0.0, mpg::BIT_INSET_Y);
                     let on = bit < width && self.vm.bit(bit);
                     let bid = id(("bit", bit));
                     f.button(
                         bid,
                         cell,
                         if on { "1" } else { "0" },
-                        Style::new(16.0, if on { 700.0 } else { 400.0 }),
+                        ui::style(if on { txt::BIT_ON } else { txt::BIT }),
                         msg(Msg::FlipBit(bit)),
                         bit < width,
                         Some(on),
@@ -976,10 +1013,10 @@ impl CalcPage {
 
     fn side_panel(&mut self, f: &mut Frame, r: Rect) {
         let t = f.t;
-        f.cv.rounded(r, 12.0, t.surface2);
-        let r = r.inset(8.0);
+        f.cv.rounded(r, shape::CARD_RADIUS, t.surface2);
+        let r = r.inset(mp::PADDING);
         let programmer = self.vm.mode() == CalcMode::Programmer;
-        let (tabs, body) = r.take_top(34.0);
+        let (tabs, body) = r.take_top(mp::TAB_H);
         let (h, m) = tabs.take_left(tabs.w / 2.0);
         if !programmer {
             f.button(
@@ -1009,7 +1046,7 @@ impl CalcPage {
 
     fn panel_body(&mut self, f: &mut Frame, r: Rect, tab: Tab) {
         let t = f.t;
-        let (bar, list) = r.take_bottom(40.0);
+        let (bar, list) = r.take_bottom(mp::BAR_H);
         let sid = id(("panel-scroll", tab == Tab::History));
         match tab {
             Tab::History => {
@@ -1026,7 +1063,7 @@ impl CalcPage {
                     let off = f.scroll_begin(sid, list, "History");
                     let mut y = list.y - off;
                     for (i, h) in items.iter().enumerate() {
-                        let row = Rect::new(list.x, y, list.w, 64.0);
+                        let row = Rect::new(list.x, y, list.w, mp::HISTORY_ROW_H);
                         // Read as upstream's (HistoryList's
                         // GetHistoryItemAutomationName) and GMNB's: the
                         // expression, which ends in "=", then the result.
@@ -1037,25 +1074,30 @@ impl CalcPage {
                             false,
                             &format!("{} {}", h.expression, h.result),
                         );
-                        let inner = row.inset_xy(10.0, 6.0);
-                        let (e, v) = inner.take_top(20.0);
+                        let inner = row.inset_xy(mp::ROW_PAD_X, mp::ROW_PAD_Y);
+                        let (e, v) = inner.take_top(mp::EXPRESSION_H);
                         f.label_fit(
-                            e.take_left(e.w - 24.0).0,
+                            e.take_left(e.w - mp::EXPRESSION_TRIM).0,
                             &h.expression,
                             SMALL,
-                            9.0,
+                            txt::PANEL_EXPRESSION_MIN_SIZE,
                             t.fg_dim,
                             Align::End,
                         );
                         f.label_fit(
                             v,
                             &h.result,
-                            Style::new(22.0, 500.0).tabular(),
-                            10.0,
+                            ui::style(txt::PANEL_RESULT).tabular(),
+                            txt::PANEL_RESULT_MIN_SIZE,
                             t.fg,
                             Align::End,
                         );
-                        let del = Rect::new(row.right() - 26.0, row.y + 4.0, 22.0, 22.0);
+                        let del = Rect::new(
+                            row.right() - mp::DELETE_RIGHT,
+                            row.y + mp::DELETE_TOP,
+                            mp::DELETE,
+                            mp::DELETE,
+                        );
                         f.icon_button(
                             id(("hist-del", i)),
                             del,
@@ -1065,14 +1107,14 @@ impl CalcPage {
                             true,
                             None,
                         );
-                        y += 66.0;
+                        y += mp::HISTORY_ROW_STEP;
                     }
-                    f.scroll_end(sid, list, items.len() as f32 * 66.0);
+                    f.scroll_end(sid, list, items.len() as f32 * mp::HISTORY_ROW_STEP);
                 }
                 if !items.is_empty() {
                     f.icon_button(
                         id("hist-clear"),
-                        bar.take_right(36.0).0.inset(2.0),
+                        bar.take_right(mp::TRASH_W).0.inset(mp::TRASH_INSET),
                         appcore::icons::TRASH,
                         "Clear all history (Ctrl+Shift+D)",
                         msg(Msg::HistoryClear),
@@ -1095,7 +1137,7 @@ impl CalcPage {
                     let off = f.scroll_begin(sid, list, "Memory");
                     let mut y = list.y - off;
                     for (i, m) in items.iter().enumerate() {
-                        let row = Rect::new(list.x, y, list.w, 70.0);
+                        let row = Rect::new(list.x, y, list.w, mp::MEMORY_ROW_H);
                         f.row(
                             id(("memrow", i)),
                             row,
@@ -1103,16 +1145,18 @@ impl CalcPage {
                             false,
                             &format!("Memory item {m}"),
                         );
-                        let (v, ops) = row.inset_xy(10.0, 6.0).take_top(32.0);
+                        let (v, ops) = row
+                            .inset_xy(mp::ROW_PAD_X, mp::ROW_PAD_Y)
+                            .take_top(mp::MEMORY_VALUE_H);
                         f.label_fit(
                             v,
                             m,
-                            Style::new(22.0, 500.0).tabular(),
-                            10.0,
+                            ui::style(txt::PANEL_RESULT).tabular(),
+                            txt::PANEL_RESULT_MIN_SIZE,
                             t.fg,
                             Align::End,
                         );
-                        let (ops, _) = ops.take_right(126.0);
+                        let (ops, _) = ops.take_right(mp::MEMORY_BUTTONS_W);
                         for (j, (op, label, name)) in [
                             (MemOp::Clear, "MC", "Clear memory item"),
                             (MemOp::Add, "M+", "Add to memory item"),
@@ -1121,7 +1165,7 @@ impl CalcPage {
                         .into_iter()
                         .enumerate()
                         {
-                            let c = ops.cell(1, 3, 0, j, 4.0);
+                            let c = ops.cell(1, 3, 0, j, mp::MEMORY_BUTTONS_GAP);
                             f.button(
                                 id(("memop", i, j)),
                                 c,
@@ -1136,12 +1180,12 @@ impl CalcPage {
                                 n.label = name.into();
                             }
                         }
-                        y += 72.0;
+                        y += mp::MEMORY_ROW_STEP;
                     }
-                    f.scroll_end(sid, list, items.len() as f32 * 72.0);
+                    f.scroll_end(sid, list, items.len() as f32 * mp::MEMORY_ROW_STEP);
                     f.icon_button(
                         id("mem-clear"),
-                        bar.take_right(36.0).0.inset(2.0),
+                        bar.take_right(mp::TRASH_W).0.inset(mp::TRASH_INSET),
                         appcore::icons::TRASH,
                         "Clear all memory (Ctrl+L)",
                         msg(Msg::MemoryClearAll),
@@ -1160,9 +1204,19 @@ impl CalcPage {
         match popup {
             Popup::Trig | Popup::Functions | Popup::Bitwise => {
                 let (layout, w, h, name) = match popup {
-                    Popup::Trig => (keys::trig(), 320.0, 104.0, "trig"),
-                    Popup::Functions => (keys::functions(), 260.0, 104.0, "functions"),
-                    _ => (keys::bitwise(), 260.0, 104.0, "bitwise"),
+                    Popup::Trig => (keys::trig(), mc::TRIG_FLYOUT.0, mc::TRIG_FLYOUT.1, "trig"),
+                    Popup::Functions => (
+                        keys::functions(),
+                        mc::FUNCTION_FLYOUT.0,
+                        mc::FUNCTION_FLYOUT.1,
+                        "functions",
+                    ),
+                    _ => (
+                        keys::bitwise(),
+                        mc::BITWISE_FLYOUT.0,
+                        mc::BITWISE_FLYOUT.1,
+                        "bitwise",
+                    ),
                 };
                 let anchor = f
                     .hits
@@ -1177,10 +1231,19 @@ impl CalcPage {
                     .map(|h| h.rect)
                     .unwrap_or(area);
                 f.scrim(close, false);
-                let x = anchor.x.min(area.right() - w - 8.0).max(area.x + 8.0);
-                let r = Rect::new(x, anchor.bottom() + 4.0, w, h);
-                f.card(r, 12.0);
-                self.keypad(f, r.inset(8.0), &layout, 4.0, name);
+                let x = anchor
+                    .x
+                    .min(area.right() - w - mc::FLYOUT_EDGE)
+                    .max(area.x + mc::FLYOUT_EDGE);
+                let r = Rect::new(x, anchor.bottom() + mc::FLYOUT_GAP, w, h);
+                f.card(r, shape::POPUP_RADIUS);
+                self.keypad(
+                    f,
+                    r.inset(mc::FLYOUT_INSET),
+                    &layout,
+                    mc::POPUP_KEY_GAP,
+                    name,
+                );
             }
             Popup::Shift => {
                 let anchor = f
@@ -1190,18 +1253,23 @@ impl CalcPage {
                     .map(|h| h.rect)
                     .unwrap_or(area);
                 f.scrim(close, false);
-                let w = 270.0;
-                let x = anchor.right().min(area.right() - 8.0) - w;
+                let w = mc::SHIFT_W;
+                let x = anchor.right().min(area.right() - mc::FLYOUT_EDGE) - w;
                 let r = Rect::new(
-                    x.max(area.x + 8.0),
-                    anchor.bottom() + 4.0,
+                    x.max(area.x + mc::FLYOUT_EDGE),
+                    anchor.bottom() + mc::FLYOUT_GAP,
                     w,
-                    4.0 * 36.0 + 12.0,
+                    4.0 * ctl::ROW_H + ctl::LIST_POPUP_PAD * 2.0,
                 );
-                f.card(r, 12.0);
+                f.card(r, shape::POPUP_RADIUS);
                 let cur = self.vm.shift_mode();
                 for (i, (mode, label)) in SHIFT_MODES.into_iter().enumerate() {
-                    let row = Rect::new(r.x + 6.0, r.y + 6.0 + i as f32 * 36.0, r.w - 12.0, 36.0);
+                    let row = Rect::new(
+                        r.x + ctl::LIST_POPUP_PAD,
+                        r.y + ctl::LIST_POPUP_PAD + i as f32 * ctl::ROW_H,
+                        r.w - ctl::LIST_POPUP_PAD * 2.0,
+                        ctl::ROW_H,
+                    );
                     f.row(
                         id(("shift", i)),
                         row,
@@ -1211,7 +1279,7 @@ impl CalcPage {
                     );
                     let t = f.t;
                     f.label(
-                        row.inset_xy(12.0, 0.0),
+                        row.inset_xy(ctl::MENU_LABEL_X, 0.0),
                         label,
                         SMALL,
                         if mode == cur { t.accent_text } else { t.fg },
@@ -1221,12 +1289,19 @@ impl CalcPage {
             }
             Popup::Panel => {
                 f.scrim(close, true);
-                let h = (area.h * 0.62).max(260.0).min(area.h - 16.0);
-                let r = Rect::new(area.x + 6.0, area.bottom() - h - 6.0, area.w - 12.0, h);
-                f.card(r, 14.0);
+                let h = (area.h * mc::SHEET_SHARE)
+                    .max(mc::SHEET_MIN_H)
+                    .min(area.h - mc::SHEET_VERTICAL_MARGIN);
+                let r = Rect::new(
+                    area.x + mc::SHEET_MARGIN,
+                    area.bottom() - h - mc::SHEET_MARGIN,
+                    area.w - mc::SHEET_MARGIN * 2.0,
+                    h,
+                );
+                f.card(r, shape::SHEET_RADIUS);
                 let programmer = self.vm.mode() == CalcMode::Programmer;
-                let inner = r.inset(8.0);
-                let (tabs, body) = inner.take_top(34.0);
+                let inner = r.inset(mp::PADDING);
+                let (tabs, body) = inner.take_top(mp::TAB_H);
                 let (hh, mm) = tabs.take_left(tabs.w / 2.0);
                 if !programmer {
                     f.button(
@@ -1256,20 +1331,31 @@ impl CalcPage {
             Popup::DisplayMenu(x, y) => {
                 f.scrim(close, false);
                 let r = Rect::new(
-                    x.min(area.right() - 140.0),
-                    y.min(area.bottom() - 84.0),
-                    132.0,
-                    80.0,
+                    x.min(area.right() - mc::DISPLAY_MENU_EDGE.0),
+                    y.min(area.bottom() - mc::DISPLAY_MENU_EDGE.1),
+                    mc::DISPLAY_MENU.0,
+                    mc::DISPLAY_MENU.1,
                 );
-                f.card(r, 10.0);
+                f.card(r, shape::MENU_RADIUS);
                 let t = f.t;
                 for (i, (label, m)) in [("Copy", Msg::Copy), ("Paste", Msg::Paste)]
                     .into_iter()
                     .enumerate()
                 {
-                    let row = Rect::new(r.x + 4.0, r.y + 4.0 + i as f32 * 36.0, r.w - 8.0, 36.0);
+                    let row = Rect::new(
+                        r.x + ctl::MENU_PAD,
+                        r.y + ctl::MENU_PAD + i as f32 * ctl::ROW_H,
+                        r.w - ctl::MENU_PAD * 2.0,
+                        ctl::ROW_H,
+                    );
                     f.row(id(("dmenu", i)), row, msg(m), false, label);
-                    f.label(row.inset_xy(12.0, 0.0), label, ui::BODY, t.fg, Align::Start);
+                    f.label(
+                        row.inset_xy(ctl::MENU_LABEL_X, 0.0),
+                        label,
+                        ui::BODY,
+                        t.fg,
+                        Align::Start,
+                    );
                 }
             }
         }

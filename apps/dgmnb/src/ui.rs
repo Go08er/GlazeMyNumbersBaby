@@ -12,6 +12,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use accesskit::Role;
 use appcore::KeyPress;
 use appcore::input::{self, Focus, FocusKey};
+use appcore::metrics::{controls as ctl, focus, shape, text as txt};
 use tiny_skia::{Path, Transform};
 
 use crate::app::Msg;
@@ -30,13 +31,18 @@ pub fn id(h: impl Hash) -> Id {
     s.finish() | 1 // never 0 (the window)
 }
 
-pub const BODY: Style = Style::new(15.0, 400.0);
-pub const STRONG: Style = Style::new(15.0, 600.0);
-pub const SMALL: Style = Style::new(13.0, 400.0);
-pub const CAPTION: Style = Style::new(12.0, 500.0);
-pub const KEY: Style = Style::new(19.0, 400.0);
-pub const TITLE: Style = Style::new(17.0, 600.0);
-pub const RADIUS: f32 = 8.0;
+/// A shared text style (`appcore::metrics::text`) as a drawing style.
+pub const fn style(s: appcore::metrics::TextStyle) -> Style {
+    Style::new(s.size, s.weight)
+}
+
+pub const BODY: Style = style(txt::BODY);
+pub const STRONG: Style = style(txt::STRONG);
+pub const SMALL: Style = style(txt::SMALL);
+pub const CAPTION: Style = style(txt::CAPTION);
+pub const KEY: Style = style(txt::KEY);
+pub const TITLE: Style = style(txt::TITLE);
+pub const RADIUS: f32 = shape::RADIUS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sense {
@@ -503,7 +509,7 @@ impl<'a, 'p> Frame<'a, 'p> {
         st: Style,
         color: Color,
     ) -> f32 {
-        let lh = (st.size * 1.4).round();
+        let lh = (st.size * txt::PARAGRAPH_LINE).round();
         let lines = self.wrap(text, w, st);
         let clip = self.cv.clip();
         for (i, l) in lines.iter().enumerate() {
@@ -518,17 +524,23 @@ impl<'a, 'p> Frame<'a, 'p> {
 
     /// Stroke one of the 24×24 line icons centred in `r` at `size` px.
     pub fn icon(&mut self, r: Rect, d: &'static str, size: f32, color: Color) {
-        let k = size / 24.0;
+        let k = size / shape::ICON_GRID;
         let t =
             Transform::from_scale(k, k).post_translate(r.cx() - size / 2.0, r.cy() - size / 2.0);
         if let Some(p) = self.icons.get(d).cloned() {
-            self.cv.stroke_path_t(&p, color, 1.8 * k, None, t);
+            self.cv
+                .stroke_path_t(&p, color, shape::ICON_STROKE * k, None, t);
         }
     }
 
     fn focus_ring(&mut self, r: Rect, radius: f32) {
         let c = self.t.accent_text;
-        self.cv.rounded_border(r.inset(-2.0), radius + 2.0, c, 2.0);
+        self.cv.rounded_border(
+            r.inset(-focus::OFFSET),
+            radius + focus::RADIUS_GROW,
+            c,
+            focus::WIDTH,
+        );
     }
 
     // ------------------------------------------------------------ widgets
@@ -563,19 +575,23 @@ impl<'a, 'p> Frame<'a, 'p> {
         } else if enabled && self.hovered(id) {
             self.cv.rounded(r, RADIUS, t.hover);
         }
-        let fg = if enabled { fg } else { fg.alpha(0.35) };
+        let fg = if enabled {
+            fg
+        } else {
+            fg.alpha(ctl::DISABLED_ALPHA)
+        };
         match icon {
-            Some(d) => self.icon(r, d, 20.0, fg),
+            Some(d) => self.icon(r, d, ctl::KEY_ICON, fg),
             None => {
                 let st = if matches!(look, KeyLook::Number) {
-                    Style::new(KEY.size + 2.0, 500.0)
+                    Style::new(KEY.size + txt::NUMBER_KEY_SIZE_ADD, txt::NUMBER_KEY_WEIGHT)
                 } else {
                     KEY
                 };
                 let line = self.text.layout_markup(label, st);
-                let line = if line.width > r.w - 8.0 {
+                let line = if line.width > r.w - ctl::KEY_LABEL_MARGIN {
                     let st = Style {
-                        size: st.size * (r.w - 8.0) / line.width,
+                        size: st.size * (r.w - ctl::KEY_LABEL_MARGIN) / line.width,
                         ..st
                     };
                     self.text.layout_markup(label, st)
@@ -633,8 +649,8 @@ impl<'a, 'p> Frame<'a, 'p> {
             (true, true) => t.on_accent,
             (true, false) => t.fg,
         };
-        let inner = r.inset_xy(6.0, 0.0);
-        self.label_fit(inner, label, st, 10.0, fg, Align::Center);
+        let inner = r.inset_xy(ctl::BUTTON_PAD_X, 0.0);
+        self.label_fit(inner, label, st, txt::BUTTON_MIN_SIZE, fg, Align::Center);
         if self.ring(id) {
             self.focus_ring(r, RADIUS);
         }
@@ -668,7 +684,8 @@ impl<'a, 'p> Frame<'a, 'p> {
         let t = self.t;
         let rad = r.w.min(r.h) / 2.0;
         if on == Some(true) {
-            self.cv.rounded(r, rad, t.accent.alpha(0.18));
+            self.cv
+                .rounded(r, rad, t.accent.alpha(ctl::ICON_BUTTON_ON_ALPHA));
         }
         if enabled && self.pressed(id) {
             self.cv.rounded(r, rad, t.press);
@@ -680,7 +697,7 @@ impl<'a, 'p> Frame<'a, 'p> {
             (true, Some(true)) => t.accent_text,
             _ => t.fg,
         };
-        self.icon(r, d, 18.0, c);
+        self.icon(r, d, ctl::ICON_BUTTON_ICON, c);
         if self.ring(id) {
             self.focus_ring(r, rad);
         }
@@ -700,15 +717,16 @@ impl<'a, 'p> Frame<'a, 'p> {
     pub fn row(&mut self, id: Id, r: Rect, msg: Msg, selected: bool, name: &str) {
         let t = self.t;
         if selected {
-            self.cv.rounded(r, 6.0, t.accent.alpha(0.16));
+            self.cv
+                .rounded(r, shape::ROW_RADIUS, t.accent.alpha(ctl::ROW_CHECKED_ALPHA));
         }
         if self.pressed(id) {
-            self.cv.rounded(r, 6.0, t.press);
+            self.cv.rounded(r, shape::ROW_RADIUS, t.press);
         } else if self.hovered(id) {
-            self.cv.rounded(r, 6.0, t.hover);
+            self.cv.rounded(r, shape::ROW_RADIUS, t.hover);
         }
         if self.ring(id) {
-            self.focus_ring(r, 6.0);
+            self.focus_ring(r, shape::ROW_RADIUS);
         }
         self.hit(id, r, Sense::Click, Some(msg), true);
         if let Some(n) = self.node(id, Role::ListBoxOption, name, r) {
@@ -730,7 +748,7 @@ impl<'a, 'p> Frame<'a, 'p> {
     ) {
         let t = self.t;
         let focused = self.focused(id);
-        self.cv.rounded(r, 6.0, t.surface);
+        self.cv.rounded(r, shape::FIELD_RADIUS, t.surface);
         let border = if error {
             t.danger
         } else if focused {
@@ -738,9 +756,14 @@ impl<'a, 'p> Frame<'a, 'p> {
         } else {
             t.border
         };
+        let border_w = if focused || error {
+            shape::FIELD_BORDER_ACTIVE
+        } else {
+            shape::BORDER
+        };
         self.cv
-            .rounded_border(r, 6.0, border, if focused || error { 2.0 } else { 1.0 });
-        let inner = r.inset_xy(10.0, 0.0);
+            .rounded_border(r, shape::FIELD_RADIUS, border, border_w);
+        let inner = r.inset_xy(ctl::FIELD_PAD_X, 0.0);
         self.push_clip(inner);
         let shown = if e.preedit.is_empty() {
             e.text.clone()
@@ -752,15 +775,20 @@ impl<'a, 'p> Frame<'a, 'p> {
         let line = self.text.layout(&shown, BODY);
         // Keep the caret in view.
         let caret = line.caret_x(e.cursor + e.preedit.len());
-        let scroll = (caret - inner.w + 2.0).max(0.0);
+        let scroll = (caret - inner.w + ctl::CARET_MARGIN).max(0.0);
         let x0 = inner.x - scroll;
         let base = inner.cy() + line.cap / 2.0;
         if focused && e.has_selection() {
             let (a, b) = e.selection();
             let (xa, xb) = (line.caret_x(a), line.caret_x(b));
             self.cv.fill_rect(
-                Rect::new(x0 + xa, inner.cy() - 10.0, xb - xa, 20.0),
-                t.accent.alpha(0.30),
+                Rect::new(
+                    x0 + xa,
+                    inner.cy() - ctl::FIELD_LINE_H / 2.0,
+                    xb - xa,
+                    ctl::FIELD_LINE_H,
+                ),
+                t.accent.alpha(ctl::SELECTION_ALPHA),
             );
         }
         if shown.is_empty() {
@@ -773,12 +801,19 @@ impl<'a, 'p> Frame<'a, 'p> {
                 line.caret_x(e.cursor),
                 line.caret_x(e.cursor + e.preedit.len()),
             );
-            self.cv
-                .fill_rect(Rect::new(x0 + a, base + 3.0, b - a, 1.0), t.fg);
+            self.cv.fill_rect(
+                Rect::new(x0 + a, base + ctl::PREEDIT_DROP, b - a, ctl::PREEDIT_H),
+                t.fg,
+            );
         }
         if focused {
             self.cv.fill_rect(
-                Rect::new((x0 + caret).round(), inner.cy() - 10.0, 1.5, 20.0),
+                Rect::new(
+                    (x0 + caret).round(),
+                    inner.cy() - ctl::FIELD_LINE_H / 2.0,
+                    ctl::CARET_W,
+                    ctl::FIELD_LINE_H,
+                ),
                 t.fg,
             );
         }
@@ -798,20 +833,35 @@ impl<'a, 'p> Frame<'a, 'p> {
     pub fn slider(&mut self, id: Id, r: Rect, frac: f32, name: &str, value: &str, range: [f64; 4]) {
         let t = self.t;
         let frac = frac.clamp(0.0, 1.0);
-        let track = Rect::new(r.x + 8.0, r.cy() - 2.0, r.w - 16.0, 4.0);
-        self.cv.rounded(track, 2.0, t.border);
+        let track = Rect::new(
+            r.x + ctl::SLIDER_INSET,
+            r.cy() - ctl::SLIDER_TRACK_H / 2.0,
+            r.w - ctl::SLIDER_INSET * 2.0,
+            ctl::SLIDER_TRACK_H,
+        );
+        self.cv.rounded(track, ctl::SLIDER_TRACK_RADIUS, t.border);
         self.cv.rounded(
-            Rect::new(track.x, track.y, track.w * frac, 4.0),
-            2.0,
+            Rect::new(track.x, track.y, track.w * frac, ctl::SLIDER_TRACK_H),
+            ctl::SLIDER_TRACK_RADIUS,
             t.accent,
         );
         let kx = track.x + track.w * frac;
-        self.cv.circle(kx, r.cy(), 8.0, t.accent);
+        self.cv
+            .circle(kx, r.cy(), ctl::SLIDER_KNOB_RADIUS, t.accent);
         if self.hovered(id) || self.pressed(id) {
-            self.cv.circle(kx, r.cy(), 12.0, t.accent.alpha(0.16));
+            self.cv.circle(
+                kx,
+                r.cy(),
+                ctl::SLIDER_HALO_RADIUS,
+                t.accent.alpha(ctl::SLIDER_HALO_ALPHA),
+            );
         }
         if self.ring(id) {
-            self.focus_ring(Rect::new(kx - 9.0, r.cy() - 9.0, 18.0, 18.0), 9.0);
+            let b = focus::SLIDER_BOX;
+            self.focus_ring(
+                Rect::new(kx - b / 2.0, r.cy() - b / 2.0, b, b),
+                focus::SLIDER_RADIUS,
+            );
         }
         self.hit(id, r, Sense::Drag, None, true);
         if let Some(n) = self.node(id, Role::Slider, name, r) {
@@ -838,12 +888,12 @@ impl<'a, 'p> Frame<'a, 'p> {
     pub fn surface(&mut self, r: Rect, radius: f32) {
         let t = self.t;
         // A soft shadow from a couple of translucent outlines.
-        for (d, a) in [(6.0, 0.05), (3.0, 0.07), (1.0, 0.10)] {
+        for (d, a) in shape::POPOVER_SHADOW {
             self.cv
                 .rounded(r.inset(-d), radius + d, Color([0.0, 0.0, 0.0, a]));
         }
         self.cv.rounded(r, radius, t.surface);
-        self.cv.rounded_border(r, radius, t.border, 1.0);
+        self.cv.rounded_border(r, radius, t.border, shape::BORDER);
     }
 
     /// Dim everything and close the overlay when clicked outside it. What
@@ -852,7 +902,8 @@ impl<'a, 'p> Frame<'a, 'p> {
     pub fn scrim(&mut self, msg: Msg, dim: bool) {
         let r = Rect::new(0.0, 0.0, self.width(), self.height());
         if dim {
-            self.cv.fill_rect(r, Color([0.0, 0.0, 0.0, 0.30]));
+            self.cv
+                .fill_rect(r, Color([0.0, 0.0, 0.0, shape::SCRIM_ALPHA]));
         }
         self.hit(id("scrim"), r, Sense::Click, Some(msg), false);
         self.layer = self.nodes.as_ref().map_or(0, Vec::len);
@@ -892,10 +943,13 @@ impl<'a, 'p> Frame<'a, 'p> {
         s.offset = s.offset.clamp(0.0, s.max());
         let (offset, max) = (s.offset, s.max());
         if max > 0.0 {
-            let h = (r.h * r.h / content).max(24.0);
+            let h = (r.h * r.h / content).max(ctl::SCROLLBAR_MIN_THUMB);
             let y = r.y + (r.h - h) * (offset / max);
-            self.cv
-                .rounded(Rect::new(r.right() - 5.0, y, 3.0, h), 1.5, t.fg_faint);
+            self.cv.rounded(
+                Rect::new(r.right() - ctl::SCROLLBAR_INSET, y, ctl::SCROLLBAR_W, h),
+                ctl::SCROLLBAR_RADIUS,
+                t.fg_faint,
+            );
         }
         let Some(open) = open else { return };
         if open.offset != offset {
@@ -918,7 +972,7 @@ impl<'a, 'p> Frame<'a, 'p> {
             n.focusable = focusable;
         }
         if focusable && self.ring(id) {
-            self.focus_ring(r.inset(3.0), 6.0);
+            self.focus_ring(r.inset(focus::SCROLL_INSET), focus::SCROLL_RADIUS);
         }
     }
 
