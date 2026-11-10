@@ -3,6 +3,7 @@ Section: math
 Priority: optional
 Maintainer: Go08er <Go08er@users.noreply.github.com>
 # Rust >= 1.92 is also required (newer than Debian 13 ships; use rustup).
+# GMNB's Luau (theme scripts) is C++: g++ comes with build-essential.
 Build-Depends: debhelper-compat (= 13),
                pkgconf,
                libgtk-4-dev (>= 4.18),

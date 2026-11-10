@@ -11,7 +11,8 @@ url='https://github.com/Go08er/GlazeMyNumbersBaby'
 license=('MIT' 'OFL-1.1' 'Apache-2.0' 'BSD-2-Clause' 'BSD-3-Clause' 'CDLA-Permissive-2.0'
          'ISC' 'Unicode-3.0' 'Zlib')
 makedepends=('cargo' 'gtk4' 'libadwaita' 'wayland' 'libxkbcommon')
-# Rust handles its own LTO; makepkg's -flto would also hit the bundled C (ring).
+# Rust handles its own LTO; makepkg's -flto would also hit the bundled C and
+# C++ (ring, Luau). base-devel's gcc builds both.
 options=('!lto' '!debug')
 source=("$pkgbase-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # The v0.2.0 tag tarball's checksum.

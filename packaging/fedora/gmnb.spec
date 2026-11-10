@@ -17,6 +17,8 @@ Source0:        %{url}/archive/v%{version}/GlazeMyNumbersBaby-%{version}.tar.gz
 BuildRequires:  cargo >= 1.92
 BuildRequires:  rust >= 1.92
 BuildRequires:  gcc
+# Luau, GMNB's theme scripting, is C++.
+BuildRequires:  gcc-c++
 BuildRequires:  pkgconfig(gtk4) >= 4.18
 BuildRequires:  pkgconfig(libadwaita-1) >= 1.7
 BuildRequires:  pkgconfig(pango) >= 1.56

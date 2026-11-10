@@ -17,6 +17,18 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       - name: Test suite (incl. golden tests against the C++ engine)
         run: nix develop -c cargo test --workspace --locked
+      - name: DGMNB links no Luau
+        run: |
+          set -o pipefail
+          # The theme engine (mlua, Luau's C++) is GMNB's alone: it must
+          # never reach DGMNB through a shared crate.
+          nix develop -c cargo tree --locked -p dgmnb -e normal,build --prefix none \
+            > dgmnb-tree.txt
+          grep -q "^dgmnb v" dgmnb-tree.txt
+          if grep -Ei "^(mlua|luau)" dgmnb-tree.txt; then
+            echo "::error::DGMNB depends on mlua or Luau"
+            exit 1
+          fi
       - name: DGMNB Wayland clipboard test (private headless weston)
         run: |
           set -o pipefail
