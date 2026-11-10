@@ -30,7 +30,7 @@ pub struct BuiltIn {
 }
 
 /// The themes built in, from `apps/gmnb/themes/`.
-pub static BUILT_IN: [BuiltIn; 3] = [
+pub static BUILT_IN: [BuiltIn; 4] = [
     BuiltIn {
         id: "aurora",
         source: include_str!("../../../apps/gmnb/themes/aurora/theme.luau"),
@@ -87,6 +87,14 @@ pub static BUILT_IN: [BuiltIn; 3] = [
                 include_bytes!("../../../apps/gmnb/themes/glazed/images/sprinkles.gif"),
             ),
         ],
+    },
+    BuiltIn {
+        id: "swirls",
+        source: include_str!("../../../apps/gmnb/themes/swirls/theme.luau"),
+        files: &[(
+            "credits/ColorMix.txt",
+            include_bytes!("../../../apps/gmnb/themes/swirls/credits/ColorMix.txt"),
+        )],
     },
 ];
 

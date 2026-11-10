@@ -8,12 +8,14 @@ writing a theme; from [How style reaches the app](#how-style-reaches-the-app)
 on it is also the specification the app is built to.
 
 - The matching type definitions are [`types/gmnb.d.luau`](../types/gmnb.d.luau).
-- Three themes ship with the app and serve as examples:
+- Four themes ship with the app and serve as examples:
   [`mono`](../apps/gmnb/themes/mono/theme.luau) (20 lines),
   [`aurora`](../apps/gmnb/themes/aurora/theme.luau) (everything a theme
-  can compute) and
+  can compute),
   [`glazed`](../apps/gmnb/themes/glazed/theme.luau) (pictures, keys that
-  move, an overlay, a scale of sounds).
+  move, an overlay, a scale of sounds) and
+  [`swirls`](../apps/gmnb/themes/swirls/theme.luau) (a picture the theme
+  computes, behind glass).
 - Animated pictures, pictures a theme computes, and sound have a chapter
   of their own, [Pictures that move, and sound](theming-media.md). Their
   limits, functions and events are also listed here.
@@ -275,7 +277,12 @@ A **Fill** is one paint, or up to 4 layered, topmost first:
 - **Optical size.** For the bundled Inter the app sets the `opsz` axis to
   the size in pixels, kept between 14 and 32, unless `variations.opsz` says
   otherwise. This is DGMNB's rule; left alone, the toolkit would use the
-  size in points instead.
+  size in points instead. A readout the app shrinks to fit its width
+  (the calculator's, the converter's, the date page's) is shrunk by as
+  much as it is too wide at its largest size, and a smaller optical size
+  is a wider cut: set in Inter, a shrunk readout can come out a little
+  longer than its width. Naming `variations.opsz` (the largest size's,
+  at most 32) keeps one cut at every size, as Swirls' figures do.
 
 ### Transition
 
@@ -752,7 +759,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `window.font` | Font | `text.body` | `window.gmnb`; inherited by every widget, popover and dialog in it |
 | `window.text_halo` | Shadow list | none; see-through: `{ blur 3, bg 0.9 }, { blur 10, bg 0.75 }` | `text-shadow` on `window.gmnb` (inherited) |
 | `window.raised_text_halo` | Shadow list | none | `text-shadow` on keys, buttons, fields, the panel, cards, popovers, the sidebar. Disabled controls get `none` always. |
-| `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph's equation column. (An empty list's text in the History panel lies on the panel, a surface of the style's.) |
+| `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph's equation column and its analysis. (An empty list's text in the History panel lies on the panel, a surface of the style's.) |
 | `plain.radius` | Radius | `shape.card_radius` | same |
 | `scrim` | Color | black at 0.30 | The shade over what the sidebar or a sheet covers |
 | `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius |
@@ -1064,6 +1071,14 @@ The app owns the clock:
   toolkit's frame clock running. A request never comes due sooner than
   asked, to the millisecond, on the layer's own clock (`frame.time`); it
   may come a few milliseconds later.
+- A plain timer is not in step with the screen. A layer that returns
+  exactly `1 / 30` on a 60 Hz screen is drawn on every second frame when
+  its timer comes due just before one, and on every third when it comes
+  due just after: 20 pictures a second instead of 30, by chance (measured
+  with Swirls). For steady motion at such a rate return a little less
+  than `1 / 30`: the app then watches the screen's own frames and draws
+  on the first one due. A frame may come up to half a millisecond before
+  it was asked for.
 - The app settles after 45 seconds without a key press, a pointer move
   over the window, an event or the window becoming active. Any of those
   wakes it.
@@ -1578,6 +1593,60 @@ has settled, nothing runs at all.
 There are no effect presets: nothing in the app is specific to Aurora or
 to Glazed.
 
+### How each of Swirls' effects is made
+
+Swirls is the paint behind s0y b0y, the homepage of GMNB's owner (the
+ColorMix field of [ly](https://github.com/fairyglade/ly), WTFPL), with the
+calculator standing in it. Where Aurora is many gradients, Swirls is one
+picture the theme computes, and everything in it is built on that.
+
+| Effect | How | Why |
+|---|---|---|
+| The swirl | **Scripted field** (`background` layer, `draw:field`, `gmnb.ramp`): the theme works out the page's bent coordinate on a coarse grid in a Luau `buffer`, five times a second; the app glides between two snapshots and colours every pixel through the ramp, thirty times a second | The smooth part is cheap to compute coarsely and the sharp part (the bands' edges) is the app's, per pixel. The same picture per pixel in Luau takes 62 ms a frame. |
+| One cost at every window size | **Scripted**: the grid has about 3,600 points whatever the window's size (a point every 12 px at 760×640, every 48 px at 4K), at most 256 a side, and the app is asked for about 160,000 pixels of picture (`quality`: half size at 760×640, less in a bigger window) | The bands grow with the window, so they are as smooth on the coarser grid, and a frame never costs more. |
+| No frame carries a whole snapshot | **Scripted**: the snapshot *after* the two the picture glides between is worked out a fifth of its rows a frame | A snapshot is 1.6 ms of sines; a fifth of one is 0.3. Only the first frame at a new window size works out a whole one. |
+| A slow machine keeps the theme | **Scripted**: that first snapshot times its first nine rows (`os.clock`). Where a whole one would take over 5 ms, the grid and the picture are made coarser by as much as brings it to 3.5; and a frame that has used 4 ms leaves the oldest disturbances for the next | A hook that overruns its 8 ms three times is switched off for good. |
+| A frame drawn in between costs nothing | **Scripted**: the layer's clock is quantised to thirtieths of a second. Drawn again inside one (an event came, the colours changed), it asks for the numbers it had, and the app has that picture already | The app colours a layer's fields 30 times a second at most; a theme that asks for more is refused and owed a frame. |
+| Thirty pictures a second, in step with the screen | **Scripted**: the hook returns the time left of its thirtieth, never a whole thirtieth | A wait of 1/30 s or more is a plain timer (see [Asking for the next frame](#asking-for-the-next-frame)), which is not in step with the screen: the paint ran at 20 pictures a second in one run and 28 in the next. |
+| Stirring, the ripple, the shudder | **Scripted**: a press, a result or an error moves *where the field is looked up* (a twist about the key that swings back; a ring pushed outward from the readout), inside the box of grid points it touches, on both snapshots | The field itself is three sines deep; looking it up somewhere else is four reads and three blends a point, for a few hundred points. |
+| Typing hurries the paint | **Scripted**: each recent press adds to the pace at which the swirl's phase advances, wearing off in a second | A function of the events the layer is handed, with their ages: no state to keep. |
+| Glass keys and panes; the page's hairline, hover and focus ring | **Declared** (style values) | Box drawing is the toolkit's. |
+| How strong the glass is | **Scripted** (`style`): the least strength at which every ink reads over every band, for this set of bands at this window opacity; the glass chosen is never thinner | White on the page's gold is 1.4 to 1. See [the readability rules](#readability-rules). |
+| A pressed key clears | **Declared** (`keys.active` with a thinner background, and a slow `transition` back) | The toolkit animates it. |
+| Figures made of paint | **Scripted** (`display` layer): the glyphs as a mask (`draw:push_mask`), and behind them a second, small field: a slice of the swirl as one number a point, kept inside the ramp's first band | With one channel and values between 0 and 1 a three-colour cyclic ramp gives only its first two colours and the blend between them, so no figure is ever dark. One ramp serves both layers (a theme may make eight). |
+| Every page in the least window, a long figure in its readout | **Declared**: keys and bits with no least size of their own; the readouts' figures name their optical size | The window may be 300×400; a readout shrunk in Inter's smaller cuts would run past its end ([Font](#font)). |
+| The panel's hairline round the readout | **Scripted** (`display` layer, `draw:border`) | The readout's own style has a background and a radius, no border. |
+| Keys swirling into place | **Scripted** (`place`): each key turned about the keypad's middle and brought in, the nearest first | |
+| The tiles in Settings | **Scripted** (`preview`): a 17 × 11 field through each set's ramp | A tile is drawn once and stands. |
+| The sounds | **Recipes** (`gmnb.synth`) and a **scripted** choice (`sound`): number keys fall on seven notes of one scale, and a result rings the last three that were typed | |
+| One look in light and in dark | **Scripted**: `style` doesn't read `ctx.dark` | The page it comes from has one look. |
+
+Nothing in the app is specific to Swirls either. What it needed of the
+app was one line: the graph's analysis column is a `plain` container now,
+like the equations it replaces in the side panel (its text lies straight
+on the page too).
+
+Measured (release build, a 760×640 window on the private headless
+compositor, the machine under a processor cap and shared with other
+work; Aurora beside it in the same runs; ranges are over five runs, the
+last after the merge with Glazed):
+
+| | Swirls | Aurora |
+|---|---|---|
+| The background's hook per frame, flowing (processor time; the app's colouring pass is inside it) | 0.9 to 1.2 ms: 0.55 the pass, 0.3 a fifth of a snapshot. 3.0 ms for the first frame at a window size (a whole snapshot) | 0.23 ms with thirteen pulses (its gradients are rasterised by the toolkit, after the hook) |
+| The same while somebody types (six stirs and a ripple alive at once) | 1.8 to 2.2 ms, 3.3 ms at worst; the limit is 8 | |
+| The readout's hook per frame | 0.15 ms | 0.06 ms mid-result |
+| The keypad's, its keys coming in | 0.04 to 0.09 ms | 0.12 ms with the pointer over it |
+| A core, living, software renderer | 22 to 27% at 30 pictures a second (11% at 300×400, 14% at 360×600, 34% at 1280×800) | 44 to 63% at 15 |
+| A core, living, GL on llvmpipe | 82 to 93% | 136 to 143% |
+| A core, typing all the while, software renderer | 33 to 41% | 82% |
+| At rest: reduced motion (the toolkit's animations off), the window not in use, held still, settled | 0 ticks of the clock in 10 s, each | 0 |
+| Resident memory (the base look: 69 MiB) | 78 to 82 MiB | 78 MiB |
+
+`crates/gmnb-theme/tests/swirls.rs` prints the hook's figures
+(`what_a_frame_costs`) and holds the background inside its limits at
+window sizes from 300×400 to 3840×2160.
+
 ## Acceptance: the base look is DGMNB's
 
 "Identical" means: **same geometry, same colours, same fonts and metrics;
@@ -1722,6 +1791,19 @@ on the readout's fill (and digits under 28 px, which are not large
 text, wear no icing). The
 bits' indexes need 2.45, as the placeholder does (open point 9):
 `the_bits_indexes_read`.
+
+**Over a background the theme draws.** The table composites over
+`window.background`. A theme whose `background` layer covers that with a
+picture of its own must read over the picture: its `window.background`
+names the picture's colours, and the table is run once more with every
+colour the layer can draw under the window in turn. For Swirls those are
+the 768 entries of its ramp (three bands and every blend between two):
+`swirls_texts_read_over_every_colour_of_the_field`, for each of its six
+sets of bands under each of its three strengths of glass; and
+`tests/swirls.rs` holds its layers to that table: every pixel they draw,
+stirred or still, is one of those entries. The figures its `display`
+layer paints are checked the same way, on what they lie on. The plain
+table for Swirls is `swirls_page_texts_read`.
 
 **4. See-through** (new; 0.2 judged this by eye). The same table at
 opacity 0.1 and 0.5, each stack composited over

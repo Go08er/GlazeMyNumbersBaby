@@ -73,6 +73,9 @@ fn every_style() -> Vec<(String, Style)> {
             out.push((format!("mono dark={dark} {opacity}"), style));
         }
     }
+    // Swirls in each set of bands under each glass (one look in light and
+    // in dark: `swirls_is_dark_in_both_modes`).
+    out.extend(swirls_styles());
     out
 }
 
@@ -976,7 +979,7 @@ fn page_pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fi
 #[test]
 fn every_text_reads_on_what_is_under_it() {
     let bad = unreadable(styles_where(|name| {
-        !name.starts_with("aurora") && !name.starts_with("glazed")
+        !name.starts_with("aurora") && !name.starts_with("glazed") && !name.starts_with("swirls")
     }));
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
@@ -1123,7 +1126,8 @@ fn unreadable(styles: Vec<(String, Style)>) -> Vec<String> {
             let plain_text = desktop.is_none()
                 || base_look
                 || name.starts_with("aurora")
-                || name.starts_with("glazed");
+                || name.starts_with("glazed")
+                || name.starts_with("swirls");
             let mut all = page_pairs(&style, plain_text);
             all.extend(chrome_pairs(&style));
             all.extend(pairs(&style, plain_text));
@@ -1220,4 +1224,207 @@ fn auroras_palettes_stay_readable() {
         }
     }
     assert!(bad.is_empty(), "{bad:#?}");
+}
+
+// ---- Swirls: text over paint that moves ------------------------------------------
+
+/// Swirls' sets of bands and strengths of glass: every value of the two
+/// options of its that change a colour.
+const SWIRLS_BANDS: [&str; 6] = ["party", "lava", "lagoon", "orchid", "absinthe", "marble"];
+const SWIRLS_GLASS: [&str; 3] = ["clear", "smoked", "panel"];
+
+/// Swirls in every set of bands under every glass, at three opacities.
+/// (It is one look in light and in dark: `swirls_is_dark_in_both_modes`.)
+fn swirls_styles() -> Vec<(String, Style)> {
+    let mut out = Vec::new();
+    let mut swirls = built_in("swirls");
+    for opacity in [1.0, 0.5, 0.1] {
+        for bands in SWIRLS_BANDS {
+            for glass in SWIRLS_GLASS {
+                let options = [("bands", text(bands)), ("glass", text(glass))];
+                let ctx = with(&swirls, true, opacity, &options);
+                let style = swirls.style(&ctx).unwrap().style.clone();
+                out.push((format!("swirls {bands} {glass} {opacity}"), style));
+            }
+        }
+    }
+    out
+}
+
+/// Tests 1 and 8 for Swirls: every property the stylesheet reads is
+/// written, and rules 3 and 4 hold in every set of bands under every
+/// glass, the bits' indexes included. Here what is under the window is
+/// the three bands themselves (its `window.background` is a gradient of
+/// them, which `backdrop` samples at both ends and the middle);
+/// `swirls_texts_read_over_every_colour_of_the_field` goes through the
+/// blends between them too.
+#[test]
+fn swirls_page_texts_read() {
+    let writer = Writer::new(STYLESHEET);
+    let styles = swirls_styles();
+    let mut bad = Vec::new();
+    for (name, style) in &styles {
+        let missing = writer.missing(&css::properties(style));
+        assert!(missing.is_empty(), "{name}: not emitted: {missing:#?}");
+        let Some(Value::Text(index)) = style.get("programmer.bit_index") else {
+            panic!("no programmer.bit_index");
+        };
+        let plain = style.fill("plain.background");
+        let desktops: &[Option<Rgba>] = if style.opacity >= 1.0 {
+            &[None]
+        } else {
+            &[Some(BLACK), Some(WHITE)]
+        };
+        for desktop in desktops {
+            let got = worst(index.color, &[&plain], &backdrop(style, *desktop));
+            if got < PLACEHOLDER_CONTRAST {
+                bad.push(format!("{name} {desktop:?}: the bits' indexes {got:.2}"));
+            }
+        }
+    }
+    bad.extend(unreadable(styles));
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// The app's Light and Dark are one look in Swirls, as the page it comes
+/// from has one: the generated style is the same, property for property.
+#[test]
+fn swirls_is_dark_in_both_modes() {
+    let mut swirls = built_in("swirls");
+    for opacity in [1.0, 0.5] {
+        let light = with(&swirls, false, opacity, &[]);
+        let dark = with(&swirls, true, opacity, &[]);
+        let light = css::properties(&swirls.style(&light).unwrap().style);
+        let dark = css::properties(&swirls.style(&dark).unwrap().style);
+        assert_eq!(light, dark);
+    }
+}
+
+/// Every colour Swirls' field can show for the bands a style names: the
+/// whole table of its ramp, as the app makes it (`gmnb_media::Ramp`), the
+/// first band's entries first. `tests/swirls.rs` holds the theme's layers
+/// to it: every pixel they draw, stirred or still, is one of these.
+fn swirls_field_colours(style: &Style) -> Vec<Rgba> {
+    let Some(Paint::Gradient(g)) = style.fill("window.background").0.first().cloned() else {
+        panic!("Swirls' window.background is a gradient of its three bands");
+    };
+    let [a, ground, b] = g.colors[..] else {
+        panic!("three bands, not {}", g.colors.len());
+    };
+    let ramp = gmnb_media::Ramp::new(&[a, b, ground], [0.08, 0.92], true).unwrap();
+    (0..3 * 256)
+        .map(|k| {
+            let [r, g, b, _] = ramp.at((k as f32 + 0.5) / 256.0);
+            [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+        })
+        .collect()
+}
+
+/// Rules 3 and 4 at the field's worst: every pair of the table, in every
+/// set of bands under every glass, with each of the 768 colours its ramp
+/// holds under the window in turn (the three bands and every blend
+/// between two of them), opaque and see-through over black and over
+/// white. Whatever the paint is doing, each pixel of it is one of those.
+///
+/// And the figures made of paint: they are drawn in the first band's
+/// colours (the warm one to the cool one), and each of those reads on the
+/// readout's panel, on the converter's fields and on the date page's
+/// result, over every colour of the field.
+#[test]
+fn swirls_texts_read_over_every_colour_of_the_field() {
+    let mut bad = Vec::new();
+    for (name, style) in swirls_styles() {
+        let colours = swirls_field_colours(&style);
+        let all = {
+            let mut all = page_pairs(&style, true);
+            all.extend(chrome_pairs(&style));
+            all.extend(pairs(&style, true));
+            all
+        };
+        // What the figures lie on: the readout; a converter's field, at
+        // rest and being typed into, on its pane; a date's result on its.
+        let plain = style.fill("plain.background");
+        let field = style.control("converter.field").unwrap();
+        let Some(Value::Surface(result)) = style.get("date.result_panel") else {
+            panic!("no date.result_panel");
+        };
+        let under_figures: Vec<(&str, Vec<Fill>)> = vec![
+            ("the readout", vec![style.fill("display.background")]),
+            (
+                "a converter's value",
+                vec![field.finished(&[]).background, plain.clone()],
+            ),
+            (
+                "a converter's value, typed into",
+                vec![field.finished(&[Which::Checked]).background, plain.clone()],
+            ),
+            (
+                "a date's result",
+                vec![result.background.clone(), plain.clone()],
+            ),
+        ];
+        let desktops: &[Option<Rgba>] = if style.opacity >= 1.0 {
+            &[None]
+        } else {
+            &[Some(BLACK), Some(WHITE)]
+        };
+        for desktop in desktops {
+            let over_what = match desktop {
+                None => "",
+                Some(d) if *d == BLACK => " over black",
+                Some(_) => " over white",
+            };
+            // The worst of each pair over all the field's colours.
+            let mut worst_of = vec![(f32::INFINITY, 0usize); all.len()];
+            let mut worst_figure = vec![(f32::INFINITY, 0usize); under_figures.len()];
+            for (k, colour) in colours.iter().enumerate() {
+                let shown = match desktop {
+                    None => *colour,
+                    Some(d) => over(alpha(*colour, style.opacity), *d),
+                };
+                let behind = [shown; 3];
+                for (i, (_, text, _, fills)) in all.iter().enumerate() {
+                    let fills: Vec<&Fill> = fills.iter().collect();
+                    let got = worst(*text, &fills, &behind);
+                    if got < worst_of[i].0 {
+                        worst_of[i] = (got, k);
+                    }
+                }
+                for (i, (_, fills)) in under_figures.iter().enumerate() {
+                    let fills: Vec<&Fill> = fills.iter().collect();
+                    // (Every eighth of the first band's entries, and its last.)
+                    for figure in colours[..256].iter().step_by(8).chain(&colours[255..256]) {
+                        let got = worst(*figure, &fills, &behind);
+                        if got < worst_figure[i].0 {
+                            worst_figure[i] = (got, k);
+                        }
+                    }
+                }
+            }
+            for ((what, _, at_rest, _), (got, k)) in all.iter().zip(worst_of) {
+                let want = match desktop {
+                    None => *at_rest,
+                    Some(_) => at_rest.min(UI_CONTRAST),
+                };
+                if got < want {
+                    bad.push(format!(
+                        "{name}{over_what}: {what} {got:.2} < {want} (over entry {k})"
+                    ));
+                }
+            }
+            // A figure may be as small as 14 px: text.
+            for ((what, _), (got, k)) in under_figures.iter().zip(worst_figure) {
+                let want = match desktop {
+                    None => TEXT_CONTRAST,
+                    Some(_) => UI_CONTRAST,
+                };
+                if got < want {
+                    bad.push(format!(
+                        "{name}{over_what}: figures of paint on {what} {got:.2} < {want} (over entry {k})"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
