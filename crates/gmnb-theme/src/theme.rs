@@ -1014,6 +1014,12 @@ impl Theme {
 
     /// `ctx` as the theme sees it: refilled in place when it changed,
     /// read-only.
+    /// The `ctx` table hooks are given, filled for `ctx`.
+    pub(crate) fn ctx_for(&self, ctx: &Ctx) -> Result<&Table, ThemeError> {
+        self.fill_ctx(ctx)?;
+        Ok(self.ctx.table())
+    }
+
     fn fill_ctx(&self, ctx: &Ctx) -> Result<(), ThemeError> {
         if self.ctx_filled.borrow().as_ref() == Some(ctx) {
             return Ok(());

@@ -831,8 +831,15 @@ export type Event = {
 	page: "calculator" | "converter" | "date" | "graphing" | "settings",
 	-- press: what was pressed and how.
 	source: ("key" | "button" | "swap" | "date")?,
-	-- "assistive": operated through the accessibility interface.
+	-- "assistive": operated through the accessibility interface. A result
+	-- or an error has the `via` of the press that brought it about.
 	via: ("pointer" | "keyboard" | "assistive")?,
+	-- result / error: what brought it about, the press just before it.
+	-- "equals" is = (or Enter), "operator" the running total + − × ÷ show,
+	-- "function" any other function key. A theme's `sounds` table plays
+	-- `result` and `error` for "equals" and "function" only; `sound(event,
+	-- ctx)` sees every one. Absent when no press did (a paste).
+	cause: ("equals" | "operator" | "function" | "digit" | "clear" | "backspace" | "memory" | "button")?,
 	-- press: what the control does, when it is one of these.
 	action: ("clear" | "backspace" | "memory")?,
 	-- press on a key: which one. `id` is the same for the same key every
