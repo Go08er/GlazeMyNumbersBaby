@@ -525,15 +525,18 @@ about it:
 | Outlines | Unhinted, grey levels (`text.rs`) | At scale 1 GTK's automatic font rendering hints them: every glyph moved and stretched to the pixel grid, by up to a pixel | `window.rs` `match_text_rendering`: manual rendering, no hinting (outlines or metrics), grey levels, for the whole app |
 | Across | A line at `cx − width / 2`, to a quarter of a pixel | A label rounds its text's place down to a whole pixel | `window.rs` `exact_text`: a centred or end-aligned label is laid out across its whole width (it may be ellipsized), and Pango places the line there to the fraction |
 | Down | The baseline at the place's middle plus half the capitals' height, rounded to a pixel (`ui.rs` `draw_line`) | A label centres its line box in its place, rounding down; the baseline is half the leading below the font's ascent. Inter's ascent less its descent is its cap height, so only the rounding differs | Each font's `--P-line-height` and `--P-text-nudge` (`css.rs` `text_line`): a line box and a pixel of padding above it that land the baseline on DGMNB's in any place an even number of pixels high |
-| Scripts | 62% of the label's size, raised 0.36 of it or lowered 0.16, at their own optical size | Pango's `<sup>` uses the font's own superscript size and shift (60%, 0.35), and an absolute line height is given to every run, so a raised run makes the line taller | Keys' labels are written as `<span size="62%" rise="…" line_height="1025" font="@opsz=…">` (`calculator.rs` `script_markup`): the script in a line box a pixel high. (Pango reads a `line_height` above 1024 as Pango units, up to 1024 as a factor.) A fallback font's glyph in a label (the ▾ of the flyout buttons) gets the same box |
-| Cells | Rows of equal cells (`Rect::columns`, `Rect::cell`) fall on fractions of a pixel | Whole pixels, the spare ones to the first cells: a label up to a pixel off | `width_bin.rs` `Cells` (the memory row), `Strip` (the programmer bar) and `bitflip.rs`'s grid place children to the fraction with an allocation transform, and the bits' baselines on DGMNB's pixel |
+| Scripts | 62% of the label's size, raised 0.36 of it or lowered 0.16, at their own optical size | Pango's `<sup>` uses the font's own superscript size and shift (60%, 0.35), and an absolute line height is given to every run, so a raised run makes the line taller | A key's label is not the toolkit's: `widgets/fit.rs` reads the keys' own `<sup>` / `<sub>` (`parse_markup`) and sets each script in the label's font at 62%, risen or dropped by those parts of the size, its baseline rounded with its shift as DGMNB's (`line_layout`, `draw_line`). A fallback font's glyph in a toolkit label (the ▾ of the flyout buttons) is given a line box a pixel high (`line_height="1025"`: Pango reads a `line_height` above 1024 as Pango units, up to 1024 as a factor) |
+| Cells | Rows of equal cells (`Rect::columns`, `Rect::cell`) fall on fractions of a pixel | Whole pixels, the spare ones to the first cells: a label up to a pixel off | `width_bin.rs` `Cells` (the memory row), `Strip` (the programmer bar) and `bitflip.rs`'s grid place children to the fraction with an allocation transform, and the bits' baselines on DGMNB's pixel. A key stays on the toolkit's whole pixels and its label is set about the middle of DGMNB's cell (`fit.rs` `set_cell`, `cell_middle`): the keypads (`widgets/keypad.rs`) and the graph pad |
 | Overlap | A narrow window's rows overlap | Children ask for their width, and the window grows | `Strip` asks for none of its own |
 
-Not done: the keypad (`widgets/keypad.rs`) lays keys out on GTK's grid,
-so where DGMNB's key cells are fractional (Scientific and Programmer at
-760×640: five columns of 85.6 px; Standard at 360×600: rows of 61.3 px)
-their labels sit up to a pixel off and fail the text rule. The bits'
-`place` is the recipe.
+The text the app places itself needs none of the toolkit's part of this:
+a key's label, a page's line (`widgets/fit.rs` `FitLabel`) and the
+readouts (`widgets/display.rs`) are laid out unhinted in grey levels
+(`fit.rs` `set_unhinted`, whatever the settings say), shrunk to their
+width, their capitals centred with each run's baseline on a whole pixel
+and each glyph at the nearest quarter pixel (`fit.rs` `draw_line`). A
+key's label and icon ask for no least height, so keys shrink below what
+they show, as DGMNB's do.
 
 ### Toolkit-drawn families: `native`
 
@@ -802,7 +805,11 @@ For a Control, the base states are these unless the row says otherwise:
 ### Display (the readout)
 
 Drawn by `widgets/display.rs` from `Style`. The converter's two values and
-the date page's results are lines of their own (`converter.value`, `date.result`).
+the date page's results are readouts too (to a theme's
+[`display` layer](#the-display-layer): `role` `"converter"` and `"date"`),
+but lines of their own to the style: their fonts are `converter.value` and
+`date.result`, their colour the window's, and none of the rows below
+applies to them.
 
 | Path | Kind | Base | Feeds |
 |---|---|---|---|
@@ -849,6 +856,14 @@ uses `keys.on`. A class takes `keys`' shared values (`radius`, `padding`,
 as the theme set them, unless it gives its own. Superscripts and subscripts in key labels are 62% of the
 label's size, raised 0.36 of it or lowered 0.16 (fixed, DGMNB's: [Text in its place](#text-in-its-place)).
 
+A key's label is drawn by the app (`widgets/keypad.rs`, a `FitLabel`), in
+its class's `font`: its colour is the stylesheet's (the class's `color`
+in each state), its weight a state's `font_weight` when the key is in
+that state (`checked`, then `hover` or `active`, then `disabled`, as the
+stylesheet orders them), and it is shrunk to its key's width less 8 with
+no least size. Its halo is `window.raised_text_halo`, and none while the
+key is disabled.
+
 ### History and memory panel
 
 | Path | Kind | Base | Feeds |
@@ -892,7 +907,7 @@ are `popover`s.
 | `date.label` | Text | `text.caption`, `fg_dim` | `.wc-section` on this page |
 | `date.field` | Control | min_height 38; radius `shape.radius`; background `surface2`; `text.body`; `fg`; padding `{ 0, 6 }`; `checked = { background accent, color on_accent }` (while its calendar is open) | `menubutton.wc-field > button.toggle`: "Tuesday, November 10, 2026  ▾", centred, at most 320 wide |
 | `date.result_panel` | Surface | nothing: no background, no padding | `.wc-result-panel` |
-| `date.result`, `date.add_result` | `{ size, font }` | 28, weight 400; the same | The page's results (Rust, `widgets/fit.rs`), shrunk to fit down to 14; out of range, the error colour |
+| `date.result`, `date.add_result` | `{ size, font }` | 28, weight 400; the same | The page's results (Rust, `widgets/display.rs`: a readout, `role = "date"`), shrunk to fit down to 14; out of range, the error colour |
 | `date.subresult` | Text | `text.body`, `fg_dim` | `.wc-subresult` |
 | `date.calendar.title` | Text | `text.strong`, `fg` | `.wc-days-title` |
 | `date.calendar.weekday` | Text | `text.caption`, `fg_dim` | `.wc-days-weekday` |
@@ -910,7 +925,7 @@ calendar sits in a `popover`; its arrows are `icon_button`s.
 |---|---|---|---|
 | `converter.field` | Control | no background; radius 0; padding 0; `checked` changes nothing | `.wc-conv-field`; `checked` is `.wc-active` (the field being typed into) |
 | `converter.marker` | `{ color, width, height }` or `false` | `{ accent, 36, 3 }` | A bar at the bottom-left of the active field: a sized background layer on the field's inner box, `.wc-conv-field.wc-active > .wc-conv-marker` (so it never shares a layer list with the field's own background). `false` writes it as transparent and 0×0. |
-| `converter.value` | `{ size, font, checked_weight, focus }` | 38; `fonts.display` weight 300 with `{ "tnum" }`; 500; `focus` | The two values (Rust, `widgets/fit.rs`), shrunk to fit down to 14; the currency's symbol before a value in `converter.symbol`, 8 px from it; the ring is `.wc-conv-field fitlabel:focus-visible` |
+| `converter.value` | `{ size, font, checked_weight, focus }` | 38; `fonts.display` weight 300 with `{ "tnum" }`; 500; `focus` | The two values (Rust, `widgets/display.rs`: readouts, `role = "converter"`), shrunk to fit down to 14; the currency's symbol before a value in `converter.symbol`, 8 px from it (the app's, whoever paints the value); the ring is `.wc-conv-field calcdisplay.wc-conv-value:focus-visible` |
 | `converter.symbol` | Text | 26 / 400, `fg_dim` | `.wc-currency-symbol` |
 | `converter.unit` | Control | min_height 34; radius `shape.radius`; background `surface2`; `text.body`; `fg`; `checked = { background accent, color on_accent }` | `dropdown.wc-unit-dropdown > button`; `checked` while its list is open. The list is a `menu`. |
 | `converter.swap` | Control | `icon_button` | `button.wc-swap` |
@@ -1070,6 +1085,9 @@ key, else the middle of `rect`. All in the layer's own coordinates.
 - An `option` event comes from nowhere in particular: its `rect` is the
   layer's own area.
 - A layer that is not on screen is told nothing.
+- A readout that is not on screen sends no `result` or `error` (another
+  page's value changing behind the one shown; the date page's other
+  result).
 
 For `press`:
 
@@ -1209,7 +1227,10 @@ no key is moved that frame.
 ### The display layer
 
 The app lays the value out: it picks the size that fits, shapes the text
-in `display.value.font`, and positions each character. The hook paints.
+in `display.value.font` (a converter value in `converter.value`'s font, a
+date result in `date.result`'s), and positions each character. The hook
+paints. A currency's symbol before a converter value is not part of the
+value: the app paints it.
 
 `frame.value`:
 
@@ -1686,7 +1707,7 @@ the widget it came from (the name its page has in the window's stack).
 | `calculator.rs` `press_from` (memory row, F-E) | `pressed(button, Source::Button, …)` | `press`, `source = "button"`; the memory buttons with `action = "memory"` |
 | `converter.rs` swap | `pressed(button, Source::Swap, None)` | `press`, `source = "swap"` |
 | `date.rs` a day picked | `pressed(button, Source::Date, None)` | `press`, `source = "date"`, `rect` = the date button |
-| `Display::set_value` given `Change::Result` or `Change::Error` (the calculator's, the converter's and the date page's readouts alike) | `outcome(readout, error)` | `result` / `error` with the readout's `page`, `rect` = the readout |
+| `Display::set_value` given `Change::Result` or `Change::Error` (the calculator's, the converter's and the date page's readouts alike) | `outcome(readout, error)` | `result` / `error` with the readout's `page`, `rect` = the readout. Not from a readout that is not on screen (another page's; the date page's other result) |
 | `Keypad` mapped; `Keypad::cascade` (the calculator's mode changed, the converter shown) | `shown(pad)` | `show`, `rect` = the keypad |
 | `Hub::set_option` | `emit` | `option`, with `id` and `value` |
 | `Window::set_mode`, after the first page | `mode_changed(page)` | `mode`, `page` = the new page, `rect` = the page |
@@ -1702,7 +1723,12 @@ the widget it came from (the name its page has in the window's stack).
   that presses its key on screen is always `"keyboard"`.
 
 `Display::set_value`'s `Change` also becomes `frame.value.change` for
-that readout, while a theme's display layer draws it.
+that readout, while a theme's display layer draws it. On the converter a
+key typed is `typing` in the value typed into and `replace` in the other;
+a unit chosen, the rates arriving and a paste are `replace` and `result`;
+the swap is `result` in both (two `result` events, one from each
+readout). On the date page a day picked and add/subtract switched are
+`result`, the step boxes `typing`, the mode switched `replace`.
 
 ### Where the layers' code lives
 
@@ -1828,8 +1854,8 @@ Decided here, and worth a second look by the owner:
    DGMNB's fractional cell. The toolkit's own labels were hinted (until
    point 12) and are centred by their line height; on the date page, the converter and the
    graph pad those missed the comparison's ink-colour and blur limits by
-   a little. The calculator's keypad (`widgets/keypad.rs`) still uses
-   the toolkit's labels.
+   a little. The keypads' labels (`widgets/keypad.rs`) and the readouts
+   (`widgets/display.rs`) are set the same way, by the same functions.
 11. **A selected row's label counts as a mark** in the readability rules
     (3:1): the sidebar's current page and the current radix are
     `accent_text` on the accent at .16, which DGMNB's own colours put at

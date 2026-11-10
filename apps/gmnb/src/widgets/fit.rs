@@ -840,3 +840,50 @@ impl Texts {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{cell_middle, parse_markup};
+
+    /// A key's markup is read as DGMNB reads it (`text.rs`
+    /// `layout_markup`): only `<sup>` and `<sub>` are markup, any other
+    /// `<` is text.
+    #[test]
+    fn a_keys_markup_is_read_as_dgmnb_reads_it() {
+        assert_eq!(
+            parse_markup("x<sup>2</sup>"),
+            ("x2".into(), vec![(1, 2, true)])
+        );
+        assert_eq!(
+            parse_markup("<sup>2</sup>√x"),
+            ("2√x".into(), vec![(0, 1, true)])
+        );
+        assert_eq!(
+            parse_markup("<sup>1</sup>/<sub>x</sub>"),
+            ("1/x".into(), vec![(0, 1, true), (2, 3, false)])
+        );
+        assert_eq!(parse_markup("<"), ("<".into(), vec![]));
+        assert_eq!(parse_markup("a<b>c"), ("a<b>c".into(), vec![]));
+        assert_eq!(parse_markup("CE"), ("CE".into(), vec![]));
+    }
+
+    /// `<small>` inside a script is taken out: the script is small
+    /// already (the open-parenthesis count, as 0.2 wrote it).
+    #[test]
+    fn small_in_a_script_is_dropped() {
+        assert_eq!(
+            parse_markup("(<sub><small>2</small></sub>"),
+            ("(2".into(), vec![(1, 2, false)])
+        );
+    }
+
+    /// DGMNB's `Rect::cell`: five columns in 444 px, 4 apart, are 85.6
+    /// wide.
+    #[test]
+    fn a_cells_middle_is_dgmnbs() {
+        let (x, y) = cell_middle((444.0, 372.0), (7, 5), (0, 0), 4.0);
+        assert!((x - 42.8).abs() < 1e-3 && (y - 24.857).abs() < 1e-2);
+        let (x, _) = cell_middle((444.0, 372.0), (7, 5), (0, 4), 4.0);
+        assert!((x - (4.0 * 89.6 + 42.8)).abs() < 1e-3);
+    }
+}
