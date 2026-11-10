@@ -876,9 +876,15 @@ pub static ROWS: &[Row] = &[
     }),
     // -- Programmer.
     row("programmer.radix.row", Kind::Control, |s| {
+        let c = &s.t.colors;
         let mut row = s.selectable_row(&s.t.text.body);
         row.min_height = metrics::programmer::RADIX_ROW_H;
         row.padding = Spacing::vh(0.0, metrics::programmer::RADIX_PAD_X);
+        // The current one's tint, laid over the window's colour: what DGMNB
+        // shows at full opacity, and on a see-through window as opaque as
+        // the panel (a tint over the scrim alone left its name at 2.5:1).
+        let tint = alpha(c.accent, metrics::controls::ROW_CHECKED_ALPHA);
+        row.checked.background = Some(Fill::color(crate::states::over(tint, c.bg)));
         Value::Control(Box::new(row))
     }),
     row("programmer.radix.name", Kind::Text, |s| {

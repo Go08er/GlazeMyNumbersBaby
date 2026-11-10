@@ -324,10 +324,11 @@ pub fn hide_ring_on_press(widget: &impl IsA<gtk::Widget>) {
 pub fn exact_text(w: &impl IsA<gtk::Widget>) {
     let w = w.as_ref();
     if let Some(label) = w.downcast_ref::<gtk::Label>() {
-        if label.ellipsize() == gtk::pango::EllipsizeMode::None && !label.wraps() {
+        let x = label.xalign();
+        // (A label at its start is placed exactly as it is.)
+        if x >= 0.25 && label.ellipsize() == gtk::pango::EllipsizeMode::None && !label.wraps() {
             label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         }
-        let x = label.xalign();
         label.set_justify(if x < 0.25 {
             gtk::Justification::Left
         } else if x > 0.75 {

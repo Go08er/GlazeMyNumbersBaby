@@ -16,7 +16,7 @@ use crate::widgets::calc_panel::{CalcPanel, MemOp};
 use crate::widgets::display::{Change, Display};
 use crate::widgets::icon::{PathIcon, icon_toggle, paths};
 use crate::widgets::keypad::Keypad;
-use crate::widgets::width_bin::{Cells, SizeBin, WidthBin};
+use crate::widgets::width_bin::{Cells, SizeBin, Strip, WidthBin};
 use appcore::KeyPress;
 use appcore::input::{self, Action};
 use appcore::keys::{self, KEY_HYP, KEY_SECOND, KEY_TRIG_SECOND};
@@ -63,7 +63,7 @@ pub struct CalculatorPage {
     side_bin: SizeBin,
     sheet: adw::BottomSheet,
     sheet_holder: gtk::Box,
-    history_btn: gtk::ToggleButton,
+    history_btn: gtk::Button,
     wide: Cell<bool>,
     /// Set while pushing VM state into widgets, so their change signals
     /// don't feed back into the VM.
@@ -162,23 +162,24 @@ impl CalculatorPage {
         row.append(&side_bin);
 
         let root = WidthBin::new(&row);
-        let history_btn = icon_toggle(paths::HISTORY, "History (Ctrl+H)");
+        // A button, as DGMNB's (not a toggle, lit while the sheet is open):
+        // it opens the sheet, or closes the open one.
+        let history_btn = crate::window::icon_button(paths::HISTORY, "History (Ctrl+H)");
         crate::window::follow_icon(&ctx.hub, &history_btn, "header.button");
-        history_btn
-            .bind_property("active", &sheet, "open")
-            .bidirectional()
-            .sync_create()
-            .build();
         {
             // The button names History: clicked, it shows that list,
             // whichever the sheet showed last (M▾ leaves it on Memory, and
             // the sheet then opened on Memory from this button too:
-            // R19-L-01's other half). On the click, not on the state: the
-            // button's state follows the sheet however that opens.
+            // R19-L-01's other half).
             let panel = panel.clone();
-            history_btn.connect_clicked(move |b| {
-                if b.is_active() {
+            let sheet = sheet.downgrade();
+            history_btn.connect_clicked(move |_| {
+                let Some(sheet) = sheet.upgrade() else { return };
+                if sheet.is_open() {
+                    sheet.set_open(false);
+                } else {
                     panel.show_tab("history");
+                    sheet.set_open(true);
                 }
             });
         }
@@ -710,17 +711,14 @@ impl CalculatorPage {
 
         // The bar, DGMNB's: the two keypads, word size, Bitwise ▾ and Bit
         // shift ▾; MS and M▾ at its end. 36 high, its buttons 2 in.
-        let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let bar = Strip::new();
         bar.add_css_class("wc-plain");
         bar.add_css_class("wc-short-row");
         bar.set_height_request(mpg::BAR_H as i32);
         let in_bar = |w: &gtk::Widget, width: f32, inset: f32| {
-            w.set_width_request((width - 2.0 * inset) as i32);
-            w.set_margin_start(inset as i32);
-            w.set_margin_end(inset as i32);
             w.set_margin_top(mpg::BAR_PAD_Y as i32);
             w.set_margin_bottom(mpg::BAR_PAD_Y as i32);
-            bar.append(w);
+            bar.append(w, false, width, inset);
         };
         let full = icon_toggle(paths::KEYBOARD, "Full keypad");
         let bits = icon_toggle(paths::BITS, "Bit toggling keypad");
@@ -800,15 +798,19 @@ impl CalculatorPage {
         in_bar(bw_btn.upcast_ref(), mpg::BITWISE_W, mpg::BAR_BUTTON_INSET);
         let shift_btn = chevron_menu(&self.ctx, "Bit shift", "wc-text-flyout", &shift_pop);
         in_bar(shift_btn.upcast_ref(), mpg::SHIFT_W, mpg::BAR_BUTTON_INSET);
-        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        bar.append(&spacer);
+        // MS and M▾ from the end: M▾ last, as DGMNB's.
         let mem = self.memory_row(false);
+        let mut buttons = Vec::new();
         let mut child = mem.first_child();
         while let Some(button) = child {
             child = button.next_sibling();
             mem.remove(&button);
-            in_bar(&button, mpg::MEMORY_BUTTON_W, 0.0);
+            buttons.push(button);
+        }
+        for button in buttons.iter().rev() {
+            button.set_margin_top(mpg::BAR_PAD_Y as i32);
+            button.set_margin_bottom(mpg::BAR_PAD_Y as i32);
+            bar.append(button, true, mpg::MEMORY_BUTTON_W, 0.0);
         }
         self.mem_rows.borrow_mut().retain(|r| r != &mem);
         b.append(&bar);
@@ -1392,8 +1394,18 @@ impl CalculatorPage {
 /// `line_height` above 1024 as Pango units, and one up to 1024 as a
 /// factor.)
 pub fn script_markup(label: &str, size: f32) -> String {
+    /// What a script is of its label's size.
+    const SCRIPT_SCALE: f32 = 0.62;
     let units = |em: f32| (em * size * gtk::pango::SCALE as f32).round() as i32;
-    let open = |rise: i32| format!("<span size=\"62%\" rise=\"{rise}\" line_height=\"1025\">");
+    // At its own optical size, as DGMNB sets it (the label's is its own).
+    let (low, high) = gmnb_theme::types::OPSZ_RANGE;
+    let opsz = (size * SCRIPT_SCALE).clamp(low, high);
+    let open = |rise: i32| {
+        format!(
+            "<span size=\"62%\" rise=\"{rise}\" line_height=\"1025\" font=\"@opsz={}\">",
+            gmnb_theme::css::num(opsz)
+        )
+    };
     label
         .replace("<sup>", &open(units(0.36)))
         .replace("<sub>", &open(-units(0.16)))

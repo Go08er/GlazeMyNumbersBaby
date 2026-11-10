@@ -177,6 +177,78 @@ mod imp {
             }
         }
     }
+
+    /// Where a strip's child goes: `width` px of the strip, from its
+    /// start or from its end, the child `inset` px in from both sides of
+    /// that room.
+    #[derive(Clone, Copy)]
+    pub struct Slot {
+        pub end: bool,
+        pub width: f32,
+        pub inset: f32,
+    }
+
+    #[derive(Default)]
+    pub struct Strip {
+        pub slots: RefCell<Vec<(gtk::Widget, Slot)>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for Strip {
+        const NAME: &'static str = "GmnbStrip";
+        type Type = super::Strip;
+        type ParentType = gtk::Widget;
+    }
+
+    impl ObjectImpl for Strip {
+        fn dispose(&self) {
+            self.slots.borrow_mut().clear();
+            while let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
+        }
+    }
+
+    impl WidgetImpl for Strip {
+        fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
+            let slots = self.slots.borrow();
+            if orientation == gtk::Orientation::Horizontal {
+                // DGMNB's rows overlap in a narrow window rather than
+                // widen it: the strip asks for no width of its own.
+                let nat: f32 = slots.iter().map(|(_, s)| s.width).sum();
+                return (0, nat.ceil() as i32, -1, -1);
+            }
+            let most = slots
+                .iter()
+                .filter(|(w, _)| w.is_visible())
+                .map(|(w, _)| w.measure(orientation, -1).0)
+                .max()
+                .unwrap_or(0);
+            (most, most, -1, -1)
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
+            let (mut start, mut end) = (0.0, width as f32);
+            for (w, s) in self.slots.borrow().iter() {
+                if !w.is_visible() {
+                    continue;
+                }
+                let x = if s.end {
+                    end -= s.width;
+                    end
+                } else {
+                    start += s.width;
+                    start - s.width
+                };
+                let room = s.width - 2.0 * s.inset;
+                let min = w.measure(gtk::Orientation::Horizontal, height).0;
+                let cw = (room.round() as i32).max(min);
+                let at = x + s.inset + (room - cw as f32) / 2.0;
+                let t = gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(at, 0.0));
+                w.allocate(cw, height, -1, Some(t));
+            }
+        }
+    }
 }
 
 /// The children of `w` that are shown.
@@ -279,5 +351,38 @@ impl SizeBin {
         if self.imp().width.replace(width) != width {
             self.queue_resize();
         }
+    }
+}
+
+glib::wrapper! {
+    /// A row of slots, as DGMNB lays out the programmer bar: each child in
+    /// so many pixels from the start, or from the end, whatever the row's
+    /// width (in a narrow window they overlap, as DGMNB's do, rather than
+    /// widen it).
+    pub struct Strip(ObjectSubclass<imp::Strip>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl Strip {
+    pub fn new() -> Self {
+        glib::Object::new()
+    }
+
+    /// `child` in the next `width` px from the start (`end`: from the
+    /// end), `inset` px in from that room's sides.
+    pub fn append(&self, child: &impl IsA<gtk::Widget>, end: bool, width: f32, inset: f32) {
+        let child = child.as_ref();
+        child.set_parent(self);
+        self.imp()
+            .slots
+            .borrow_mut()
+            .push((child.clone(), imp::Slot { end, width, inset }));
+    }
+}
+
+impl Default for Strip {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -613,10 +613,8 @@ button.wc-key {
   border: none;
 }
 
-button.wc-key label sup,
-button.wc-key label sub {
-  font-size: 70%;
-}
+/* (A key's superscripts and subscripts are its label's markup:
+   calculator.rs script_markup.) */
 
 /* control keys.number button.wc-key.wc-num active=.wc-flash,.keyboard-activating icon=pathicon */
 button.wc-key.wc-num {
