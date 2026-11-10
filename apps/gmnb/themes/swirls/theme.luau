@@ -488,7 +488,6 @@ local function style(ctx: Ctx): Style
 			color = fg,
 			font = sans(system.size),
 			text_halo = halo,
-			raised_text_halo = halo,
 		},
 		plain = { background = pane, radius = RADIUS },
 		focus = { width = 3, color = a, offset = 5 },
@@ -945,9 +944,31 @@ local function swirl(buf: buffer, cols: number, rows: number, width: number, hei
 	end
 end
 
+-- How many points the grid has now. A machine too slow for POINTS gets
+-- fewer: a draw hook has 8 ms of the processor, and a swirl that takes a
+-- third of that leaves too little room.
+local points = POINTS
+local SLOW = 0.0027
+local took: { number } = {}
+
 local function grid(width: number, height: number): (number, number)
-	local step = max(FINEST, sqrt(width * height / POINTS))
+	local step = max(FINEST, sqrt(width * height / points))
 	return clamp(ceil(width / step) + 1, 2, 256), clamp(ceil(height / step) + 1, 2, 256)
+end
+
+-- A snapshot, timed. If the quickest of four in a row was slow (the
+-- quickest: the machine may have been busy with something else during
+-- the others), the grid is made coarser from the next frame on.
+local function snapshot(buf: buffer, cols: number, rows: number, width: number, height: number, at: number)
+	local started = os.clock()
+	swirl(buf, cols, rows, width, height, at)
+	table.insert(took, (os.clock() - started) * POINTS / (cols * rows) * (points / POINTS))
+	if #took >= 4 then
+		if points > 900 and min(took[1], took[2], took[3], took[4]) > SLOW then
+			points = max(900, floor(points * 0.6))
+		end
+		table.clear(took)
+	end
 end
 
 -- How far the swirl has turned, in radians, since the theme was loaded.
@@ -976,6 +997,12 @@ type Kept = {
 	mix: number,
 	-- When the next thirtieth is due, on the layer's clock.
 	due: number,
+	-- The part of the grid something has pushed about this frame: columns
+	-- left to right, rows top to bottom (none: right < left).
+	left: number,
+	right: number,
+	top: number,
+	bottom: number,
 	-- Whether the snapshots handed over are the bent ones, whether the two
 	-- snapshots differ, and whether anything is still disturbing the paint.
 	bent: boolean,
@@ -1006,6 +1033,10 @@ local function keep(cols: number, rows: number, width: number, height: number): 
 		tick = -1,
 		mix = 0,
 		due = 0,
+		left = 0,
+		right = -1,
+		top = 0,
+		bottom = -1,
 		bent = false,
 		flowing = false,
 		stirred = false,
@@ -1021,23 +1052,39 @@ end
 --   a ripple  pushes it outward in a ring that travels
 local STIR_LIFE = 1.3
 local RIPPLE_SPEED = 620
-local RIPPLE_WIDTH = 90
+local RIPPLE_WIDTH = 100
 
 -- A stir's turn, in radians at its middle, `age` seconds after it began:
 -- a quick twist that swings back past rest and settles.
 local function stir_turn(age: number): number
-	return exp(-3.2 * age) * sin(TAU * 1.15 * age) * 1.9
+	return exp(-3.2 * age) * sin(TAU * 1.15 * age) * 2.6
+end
+
+-- The columns and rows a disturbance reaching `reach` pixels from
+-- (cx, cy) can touch, which the kept box is grown to hold.
+local function touch(k: Kept, sx: number, sy: number, cx: number, cy: number, reach: number): (number, number, number, number)
+	local i0, i1 = max(0, floor((cx - reach) / sx)), min(k.cols - 1, ceil((cx + reach) / sx))
+	local j0, j1 = max(0, floor((cy - reach) / sy)), min(k.rows - 1, ceil((cy + reach) / sy))
+	if i1 >= i0 and j1 >= j0 then
+		if k.right < k.left then
+			k.left, k.right, k.top, k.bottom = i0, i1, j0, j1
+		else
+			k.left, k.right = min(k.left, i0), max(k.right, i1)
+			k.top, k.bottom = min(k.top, j0), max(k.bottom, j1)
+		end
+	end
+	return i0, i1, j0, j1
 end
 
 -- Adds a stir at (cx, cy), `reach` pixels wide, turned `angle` at its
 -- middle, to the displacement of every point it touches.
-local function add_stir(k: Kept, sx: number, sy: number, cx: number, cy: number, reach: number, angle: number): boolean
-	if math.abs(angle) < 0.004 then
-		return false
+local function add_stir(k: Kept, sx: number, sy: number, cx: number, cy: number, reach: number, angle: number)
+	-- (Under a hundredth of a turn nothing is seen to move.)
+	if math.abs(angle) < 0.03 then
+		return
 	end
-	local cols, rows = k.cols, k.rows
-	local i0, i1 = max(0, floor((cx - reach) / sx)), min(cols - 1, ceil((cx + reach) / sx))
-	local j0, j1 = max(0, floor((cy - reach) / sy)), min(rows - 1, ceil((cy + reach) / sy))
+	local cols = k.cols
+	local i0, i1, j0, j1 = touch(k, sx, sy, cx, cy, reach)
 	local dx, dy = k.dx, k.dy
 	local rr = reach * reach
 	for j = j0, j1 do
@@ -1055,21 +1102,20 @@ local function add_stir(k: Kept, sx: number, sy: number, cx: number, cy: number,
 			end
 		end
 	end
-	return i1 >= i0 and j1 >= j0
 end
 
 -- Adds a ripple from (cx, cy), `age` seconds old, pushing by `push`
 -- pixels at its crest.
-local function add_ripple(k: Kept, sx: number, sy: number, cx: number, cy: number, age: number, push: number): boolean
+local function add_ripple(k: Kept, sx: number, sy: number, cx: number, cy: number, age: number, push: number)
 	if push < 0.25 then
-		return false
+		return
 	end
-	local cols, rows = k.cols, k.rows
-	local crest = RIPPLE_SPEED * age
+	local cols = k.cols
+	-- (It starts a ring already: there is no pushing outward from a point.)
+	local crest = RIPPLE_WIDTH + RIPPLE_SPEED * age
 	local outer = crest + RIPPLE_WIDTH
-	local inner = max(crest - RIPPLE_WIDTH, 0)
-	local i0, i1 = max(0, floor((cx - outer) / sx)), min(cols - 1, ceil((cx + outer) / sx))
-	local j0, j1 = max(0, floor((cy - outer) / sy)), min(rows - 1, ceil((cy + outer) / sy))
+	local inner = crest - RIPPLE_WIDTH
+	local i0, i1, j0, j1 = touch(k, sx, sy, cx, cy, outer)
 	local dx, dy = k.dx, k.dy
 	local oo, ii = outer * outer, inner * inner
 	for j = j0, j1 do
@@ -1089,36 +1135,46 @@ local function add_ripple(k: Kept, sx: number, sy: number, cx: number, cy: numbe
 			end
 		end
 	end
-	return i1 >= i0 and j1 >= j0
 end
 
--- One snapshot looked up where the displacement says, into `out`.
-local function bend(k: Kept, from: buffer, out: buffer)
+-- Both snapshots, looked up where the displacement says: inside the box
+-- that was touched, each point of the bent copies is the snapshot's value
+-- at the place the paint there came from.
+local function bend(k: Kept)
 	local cols, rows = k.cols, k.rows
+	local a, b, bent_a, bent_b = k.a, k.b, k.bent_a, k.bent_b
 	local dx, dy = k.dx, k.dy
 	local right, bottom = cols - 1, rows - 1
-	buffer.copy(out, 0, from)
-	local o = 0
-	for j = 0, rows - 1 do
-		for i = 0, cols - 1 do
+	buffer.copy(bent_a, 0, a)
+	buffer.copy(bent_b, 0, b)
+	for j = k.top, k.bottom do
+		local o = (j * cols + k.left) * 4
+		for i = k.left, k.right do
 			local x, y = readf32(dx, o), readf32(dy, o)
-			if x ~= 0 or y ~= 0 then
+			-- (Moved by a third of a pixel or less: left where it is.)
+			if x * x + y * y > 0.0008 then
 				x = clamp(i + x, 0, right)
 				y = clamp(j + y, 0, bottom)
 				local i0, j0 = min(floor(x), right - 1), min(floor(y), bottom - 1)
 				local tx, ty = x - i0, y - j0
 				local p = (j0 * cols + i0) * 8
 				local q = p + cols * 8
-				local u0 = readf32(from, p)
-				local v0 = readf32(from, p + 4)
-				local u1 = readf32(from, q)
-				local v1 = readf32(from, q + 4)
-				u0 += (readf32(from, p + 8) - u0) * tx
-				v0 += (readf32(from, p + 12) - v0) * tx
-				u1 += (readf32(from, q + 8) - u1) * tx
-				v1 += (readf32(from, q + 12) - v1) * tx
-				writef32(out, o * 2, u0 + (u1 - u0) * ty)
-				writef32(out, o * 2 + 4, v0 + (v1 - v0) * ty)
+				local u0, v0 = readf32(a, p), readf32(a, p + 4)
+				local u1, v1 = readf32(a, q), readf32(a, q + 4)
+				u0 += (readf32(a, p + 8) - u0) * tx
+				v0 += (readf32(a, p + 12) - v0) * tx
+				u1 += (readf32(a, q + 8) - u1) * tx
+				v1 += (readf32(a, q + 12) - v1) * tx
+				writef32(bent_a, o * 2, u0 + (u1 - u0) * ty)
+				writef32(bent_a, o * 2 + 4, v0 + (v1 - v0) * ty)
+				u0, v0 = readf32(b, p), readf32(b, p + 4)
+				u1, v1 = readf32(b, q), readf32(b, q + 4)
+				u0 += (readf32(b, p + 8) - u0) * tx
+				v0 += (readf32(b, p + 12) - v0) * tx
+				u1 += (readf32(b, q + 8) - u1) * tx
+				v1 += (readf32(b, q + 12) - v1) * tx
+				writef32(bent_b, o * 2, u0 + (u1 - u0) * ty)
+				writef32(bent_b, o * 2 + 4, v0 + (v1 - v0) * ty)
 			end
 			o += 4
 		end
@@ -1129,9 +1185,17 @@ end
 -- moving it.
 local function disturb(k: Kept, events: { Event }, width: number, height: number): boolean
 	local sx, sy = width / (k.cols - 1), height / (k.rows - 1)
-	buffer.fill(k.dx, 0, 0)
-	buffer.fill(k.dy, 0, 0)
-	local touched, alive = false, false
+	-- (Only what the last frame touched needs wiping.)
+	if k.right >= k.left then
+		local across = (k.right - k.left + 1) * 4
+		for j = k.top, k.bottom do
+			local o = (j * k.cols + k.left) * 4
+			buffer.fill(k.dx, o, 0, across)
+			buffer.fill(k.dy, o, 0, across)
+		end
+	end
+	k.left, k.right, k.top, k.bottom = 0, -1, 0, -1
+	local alive = false
 	for _, e in events do
 		local age = e.age
 		if e.kind == "press" then
@@ -1139,25 +1203,26 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 				alive = true
 				-- Each key turns its own way; the equals key stirs wide.
 				local key = e.key
-				local way = if key and key.id % 2 == 1 then -1 else 1
+				local way = if key and key.id and key.id % 2 == 1 then -1 else 1
 				local wide = key ~= nil and key.kind == "equals"
-				local reach = if wide then 190 elseif e.source == "key" then 120 else 90
-				touched = add_stir(k, sx, sy, e.x, e.y, reach, way * stir_turn(age) * (if wide then 1.2 else 1)) or touched
+				local reach = if wide then 220 elseif e.source == "key" then 135 else 100
+				add_stir(k, sx, sy, e.x, e.y, reach, way * stir_turn(age) * (if wide then 1.2 else 1))
 			end
 		elseif e.kind == "result" or e.kind == "error" then
-			-- From under the last digits of the readout: a ripple for a
+			-- From under the last figures of the readout: a ripple for a
 			-- result, a shudder for an error.
 			local x, y = e.rect.x + e.rect.w * 0.8, e.rect.y + e.rect.h * 0.6
 			if e.kind == "error" then
 				if age < STIR_LIFE then
 					alive = true
-					touched = add_stir(k, sx, sy, x, y, 260, exp(-4 * age) * sin(TAU * 4.5 * age) * 1.1) or touched
+					add_stir(k, sx, sy, x, y, 260, exp(-4 * age) * sin(TAU * 4.5 * age) * 1.1)
 				end
-			elseif e.cause == "equals" or e.cause == "function" or e.cause == nil then
-				local life = (sqrt(width * width + height * height) + RIPPLE_WIDTH) / RIPPLE_SPEED
+			elseif e.cause ~= "operator" and e.cause ~= "digit" then
+				local life = sqrt(width * width + height * height) / RIPPLE_SPEED
 				if age < life then
 					alive = true
-					touched = add_ripple(k, sx, sy, x, y, age, 46 * (1 - age / life) ^ 1.5) or touched
+					-- It swells in two frames and wears out on its way.
+					add_ripple(k, sx, sy, x, y, age, 64 * min(age / 0.07, 1) * (1 - age / life) ^ 1.5)
 				end
 			end
 		elseif e.kind == "mode" or e.kind == "option" then
@@ -1165,15 +1230,14 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 			if age < STIR_LIFE then
 				alive = true
 				local reach = sqrt(width * width + height * height) * 0.6
-				touched = add_stir(k, sx, sy, width / 2, height / 2, reach, stir_turn(age * 0.8) * 0.5) or touched
+				add_stir(k, sx, sy, width / 2, height / 2, reach, stir_turn(age * 0.8) * 0.5)
 			end
 		end
 	end
-	if touched then
-		bend(k, k.a, k.bent_a)
-		bend(k, k.b, k.bent_b)
+	k.bent = k.right >= k.left
+	if k.bent then
+		bend(k)
 	end
-	k.bent = touched
 	return alive
 end
 
@@ -1214,7 +1278,7 @@ local function background(draw: Draw, frame: Frame): Again
 	if fresh or k.tick < 0 or shown ~= k.shown then
 		local tick = floor(shown / SHOWN_PER_FIELD)
 		if fresh or k.tick < 0 then
-			swirl(k.a, cols, rows, width, height, STILL + turned)
+			snapshot(k.a, cols, rows, width, height, STILL + turned)
 			buffer.copy(k.b, 0, k.a)
 			k.tick = tick
 			k.flowing = false
@@ -1239,7 +1303,7 @@ local function background(draw: Draw, frame: Frame): Again
 				k.a, k.b = k.b, k.a
 				if flow > 0 then
 					turned += flow
-					swirl(k.b, cols, rows, width, height, STILL + turned)
+					snapshot(k.b, cols, rows, width, height, STILL + turned)
 				else
 					buffer.copy(k.b, 0, k.a)
 				end
@@ -1442,9 +1506,10 @@ local function display(draw: Draw, frame: Frame): Again
 			local p = min(t / 0.24, 1)
 			return (1 - ease.out_back(p)) * v.size * 0.22, sqrt(p), 1
 		elseif kind == "result" then
-			-- The number wells up from the right, where the ripple starts.
-			local p = clamp((t - (digits - g.index) * 0.03) / 0.45, 0, 1)
-			return 0, ease.out_cubic(p), 0.6 + 0.4 * ease.out_back(p)
+			-- The number wells up from the right, where the ripple starts:
+			-- each figure there at once, and swelling to its size.
+			local since = t - (digits - g.index) * 0.03
+			return 0, clamp(since / 0.08, 0, 1), 0.6 + 0.4 * ease.out_back(clamp(since / 0.45, 0, 1))
 		elseif kind == "replace" then
 			local e = ease.out_cubic(min(t / 0.3, 1))
 			return (1 - e) * 10, e, 1
@@ -1545,12 +1610,11 @@ local function display(draw: Draw, frame: Frame): Again
 		rows = rows,
 		channels = 1,
 		ramp = RAMPS[s.id],
-		quality = 1,
 	})
 	if kind == "result" then
-		-- The digits flare as they land, and cool.
+		-- The figures land white-hot, and cool into their paint.
 		local p = clamp(t / change_time("result", digits), 0, 1)
-		draw:rect(band.x, band.y, band.w, band.h, alpha(white, 0.75 * (1 - p) ^ 2))
+		draw:rect(band.x, band.y, band.w, band.h, alpha(white, 0.9 * (1 - p) ^ 2))
 	elseif kind == "typing" then
 		draw:rect(band.x, band.y, band.w, band.h, alpha(white, 0.3 * (1 - min(t / 0.24, 1))))
 	end
@@ -1676,6 +1740,348 @@ local options: { Option } = {
 	},
 }
 
+---------------------------------------------------------------------------
+-- 8. Sound
+---------------------------------------------------------------------------
+--
+-- The calculator stands in paint, and sounds like it: a drop for every
+-- key, a deeper one for the equals key, and for a result the rings that
+-- spread from where it fell. Nothing here is a recording: every sound is
+-- one recipe, a sine whose pitch runs up as it swells, the way a bubble's
+-- does as it closes, with a speck of noise where it breaks the surface.
+--
+-- The drops are tuned. Number keys fall on the seven notes from F#5 to A6
+-- of D's five-note scale, each key always on its own, so that typing is a
+-- run of drops that never clash; and a result answers with the last three
+-- of them, lowest first, ringing: the sum plays back what was typed.
+
+-- A drop: a sine that runs from `from` to `to` hertz in `rise` seconds,
+-- swelling all the while, and then rings out in `seconds`. It is loudest
+-- as it arrives, so `to` is the note that is heard. (A soft start, with
+-- no click of its own: the splash is the touch.)
+local function drop(from: number, to: number, rise: number, seconds: number, more: SynthLayer?): SynthLayer
+	local glide: PitchGlide = { from, to, time = rise }
+	local layer: SynthLayer = { freq = glide, env = { attack = rise, decay = seconds } }
+	if more then
+		for key, value in more :: { [string]: any } do
+			(layer :: { [string]: any })[key] = value
+		end
+	end
+	return layer
+end
+
+-- Where it breaks the surface: a speck of noise around `freq` hertz.
+local function splash(seed: number, freq: number, level: number, seconds: number, at: number?): SynthLayer
+	return {
+		wave = "noise",
+		seed = seed,
+		filter = { type = "bandpass", freq = freq, q = 1.1 },
+		env = { attack = 0, decay = seconds },
+		gain = level,
+		at = at,
+	}
+end
+
+-- A key's sound is dry, and has nothing low in it: a drop's thump is for
+-- speakers that can carry it, and a keypad's are small.
+local dry: { SynthEffect } = { { type = "highpass", freq = 200 } }
+
+-- Number keys: a small drop that lands on A5, and a smaller one on D6.
+-- Played faster or slower they are the scale's other notes.
+local drop_a = gmnb.synth({
+	gain = 0.24,
+	layers = { drop(500, 880, 0.012, 0.048), splash(41, 2600, 0.07, 0.005) },
+	effects = dry,
+})
+local drop_d = gmnb.synth({
+	gain = 0.22,
+	layers = { drop(680, 1174.66, 0.01, 0.042), splash(42, 3200, 0.06, 0.005) },
+	effects = dry,
+})
+
+-- Operators: a rounder, heavier drop, on E5.
+local plop = gmnb.synth({
+	gain = 0.22,
+	layers = { drop(360, 659.26, 0.014, 0.05), splash(43, 1500, 0.08, 0.008) },
+	effects = dry,
+})
+
+-- Function keys and buttons: a bead, more tick than tone.
+local bead = gmnb.synth({
+	gain = 0.19,
+	layers = { drop(1150, 1760, 0.006, 0.026), splash(44, 4200, 0.12, 0.004) },
+	effects = dry,
+})
+
+-- The equals key: a drop from higher up. A low one on A4 goes under, a
+-- small one on E6 comes back off the surface. Dry: the rings that follow
+-- are the result's.
+local plunge = gmnb.synth({
+	gain = 0.25,
+	layers = {
+		drop(240, 440, 0.02, 0.11),
+		drop(800, 1318.51, 0.012, 0.05, { at = 0.05, gain = 0.4 }),
+		splash(45, 1900, 0.14, 0.014),
+	},
+	effects = dry,
+})
+
+-- 2nd and hyp: two beads, the second a fourth up.
+local pair = gmnb.synth({
+	gain = 0.18,
+	layers = {
+		drop(1150, 1760, 0.006, 0.024),
+		drop(1500, 2349.32, 0.006, 0.026, { at = 0.045, gain = 0.8 }),
+		splash(46, 4200, 0.1, 0.004),
+	},
+	effects = dry,
+})
+
+-- Backspace: a drop taken back. It starts on its note and falls away.
+local back = gmnb.synth({
+	gain = 0.22,
+	layers = {
+		drop(1174.66, 587.33, 0.03, 0.048, { env = { attack = 0.003, decay = 0.048 } }),
+		splash(47, 2400, 0.06, 0.005),
+	},
+	effects = dry,
+})
+
+-- Clear: the glass wiped. Noise through a band that sweeps down, and a
+-- thread of tone falling with it.
+local wipe = gmnb.synth({
+	gain = 0.24,
+	layers = {
+		{
+			wave = "noise",
+			seed = 48,
+			filter = { type = "bandpass", freq = { 3600, 520, time = 0.1 } :: Glide, q = 1.4 },
+			env = { attack = 0.012, decay = 0.11 },
+		},
+		drop(880, 330, 0.1, 0.1, { gain = 0.14, env = { attack = 0.01, decay = 0.1 } }),
+	},
+	effects = dry,
+})
+
+-- A ring spreading: the note a drop left, in a little room. On A5; a
+-- result plays it on the notes that were typed.
+local ring_fx: { SynthEffect } = {
+	{ type = "highpass", freq = 240 },
+	{ type = "delay", time = 0.11, feedback = 0.3, mix = 0.22, ping_pong = true },
+	{ type = "reverb", size = 0.5, damp = 0.45, mix = 0.24 },
+}
+local ring = gmnb.synth({
+	gain = 0.15,
+	length = 1.1,
+	layers = {
+		drop(600, 880, 0.02, 0.55, { detune = -4, pan = -0.4 }),
+		drop(600, 880, 0.02, 0.5, { detune = 4, pan = 0.4 }),
+		-- Its octave, shorter: the glint on the ring.
+		{ freq = 1760, env = { attack = 0.004, decay = 0.2 }, gain = 0.18 },
+		splash(49, 3000, 0.05, 0.006),
+	},
+	effects = ring_fx,
+})
+
+-- An error: the sum goes down the drain. Two bubbles that fall instead
+-- of rising, the second lower, as far apart as two swings of the
+-- readout's shudder (4.5 a second there). Nothing under 120 Hz.
+local glug_fx: { SynthEffect } = { { type = "highpass", freq = 150 } }
+local glug = gmnb.synth({
+	gain = 0.24,
+	layers = {
+		drop(560, 230, 0.11, 0.17, { wave = "triangle", env = { attack = 0.006, decay = 0.17 } }),
+		splash(50, 700, 0.2, 0.02),
+		drop(420, 170, 0.13, 0.2, { wave = "triangle", env = { attack = 0.006, decay = 0.2 }, at = 0.222, gain = 0.75 }),
+		splash(51, 520, 0.15, 0.02, 0.222),
+	},
+	effects = glug_fx,
+})
+
+-- A change of page or mode: the paint stirred once round. Air through a
+-- band that rises on one side and falls on the other, and four beads
+-- carried round in it.
+local stir_fx: { SynthEffect } = {
+	{ type = "highpass", freq = 200 },
+	{ type = "reverb", size = 0.45, damp = 0.5, mix = 0.2 },
+}
+local stirred = gmnb.synth({
+	gain = 0.2,
+	length = 0.85,
+	layers = {
+		{
+			wave = "noise",
+			seed = 52,
+			filter = { type = "bandpass", freq = { 420, 2100, time = 0.24 } :: Glide, q = 1.3 },
+			env = { attack = 0.09, decay = 0.26 },
+			pan = -0.5,
+			gain = 0.8,
+		},
+		{
+			wave = "noise",
+			seed = 53,
+			filter = { type = "bandpass", freq = { 2100, 520, time = 0.3 } :: Glide, q = 1.3 },
+			env = { attack = 0.1, decay = 0.3 },
+			pan = 0.5,
+			at = 0.16,
+			gain = 0.7,
+		},
+		drop(560, 880, 0.01, 0.045, { at = 0.08, pan = -0.5, gain = 0.3 }),
+		drop(740, 1174.66, 0.01, 0.045, { at = 0.17, pan = -0.1, gain = 0.3 }),
+		drop(940, 1479.98, 0.01, 0.045, { at = 0.26, pan = 0.3, gain = 0.3 }),
+		drop(740, 1174.66, 0.01, 0.045, { at = 0.36, pan = 0.6, gain = 0.25 }),
+	},
+	effects = stir_fx,
+})
+
+-- The scale: its seven notes, and for each the drop that plays it and at
+-- what speed (a drop played slower is longer: none goes under 0.84, and
+-- none lasts 80 ms), and the speed of the ring for it (the ring is on A5).
+type Note = { drop: Sound, speed: number, ring: number }
+local function note(name: string, sound: Sound, home: string): Note
+	return { drop = sound, speed = gmnb.note(name) / gmnb.note(home), ring = gmnb.note(name) / gmnb.note("A5") }
+end
+local NOTES: { Note } = {
+	note("F#5", drop_a, "A5"),
+	note("A5", drop_a, "A5"),
+	note("B5", drop_a, "A5"),
+	note("D6", drop_d, "D6"),
+	note("E6", drop_d, "D6"),
+	note("F#6", drop_d, "D6"),
+	note("A6", drop_d, "D6"),
+}
+
+-- What each set of bands sounds like poured in: which notes of the scale.
+local POURS: { [string]: { number } } = {
+	-- Fifths and fourths on A: open, bright.
+	party = { 2, 4, 5, 7 },
+	-- D major from its third: warm.
+	lava = { 1, 2, 4, 6 },
+	-- A, B, E, A: wide water.
+	lagoon = { 2, 3, 5, 7 },
+	-- B minor from its fifth.
+	orchid = { 1, 3, 4, 6 },
+	-- B minor with its seventh on top: tart.
+	absinthe = { 3, 4, 6, 7 },
+	-- Three notes, no third among them: stone.
+	marble = { 2, 4, 7 },
+}
+
+-- Which sound for which event. This table is the whole of it for most
+-- events, and all of it if `sound` below is ever switched off.
+local sounds: Sounds = {
+	digit = { sound = { drop_a, drop_d }, pick = "key", rate = { 0.9, 1.12 }, pan = "position" },
+	operator = { sound = plop, rate = { 0.985, 1.015 }, pan = "position" },
+	func = { sound = bead, pick = "key", rate = { 0.92, 1.08 }, pan = "position" },
+	equals = { sound = plunge, pan = "position" },
+	toggle = { sound = pair, pan = "position" },
+	clear = wipe,
+	backspace = { sound = back, rate = { 0.97, 1.03 }, pan = "position" },
+	-- The memory row: the operators' drop, a fourth up.
+	memory = { sound = plop, rate = 1.335, volume = 0.9, pan = "position" },
+	button = { sound = bead, volume = 0.9, pan = "position" },
+	-- Any result, when `sound` isn't there to play what was typed: one ring.
+	result = { sound = ring, rate = 1.335, volume = 0.8, delay = 0.06 },
+	-- It starts as the readout reaches the end of its first swing.
+	error = { sound = glug, delay = 0.03 },
+	mode = stirred,
+}
+
+-- What the table can't know: which notes were typed. The last few number
+-- keys' notes, newest last.
+local typed: { number } = {}
+-- What the last result rang, for a result that follows no typing (= again).
+local rang: { number } = { 2, 4, 6 }
+-- Number keys pressed so far.
+local turn = 0
+
+local function sound(event: SoundEvent, _ctx: Ctx): SoundChoice
+	if event.kind == "press" then
+		local key = event.key
+		if key and key.kind == "number" and not event.action then
+			-- The key's own note: next-door keys are a third or a fourth apart.
+			local index = (key.id or 0) * 3 % #NOTES + 1
+			local n = NOTES[index]
+			table.insert(typed, index)
+			if #typed > 6 then
+				table.remove(typed, 1)
+			end
+			-- Never the same sound twice running, even on one key: a breath of
+			-- difference in pitch (a tenth of a semitone at most) and in
+			-- loudness.
+			turn += 1
+			local play: Play = {
+				sound = n.drop,
+				rate = n.speed * (0.994 + 0.012 * (turn * 0.618034 % 1)),
+				volume = 0.86 + 0.14 * (turn * 0.414214 % 1),
+				pan = event.pan * 0.6,
+			}
+			return play
+		elseif event.action == "clear" then
+			table.clear(typed)
+		elseif event.action == "backspace" then
+			table.remove(typed)
+		end
+		return nil
+	elseif event.kind == "result" and event.page == "calculator" then
+		if event.cause == "equals" then
+			-- The rings: the last three different notes typed, lowest first,
+			-- left to right, the first just after the equals key's own drop.
+			local notes: { number } = {}
+			for i = #typed, 1, -1 do
+				if #notes < 3 and not table.find(notes, typed[i]) then
+					table.insert(notes, typed[i])
+				end
+			end
+			if #notes == 0 then
+				-- = again: the same rings, each a step up the scale.
+				for i, index in rang do
+					notes[i] = index % #NOTES + 1
+				end
+			end
+			table.sort(notes)
+			rang = notes
+			table.clear(typed)
+			local rings: { Play } = {}
+			for i, index in notes do
+				rings[i] = {
+					sound = ring,
+					rate = NOTES[index].ring,
+					volume = 0.62 + 0.1 * i,
+					pan = (i - (#notes + 1) / 2) * 0.4,
+					delay = 0.06 + 0.1 * (i - 1),
+				}
+			end
+			return rings
+		elseif event.cause == "function" then
+			-- A function's result (sin, a square root): one ring, on the
+			-- last note typed.
+			local index = typed[#typed] or 4
+			local one: Play = { sound = ring, rate = NOTES[index].ring, volume = 0.75, delay = 0.06 }
+			return one
+		end
+		-- (The running total an operator shows: its own drop said it.)
+		return nil
+	elseif event.kind == "option" and event.id == "bands" then
+		-- New paint poured in: its own few rings up the scale, left to
+		-- right, while the window turns once.
+		local value = event.value
+		local pour = (if type(value) == "string" then POURS[value] else nil) or POURS.party
+		local poured: { Play } = {}
+		for i, index in pour do
+			poured[i] = {
+				sound = ring,
+				rate = NOTES[index].ring,
+				volume = 0.7,
+				pan = (2 * (i - 1) / (#pour - 1) - 1) * 0.5,
+				delay = 0.09 * (i - 1),
+			}
+		end
+		return poured
+	end
+	return nil
+end
+
 local theme: Theme = {
 	api = 1,
 	name = "Swirls",
@@ -1685,6 +2091,8 @@ local theme: Theme = {
 	credits = { { title = "The swirl (ColorMix, from ly)", file = "credits/ColorMix.txt" } },
 	options = options,
 	style = style,
+	sounds = sounds,
+	sound = sound,
 	layers = {
 		background = { draw = background, events = { press = STIR_LIFE, result = 2.5, error = STIR_LIFE, mode = STIR_LIFE, option = STIR_LIFE } },
 		keypad = { draw = keypad, place = place, events = { show = 1.6 } },
