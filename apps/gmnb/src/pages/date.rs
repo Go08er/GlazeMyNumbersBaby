@@ -64,6 +64,12 @@ fn date_button(texts: &Texts) -> DateButton {
     // A day is picked by Enter or Space with Shift or Ctrl held too, as
     // in the window.
     crate::window::own_keys(&popover);
+    // Its grab keeps the pointer and the keys from the window's
+    // controllers: a day picked is known to be the pointer's or the
+    // keyboard's doing here (assistive technology's makes no sound).
+    if let Some(hub) = crate::theme::Hub::current() {
+        hub.layers().watch(&popover);
+    }
     {
         // Opened, the keys (and so the screen reader) start on the date
         // chosen ("Tuesday, October 6, 2026, selected"), in its month,

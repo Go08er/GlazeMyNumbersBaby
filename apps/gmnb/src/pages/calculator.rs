@@ -874,8 +874,15 @@ impl CalculatorPage {
             }
         });
         let weak = Rc::downgrade(self);
-        self.panel.connect_memory_op(move |i, op| {
+        self.panel.connect_memory_op(move |i, op, button| {
             if let Some(p) = weak.upgrade() {
+                // MC, M+ and M- on a stored value: a memory press, told
+                // before the list is made anew without that button.
+                if let Some(button) = button {
+                    use crate::layers::{Action as Does, Source};
+                    let layers = p.ctx.hub.layers();
+                    layers.pressed(button, Source::Button, Some(Does::Memory));
+                }
                 {
                     let mut vm = p.vm.borrow_mut();
                     match op {
