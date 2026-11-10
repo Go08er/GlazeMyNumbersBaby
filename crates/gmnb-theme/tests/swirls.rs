@@ -14,7 +14,7 @@ use gmnb_theme::layer::{
 };
 use gmnb_theme::theme::{self, Source, Theme};
 use gmnb_theme::types::*;
-use gmnb_theme::{Ctx, Limits, OptionValue};
+use gmnb_theme::{Ctx, Limits, OptionValue, Style};
 
 const BANDS: [&str; 6] = ["party", "lava", "lagoon", "orchid", "absinthe", "marble"];
 const GLASS: [&str; 3] = ["clear", "smoked", "panel"];
@@ -992,6 +992,55 @@ fn swirls_loads_and_returns_only_known_keys() {
     // A saved value that is no set of bands is the page's own.
     let odd = ctx(&theme, &[("bands", text("nonsense"))]);
     assert!(theme.style(&odd).unwrap().notes.is_empty());
+}
+
+/// Every page fits the least window, 300 × 400, as in the base look
+/// (docs/theming.md, open point 2). A key or a bit with a least size of
+/// its own made the window grow there (Standard to 300 × 472, Programmer
+/// to 300 × 566, Graphing to 348 × 400): the keys, the bits and the
+/// glyph keys keep none, as the base's keep none, and take what the
+/// window gives them. (The graph pad's 32 px rows fit: measured in the
+/// app at 300 × 400.)
+#[test]
+fn every_page_fits_the_least_window() {
+    let mut theme = swirls();
+    let base = Style::base(&Ctx::default());
+    for opacity in [1.0, 0.5] {
+        for glass in GLASS {
+            let mut c = ctx(&theme, &[("glass", text(glass))]);
+            c.opacity = opacity;
+            let style = theme.style(&c).unwrap().style.clone();
+            for path in ["keys.min_width", "keys.min_height"] {
+                assert!(
+                    style.number(path) <= base.number(path),
+                    "{path}: {} (the base's: {})",
+                    style.number(path),
+                    base.number(path)
+                );
+            }
+            for path in [
+                "keys.number",
+                "keys.func",
+                "keys.operator",
+                "keys.equals",
+                "programmer.bit",
+            ] {
+                let (ours, theirs) = (style.control(path).unwrap(), base.control(path).unwrap());
+                assert!(
+                    ours.min_width <= theirs.min_width && ours.min_height <= theirs.min_height,
+                    "{path}: {} × {} (the base's: {} × {})",
+                    ours.min_width,
+                    ours.min_height,
+                    theirs.min_width,
+                    theirs.min_height
+                );
+            }
+            let Some(Value::Record(pad)) = style.get("keys.pad") else {
+                panic!("no keys.pad");
+            };
+            assert_eq!(pad.get("min_height"), Some(&Value::Number(32.0)));
+        }
+    }
 }
 
 /// For looking at: `SWIRLS_FRAMES=<folder>` writes the background's

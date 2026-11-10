@@ -564,8 +564,10 @@ local function style(ctx: Ctx): Style
 			gap = 6,
 			gap_compact = 4,
 			radius = RADIUS,
-			min_width = 40,
-			min_height = 38,
+			-- No least size: in the least window, 300 × 400, the keys take
+			-- what room is left, as the base's do (and so do the bits).
+			min_width = 0,
+			min_height = 0,
 			padding = { 0, 2 },
 			icon = { size = 22, stroke = 1.9 },
 			-- A key fogs over again slowly after it was pressed (the keypad
@@ -719,8 +721,8 @@ local function style(ctx: Ctx): Style
 				value = { font = figures(14, 500), color = fg },
 			},
 			bit = {
-				min_width = 14,
-				min_height = 28,
+				min_width = 0,
+				min_height = 0,
 				padding = 0,
 				radius = 6,
 				font = figures(15, 500),
