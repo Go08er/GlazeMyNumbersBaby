@@ -59,15 +59,10 @@ impl Control {
 
     /// The control with `states` applied in order (none: at rest).
     pub fn finished(&self, states: &[Which]) -> Finished {
-        let mut background = self.background.clone();
-        let mut overlays: Vec<Rgba> = Vec::new();
-        let mut color = self.color;
-        let mut icon_color = self.icon.color;
-        let mut fade = 1.0;
-        let mut f = Finished {
-            background: Fill::none(),
-            color,
-            icon_color: color,
+        let rest = Finished {
+            background: self.background.clone(),
+            color: self.color,
+            icon_color: self.icon.color.unwrap_or(self.color),
             border: self.border,
             shadow: self.shadow.clone(),
             opacity: self.opacity,
@@ -78,61 +73,117 @@ impl Control {
             transition: self.transition.clone(),
             font_weight: self.font.weight,
         };
-        for which in states {
-            let s = self.state(*which);
-            if let Some(b) = &s.background {
-                background = b.clone();
-            }
-            if let Some(o) = s.overlay {
-                overlays.push(o);
-            }
-            if let Some(c) = s.color {
-                color = c;
-            }
-            if let Some(c) = s.icon_color {
-                icon_color = Some(c);
-            }
-            if let Some(k) = s.fade {
-                fade *= k;
-            }
-            if let Some(b) = s.border {
-                f.border = b;
-            }
-            if let Some(sh) = &s.shadow {
-                f.shadow = sh.clone();
-            }
-            if let Some(o) = s.opacity {
-                f.opacity = o;
-            }
-            if let Some(b) = s.brightness {
-                f.brightness = b;
-            }
-            if let Some(v) = s.saturation {
-                f.saturation = v;
-            }
-            if let Some(v) = s.scale {
-                f.scale = v;
-            }
-            if let Some(v) = s.rotate {
-                f.rotate = v;
-            }
-            if let Some(t) = &s.transition {
-                f.transition = t.clone();
-            }
-            if let Some(w) = s.font_weight {
-                f.font_weight = w;
-            }
-        }
-        // An overlay always lands on top of the background then in effect:
-        // the latest topmost.
-        let mut layers: Vec<Paint> = overlays.into_iter().rev().map(Paint::Color).collect();
-        layers.extend(background.0);
-        f.background = Fill(layers);
-        f.color = alpha(color, fade);
-        // Without a colour of its own an icon takes its control's.
-        f.icon_color = alpha(icon_color.unwrap_or(color), fade);
-        f
+        let states: Vec<&State> = states.iter().map(|w| self.state(*w)).collect();
+        finish(rest, self.icon.color, &states)
     }
+}
+
+/// A field's states, in the order they apply: `error` wins over `focus`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldWhich {
+    Focus,
+    Error,
+}
+
+/// The state combinations a field's properties are written for (in place
+/// of a control's), by the name used in the custom properties.
+pub const FIELD_COMBOS: [(&str, &[FieldWhich]); 3] = [
+    ("focus", &[FieldWhich::Focus]),
+    ("error", &[FieldWhich::Error]),
+    ("error-focus", &[FieldWhich::Focus, FieldWhich::Error]),
+];
+
+impl Field {
+    pub fn state(&self, which: FieldWhich) -> &State {
+        match which {
+            FieldWhich::Focus => &self.focus,
+            FieldWhich::Error => &self.error,
+        }
+    }
+
+    /// The field with `states` applied in order (none: at rest).
+    pub fn finished(&self, states: &[FieldWhich]) -> Finished {
+        let rest = Finished {
+            background: self.background.clone(),
+            color: self.color,
+            icon_color: self.color,
+            border: self.border,
+            shadow: self.shadow.clone(),
+            opacity: 1.0,
+            brightness: 1.0,
+            saturation: 1.0,
+            scale: 1.0,
+            rotate: 0.0,
+            transition: Transition::default(),
+            font_weight: self.font.weight,
+        };
+        let states: Vec<&State> = states.iter().map(|w| self.state(*w)).collect();
+        finish(rest, None, &states)
+    }
+}
+
+/// `rest` with `states` applied in order. `icon`: the icon's own colour at
+/// rest, if it has one (else it follows the text's).
+fn finish(rest: Finished, icon: Option<Rgba>, states: &[&State]) -> Finished {
+    let mut background = rest.background.clone();
+    let mut overlays: Vec<Rgba> = Vec::new();
+    let mut color = rest.color;
+    let mut icon_color = icon;
+    let mut fade = 1.0;
+    let mut f = rest;
+    for s in states {
+        if let Some(b) = &s.background {
+            background = b.clone();
+        }
+        if let Some(o) = s.overlay {
+            overlays.push(o);
+        }
+        if let Some(c) = s.color {
+            color = c;
+        }
+        if let Some(c) = s.icon_color {
+            icon_color = Some(c);
+        }
+        if let Some(k) = s.fade {
+            fade *= k;
+        }
+        if let Some(b) = s.border {
+            f.border = b;
+        }
+        if let Some(sh) = &s.shadow {
+            f.shadow = sh.clone();
+        }
+        if let Some(o) = s.opacity {
+            f.opacity = o;
+        }
+        if let Some(b) = s.brightness {
+            f.brightness = b;
+        }
+        if let Some(v) = s.saturation {
+            f.saturation = v;
+        }
+        if let Some(v) = s.scale {
+            f.scale = v;
+        }
+        if let Some(v) = s.rotate {
+            f.rotate = v;
+        }
+        if let Some(t) = &s.transition {
+            f.transition = t.clone();
+        }
+        if let Some(w) = s.font_weight {
+            f.font_weight = w;
+        }
+    }
+    // An overlay always lands on top of the background then in effect:
+    // the latest topmost.
+    let mut layers: Vec<Paint> = overlays.into_iter().rev().map(Paint::Color).collect();
+    layers.extend(background.0);
+    f.background = Fill(layers);
+    f.color = alpha(color, fade);
+    // Without a colour of its own an icon takes its control's.
+    f.icon_color = alpha(icon_color.unwrap_or(color), fade);
+    f
 }
 
 /// `top` composited onto `bottom`.

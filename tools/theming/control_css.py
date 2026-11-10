@@ -15,6 +15,19 @@ The stylesheet marks each such block with a line saying what it is for:
     ...
     /* end control */
 
+A text field (a Field of the schema) is marked the same way with
+`field` and ended with `/* end field */`: its resting properties, its
+placeholder, selection and caret colours, and one rule each for `focus`,
+`error` and `error-focus`:
+
+    /* field field entry scope=window.gmnb.own-field */
+    ...
+    /* end field */
+
+A Text (`text`) and a Surface (`surface`) are marked the same way, each
+ended with its own `/* end text */` or `/* end surface */`, and written
+as one rule of their properties.
+
 and this tool rewrites every marked block in place:
 
     tools/theming/control_css.py apps/gmnb/src/style.css
@@ -23,10 +36,14 @@ To style a new control, add its marker line and the end line, and run it.
 The marker's words: the style path, the selector, then any of
 
     scope=SELECTOR     an ancestor the rules sit under (with a space after
-                       it); `+` stands for a space inside it
+                       it); `+` stands for a space inside it, as in
+                       the selector
     active=SEL,...     more ways of being pressed, besides `:active`
     checked=SEL,...    the ways of being on (default `:checked`)
     icon=SELECTOR      a descendant that takes the icon colour
+    focus=SEL,...      (a field) the ways of holding the focus (default
+                       `:focus-within`)
+    error=SEL,...      (a field) the ways of being wrong (default `.error`)
 
 `--check` changes nothing and fails if a block is out of date.
 """
@@ -70,8 +87,34 @@ STATE = [
     ("font-weight", "font-weight"),
 ]
 
-MARK = re.compile(r"^/\* control (\S+) (\S+)((?: \S+=\S+)*) \*/$")
-END = "/* end control */"
+MARK = re.compile(r"^/\* (control|field|text|surface) (\S+) (\S+)((?: \S+=\S+)*) \*/$")
+END = {k: f"/* end {k} */" for k in ("control", "field", "text", "surface")}
+END["control"] = "/* end control */"
+
+TEXT = [
+    ("color", "color"),
+    ("font-family", "font-family"),
+    ("font-size", "font-size"),
+    ("font-weight", "font-weight"),
+    ("font-style", "font-style"),
+    ("letter-spacing", "letter-spacing"),
+    ("font-feature-settings", "font-features"),
+    ("font-variation-settings", "font-variations"),
+    ("text-shadow", "text-shadow"),
+    ("margin", "margin"),
+]
+
+SURFACE = [
+    ("background-color", "background-color"),
+    ("background-image", "background-image"),
+    ("box-shadow", "shadow"),
+    ("border-radius", "radius"),
+    ("padding", "padding"),
+    ("margin", "margin"),
+]
+
+# A field's resting properties: a control's, but no margin or least width.
+FIELD_REST = [p for p in REST if p[1] not in ("margin", "min-width")]
 
 
 def var(path, lead, name):
@@ -92,7 +135,7 @@ def control(path, selector, options):
     active = [":active"] + [s for s in options.get("active", "").split(",") if s]
     checked = [s for s in options.get("checked", ":checked").split(",") if s]
     icon = options.get("icon")
-    base = scope + selector
+    base = scope + selector.replace("+", " ")
 
     def combos(*parts):
         """Every selector for the base with one of each part's ways appended."""
@@ -121,12 +164,46 @@ def control(path, selector, options):
     # Covered is not disabled: what the app itself didn't turn off keeps
     # its look.
     # (`.wc-inert` is inside the window: it goes after the scope.)
-    covered = scope + ".wc-inert " + selector
+    covered = scope + ".wc-inert " + selector.replace("+", " ")
     inert = [f"{covered}:disabled:not(.wc-off)"]
     out += block(inert, "", STATE)
     inert = [f"{covered}{way}:disabled:not(.wc-off)" for way in checked]
     out += block(inert, "checked-", STATE)
     return out
+
+
+def field(path, selector, options):
+    scope = options.get("scope", "").replace("+", " ")
+    scope = scope + " " if scope else ""
+    focus = [s for s in options.get("focus", ":focus-within").split(",") if s]
+    error = [s for s in options.get("error", ".error").split(",") if s]
+    base = scope + selector.replace("+", " ")
+
+    def combos(*parts):
+        sels = [base]
+        for ways in parts:
+            sels = [s + w for s in sels for w in ways]
+        return sels
+
+    out = rule([base], [(p, var(path, "", n)) for p, n in FIELD_REST]
+               + [("caret-color", var(path, "", "caret"))])
+    # (The toolkit dims a placeholder as well: the colour is all of it.)
+    out += rule([f"{base} placeholder"],
+                [("color", var(path, "", "placeholder")), ("opacity", "1"), ("filter", "none")])
+    out += rule([f"{base} text > selection"],
+                [("background-color", var(path, "", "selection"))])
+    out += rule(combos(focus), [(p, var(path, "focus-", n)) for p, n in STATE])
+    out += rule(combos(error), [(p, var(path, "error-", n)) for p, n in STATE])
+    out += rule(combos(error, focus), [(p, var(path, "error-focus-", n)) for p, n in STATE])
+    return out
+
+
+def plain(props):
+    def write(path, selector, options):
+        scope = options.get("scope", "").replace("+", " ")
+        scope = scope + " " if scope else ""
+        return rule([scope + selector.replace("+", " ")], [(p, var(path, "", n)) for p, n in props])
+    return write
 
 
 def regenerate(text):
@@ -139,12 +216,19 @@ def regenerate(text):
         m = MARK.match(line)
         if not m:
             continue
-        options = dict(w.split("=", 1) for w in m.group(3).split())
-        while i < len(lines) and lines[i] != END:
+        kind, path, selector = m.group(1), m.group(2), m.group(3)
+        options = dict(w.split("=", 1) for w in m.group(4).split())
+        while i < len(lines) and lines[i] != END[kind]:
             i += 1
         if i == len(lines):
-            sys.exit(f"control {m.group(1)}: no '{END}' line")
-        out.append(control(m.group(1), m.group(2), options).rstrip("\n"))
+            sys.exit(f"{kind} {path}: no '{END[kind]}' line")
+        write = {
+            "control": control,
+            "field": field,
+            "text": plain(TEXT),
+            "surface": plain(SURFACE),
+        }[kind]
+        out.append(write(path, selector, options).rstrip("\n"))
     return "\n".join(out)
 
 

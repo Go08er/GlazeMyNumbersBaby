@@ -34,25 +34,6 @@ use gtk::{gdk, glib, graphene, gsk, pango};
 use crate::layers::{self, Extra, Instance, replay};
 use crate::theme::Hub;
 
-/// TRANSITION: a font description in the style's display face, starting
-/// from the widget's own font. The graph's labels still ask for it.
-pub fn display_font(
-    widget: &impl IsA<gtk::Widget>,
-    size: f32,
-    weight: i32,
-) -> pango::FontDescription {
-    let mut fd = widget
-        .pango_context()
-        .font_description()
-        .unwrap_or_default();
-    if let Some(hub) = Hub::current() {
-        fd.set_family(&hub.style().tokens.fonts.display.join(","));
-    }
-    fd.set_weight(pango::Weight::__Unknown(weight));
-    fd.set_absolute_size(size as f64 * pango::SCALE as f64);
-    fd
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
     Typing,

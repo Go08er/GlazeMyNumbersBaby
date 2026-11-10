@@ -72,10 +72,14 @@ physical pixels (curves also `"color":[r,g,b]`): one entry per drawn run
 stroke's box clipped to the plot). Icons are paths, not text, and are not
 listed; the edge rule covers them. Unset, nothing is recorded.
 
-`goldens.sh OUTDIR BINDIR [gmnb|dgmnb|all]` is the isolated capture script
+`goldens.sh OUTDIR BINDIR [gmnb|dgmnb|all|pages]` is the isolated capture script
 (private weston, D-Bus and XDG); DGMNB's pictures come with their JSON.
 `BOXES= goldens.sh ...` leaves the hook unset (used to check the pictures are
 byte-identical with and without it).
+`pages` captures both apps, GMNB in its base look with DGMNB's accent, on
+the date page (and with a result), Currency, Length and Graphing (empty and
+with three equations), light and dark, each in a fresh profile; compare them
+with `compare --batch OUT OUT --map pages.map`.
 
 Tests: `cargo test` and `cargo clippy -- -D warnings` in `tools/theming`
 (synthetic images: identical passes, a 3 px shift fails the flat rule, a 1 px

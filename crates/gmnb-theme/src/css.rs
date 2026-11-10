@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use crate::schema::{Kind, ROWS};
-use crate::states::{COMBOS, Finished};
+use crate::states::{COMBOS, FIELD_COMBOS, Finished};
 use crate::style::Style;
 use crate::types::*;
 
@@ -413,6 +413,23 @@ fn emit_control(out: &mut BTreeMap<String, String>, path: &str, c: &Control) {
     }
 }
 
+/// A text field: its resting values as a control's, its placeholder,
+/// selection and caret colours, and `focus`, `error` and `error-focus` in
+/// place of a control's combinations.
+fn emit_field(out: &mut BTreeMap<String, String>, path: &str, f: &Field) {
+    emit_finished(out, path, "", &f.finished(&[]));
+    emit_font(out, path, &f.font);
+    put(out, path, "radius", radius(&f.radius));
+    put(out, path, "padding", spacing(&f.padding));
+    put(out, path, "min-height", px(f.min_height));
+    put(out, path, "placeholder", color(f.placeholder));
+    put(out, path, "selection", color(f.selection));
+    put(out, path, "caret", color(f.caret));
+    for (name, states) in FIELD_COMBOS {
+        emit_finished(out, path, &format!("{name}-"), &f.finished(states));
+    }
+}
+
 /// Writes the custom properties of `value`, of `kind`, at `path`. Values
 /// only Rust reads (booleans, words, standalone states, icons, paints)
 /// write nothing.
@@ -425,6 +442,10 @@ pub fn emit(path: &str, kind: &Kind, value: &Value, out: &mut BTreeMap<String, S
         (Kind::Opt(inner), Value::Absent) => match inner {
             Kind::Color => put(out, path, "", "transparent".into()),
             Kind::Border => put(out, path, "", "none".into()),
+            // A table cleared with `false` (the converter's marker): its
+            // parts as nothing (transparent, zero), so the stylesheet can
+            // still name them.
+            Kind::Record(_) => emit(path, inner, &crate::schema::neutral(inner), out),
             _ => {}
         },
         (Kind::Opt(inner), present) => emit(path, inner, present, out),
@@ -464,6 +485,20 @@ pub fn emit(path: &str, kind: &Kind, value: &Value, out: &mut BTreeMap<String, S
             put(out, path, "margin", spacing(&s.margin));
         }
         (_, Value::Control(c)) => emit_control(out, path, c),
+        (_, Value::Field(f)) => emit_field(out, path, f),
+        // A state on its own (`graph.row_error`): what it lays over a
+        // plain surface, its background with any overlay on top, and its
+        // shadow.
+        (Kind::State, Value::State(st)) => {
+            let mut layers: Vec<Paint> = st.overlay.map(Paint::Color).into_iter().collect();
+            if let Some(b) = &st.background {
+                layers.extend(b.0.iter().cloned());
+            }
+            emit_fill(out, path, "background-", &Fill(layers));
+            let border = st.border.flatten();
+            let shadow = st.shadow.clone().unwrap_or_default();
+            put(out, path, "shadow", box_shadow(border.as_ref(), &shadow));
+        }
         (Kind::Record(parts), Value::Record(fields)) => {
             for (name, k) in *parts {
                 if let Some(v) = fields.get(name) {
@@ -471,9 +506,6 @@ pub fn emit(path: &str, kind: &Kind, value: &Value, out: &mut BTreeMap<String, S
                 }
             }
         }
-        // Fields are written when the first one is taken over (they have
-        // `focus`, `error` and `error-focus` in place of a control's
-        // combinations).
         _ => {}
     }
 }

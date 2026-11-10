@@ -3,6 +3,7 @@ pub mod bitflip;
 pub mod calc_panel;
 pub mod day_grid;
 pub mod display;
+pub mod fit;
 pub mod graph_view;
 pub mod icon;
 pub mod keypad;
