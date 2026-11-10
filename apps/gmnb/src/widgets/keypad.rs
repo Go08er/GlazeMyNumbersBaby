@@ -754,12 +754,16 @@ impl Keypad {
                 (x, y)
             }
             _ => {
-                imp.via
-                    .set(if imp.last_activation.take().is_some_and(recent) {
-                        Via::Keyboard
-                    } else {
-                        Via::Assistive
-                    });
+                // Space or Enter on the key; or, with Shift or Ctrl held,
+                // which the window carries out itself, noted by the
+                // window.
+                let keyboard = imp.last_activation.take().is_some_and(recent)
+                    || Hub::current().is_some_and(|h| h.layers().keyboard_activated_lately());
+                imp.via.set(if keyboard {
+                    Via::Keyboard
+                } else {
+                    Via::Assistive
+                });
                 (
                     rect.x() + rect.width() / 2.0,
                     rect.y() + rect.height() / 2.0,
@@ -777,6 +781,27 @@ impl Keypad {
     /// interface (neither came before the click).
     pub fn clicked_via(&self) -> Via {
         self.imp().via.get()
+    }
+
+    /// Dev/test hook (`GMNB_STEPS`): key `id`, if it is drawn, clicked by
+    /// the pointer at its middle (what the pointer's press records, then
+    /// the click), or (`pointer` false) activated as assistive technology
+    /// activates it: no pointer and no key before it.
+    pub fn press_for_test(&self, id: u32, pointer: bool) -> bool {
+        let Some(button) = self.button(id).filter(|b| b.is_drawable()) else {
+            return false;
+        };
+        if pointer {
+            if let Some(r) = button.compute_bounds(self) {
+                let (x, y) = (r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
+                self.imp().last_press.set(Some((x, y, Instant::now())));
+            }
+            button.emit_clicked();
+        } else {
+            // What AT-SPI's "click" action does: the widget's activate.
+            button.activate();
+        }
+        true
     }
 
     /// A key typed on the keyboard: it is shown `active` for 110 ms.

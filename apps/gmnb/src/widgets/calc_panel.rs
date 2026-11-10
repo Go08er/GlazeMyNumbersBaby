@@ -24,7 +24,9 @@ struct Handlers {
     history_recall: Option<Box<dyn Fn(usize)>>,
     history_delete: Option<Box<dyn Fn(usize)>>,
     history_clear: Option<Box<dyn Fn()>>,
-    memory_op: Option<Box<dyn Fn(usize, MemOp)>>,
+    /// An item's operation, and the button on it that asked for it (none
+    /// for a recall by its row).
+    memory_op: Option<MemoryOp>,
     memory_clear_all: Option<Box<dyn Fn()>>,
 }
 
@@ -60,6 +62,9 @@ pub struct CalcPanel {
 
 /// What activating a row does, given the row.
 type RowAction = Rc<dyn Fn(&gtk::ListBoxRow)>;
+/// What an item's operation is told: the item, the operation, and the
+/// button on it that asked for it (none for a recall by its row).
+type MemoryOp = Box<dyn Fn(usize, MemOp, Option<&gtk::Widget>)>;
 
 /// One line of a row, right-aligned, `height` px high (the text centred in
 /// it as DGMNB centres it: style.css's line heights), cut at its start
@@ -377,7 +382,7 @@ impl CalcPanel {
     pub fn connect_history_clear(&self, f: impl Fn() + 'static) {
         self.handlers.borrow_mut().history_clear = Some(Box::new(f));
     }
-    pub fn connect_memory_op(&self, f: impl Fn(usize, MemOp) + 'static) {
+    pub fn connect_memory_op(&self, f: impl Fn(usize, MemOp, Option<&gtk::Widget>) + 'static) {
         self.handlers.borrow_mut().memory_op = Some(Box::new(f));
     }
     pub fn connect_memory_clear_all(&self, f: impl Fn() + 'static) {
@@ -633,11 +638,11 @@ impl CalcPanel {
                 b.set_tooltip_text(Some(tip));
                 crate::a11y::name_button(&b, tip);
                 let weak = Rc::downgrade(self);
-                b.connect_clicked(move |_| {
+                b.connect_clicked(move |b| {
                     if let Some(p) = weak.upgrade()
                         && let Some(f) = &p.handlers.borrow().memory_op
                     {
-                        f(i, op);
+                        f(i, op, Some(b.upcast_ref()));
                     }
                 });
                 actions.append(&b);
@@ -655,7 +660,7 @@ impl CalcPanel {
                 if let Some(p) = weak.upgrade()
                     && let Some(f) = &p.handlers.borrow().memory_op
                 {
-                    f(i, MemOp::Recall);
+                    f(i, MemOp::Recall, None);
                 }
             });
             self.memory_actions.borrow_mut().push((row.clone(), recall));

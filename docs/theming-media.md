@@ -429,8 +429,8 @@ that has one; `false` stops the search and plays nothing.
 | `backspace` | Backspace | `key`, `press` |
 | `memory` | MC, MR, M+, M−, MS, and the buttons on a stored value | `button`, `press` |
 | `button` | F-E, the converter's swap, a date picked, other buttons | `press` |
-| `result` | A calculation gave a value, on the Calculator page: after `=`, after an operator, after a function key | |
-| `error` | It gave an error, on the Calculator page | |
+| `result` | A calculation ended in a value, on the Calculator page: after `=` (or Enter) or a function key, not the running total an operator shows (its `cause` is `"equals"` or `"function"`) | |
+| `error` | It ended in an error, on the Calculator page, whatever brought it about (`1 ÷ 0 +` too) | |
 | `mode` | The page or the calculator's mode was changed | |
 
 A key typed on the keyboard sounds the same as the key clicked.
@@ -456,9 +456,11 @@ sounding like a machine.
 ```lua
 local streak = 0
 sound = function(event, ctx)
-	if event.kind == "result" and event.page == "calculator" then
+	if event.kind == "result" and event.cause == "equals" then
 		streak += 1
 		return { sound = chime, rate = math.min(1 + streak * 0.06, 1.5) }   -- each result a little higher
+	elseif event.kind == "result" and event.cause == "operator" then
+		return { sound = chime, volume = 0.3, rate = 2 }   -- the sum so far, faintly
 	elseif event.kind == "error" then
 		streak = 0
 		return nil            -- the `sounds` table's error
@@ -471,7 +473,9 @@ end
 and `option` event, before the table is consulted. `event` is what a layer
 would see (see [Events](theming.md#events)), in window coordinates, with
 `age` 0, and one more field: `pan`, where it happened across the window,
-−1 at the left edge to 1 at the right.
+−1 at the left edge to 1 at the right. `ctx` is the whole of what
+`style(ctx)` is given: light or dark, the accent, the theme's options
+(`ctx.options.palette`) and the rest.
 
 | It returns | Meaning |
 |---|---|
@@ -483,8 +487,9 @@ would see (see [Events](theming.md#events)), in window coordinates, with
 
 It has 2 ms, and like a draw hook it is switched off after three
 failures; the table then decides alone. It sees `result` on every page
-(the converter gives one with each digit) and `option` when the user
-changes one of the theme's options, neither of which the table plays.
+(the converter gives one with each digit) and with every `cause` (the
+running total `+` shows is `"operator"`), and `option` when the user
+changes one of the theme's options, none of which the table plays.
 
 ### Making a sound
 
@@ -584,8 +589,9 @@ it like a synthesised sound; without `gain` it plays as recorded.
   while it restores what it was showing, or when the window is not the one
   in use.
 - **Keyboard and pointer alike.** But not for a control operated through
-  the accessibility interface (a screen reader's "activate"): speech is
-  that person's feedback, and a click on top of it helps nobody.
+  the accessibility interface (a screen reader's "activate"), nor for the
+  result or error such a press brings about: speech is that person's
+  feedback, and a click or a chime on top of it helps nobody.
 - **Reduced motion does not silence sound.** It is a setting about
   movement. The sound switch is the setting about sound.
 - **Overlapping sounds mix.** Up to 12 at once; a thirteenth fades out the
@@ -622,11 +628,13 @@ themes are reviewed for it.
   and `result` a `delay` of 40 to 80 ms, or silence one of them.
 - **A result is not only the equals key's.** The app reports a result
   whenever a calculation gives a new value: after `=`, and also after `+`
-  once a number is in (the sum so far) and after `sin` or `√`. A chime in
-  `sounds.result` rings for every one of them, three times in
-  `1 + 2 + 3 =`. To chime for `=` alone, let `sound` remember the key
-  pressed last (the press comes first, then what it came to) and return
-  `false` for the rest. Aurora does.
+  once a number is in (the sum so far) and after `sin` or `√`. Each says
+  what brought it about, its `cause`: `"equals"`, `"operator"`,
+  `"function"`, and so on. The table plays `sounds.result` for
+  `"equals"` and `"function"` only, so a chime there rings once in
+  `1 + 2 + 3 =`; `sounds.error` it plays whatever the cause. `sound` hears every one, and can answer
+  each in its own way: by `event.cause`, or by the key pressed last (the
+  press comes first, then what it came to), as Aurora does.
 - **Panned is louder.** A sound in the middle plays at its `gain` in both
   ears. Moved to one side it keeps its power, so it is louder there: 2.6 dB
   at the 60% of `pan = "position"`, 3 dB all the way over.
@@ -675,13 +683,14 @@ be the loudest thing a theme has.
 
 ## Events: what is new
 
-Three additions to [the contract's events](theming.md#events), for layers
+Four additions to [the contract's events](theming.md#events), for layers
 and for sound alike:
 
 | Addition | Meaning |
 |---|---|
 | `press` events have `action` | `"clear"`, `"backspace"` or `"memory"` when the control does that; absent otherwise. What a control *is* (`key.kind`) and what it *does* differ: both C and sin are function keys. |
 | `via` may be `"assistive"` | The control was operated through the accessibility interface. Layers get the event; sound ignores it. |
+| `result` and `error` have `cause`, and the press's `via` | What brought it about: the press just before it. `cause` is `"equals"` (= or Enter), `"operator"` (the running total), `"function"`, `"digit"`, `"clear"`, `"backspace"`, `"memory"` or `"button"`; absent when no press did (a paste). `via` is that press's, so what follows an assistive press is silent too. |
 | A new `kind`: `"mode"` | The user changed page or calculator mode. `page` is the new page; `rect` is the page's area. It is not sent for the page the app starts on. A layer listens with `events = { mode = 1 }`. |
 
 ## The `gmnb` library: additions
@@ -801,9 +810,9 @@ proves not to be enough.
 | Crate | Holds | Depends on |
 |---|---|---|
 | `crates/gmnb-media` (new) | What a file is and how big (`sniff.rs`); decoding stills (`still.rs`); an animation's timeline (`anim.rs`), its frames composited (`stream.rs`), the player and its thread (`player.rs`); ramps and the field pass (`field.rs`); the allowance (`bucket.rs`). No toolkit and no Luau: bytes in, RGBA bytes out. | `png`, `zune-jpeg`, `gif`, `image-webp`; `libc` for a thread's processor time |
-| `crates/gmnb-sound` (new) | The synthesiser (`synth.rs`); reading sound files (`file.rs`, `resample.rs`); the mixer (`mixer.rs`); the table of sounds by event and how an entry becomes a play (`table.rs`); the PulseAudio client (`pulse.rs`); the engine and its thread (`engine.rs`) | `crmath`, `hound`, `lewton`, `pulseaudio` |
-| `crates/gmnb-theme` | `gmnb.synth`, `gmnb.sound`, `gmnb.note`; checking the `sounds` table and what `sound` returns; an event's name (`sound.rs`). It declares; it makes no sound. And the pictures' functions: `gmnb.image`, `gmnb.animation`, `gmnb.pixels` (`picture.rs`), `gmnb.ramp` and `draw:field` (`field.rs`), `draw:image`'s options (`draw.rs`): the caps, which frame of an animation is due, the allowances. It decodes nothing while a theme's code runs. | `gmnb-sound`, for the types; `gmnb-media` |
-| `apps/gmnb` | Turning bytes into `gdk::MemoryTexture`, owning the animation player, and the one place its thread reaches the main loop (`layers/replay.rs`, `layers/mod.rs`); handing a theme's sounds to the engine and its events to `play`; Settings | both |
+| `crates/gmnb-sound` (new) | The synthesiser (`synth.rs`); reading sound files (`file.rs`, `resample.rs`); the mixer (`mixer.rs`); the table of sounds by event and how an entry becomes a play (`table.rs`); the PulseAudio client (`pulse.rs`); the engine and its thread (`engine.rs`); for tests only, a stand-in sound server (`standin.rs`, the `stand-in` feature) | `crmath`, `hound`, `lewton`, `pulseaudio` |
+| `crates/gmnb-theme` | `gmnb.synth`, `gmnb.sound`, `gmnb.note`; checking the `sounds` table and what `sound` returns; an event's name, and what an event plays (`decide`: steps 1 to 4 below, which the app and the render example share) (`sound.rs`). It declares and decides; it makes no sound. And the pictures' functions: `gmnb.image`, `gmnb.animation`, `gmnb.pixels` (`picture.rs`), `gmnb.ramp` and `draw:field` (`field.rs`), `draw:image`'s options (`draw.rs`): the caps, which frame of an animation is due, the allowances. It decodes nothing while a theme's code runs. | `gmnb-sound`, for the types; `gmnb-media` |
+| `apps/gmnb` | Turning bytes into `gdk::MemoryTexture`, owning the animation player, and the one place its thread reaches the main loop (`layers/replay.rs`, `layers/mod.rs`); the one sound engine, handed each theme's sounds, and every event's plays (`src/sound.rs`, held by the hub in `src/theme.rs`); Settings | both |
 
 Rules these keep:
 
@@ -1553,18 +1562,42 @@ second. These are from one run; a second gave the same figures for plays
 another job had the machine's processor cap saturated; a third, with the
 machine quieter, 10.6 ms.
 
+**Wired into the app** (a debug build on the private headless compositor,
+at nice 15 under a CPU cap, the window taken to be in use). Aurora with its
+sounds, settled (45 s after the last thing that happened): 0 clock ticks
+of processor time in 10 s, before the wiring and after it, with a key
+played on the null sink; its sound thread 0 wake-ups. On a stand-in
+server, once the stream has corked 100 ms after a key's sound: the two
+sound threads (ours and the client's) 0 ns and 0 wake-ups in 5 s, and the
+server asked for nothing (`tests/sound.rs`). A press to its plays on the
+interface's thread: 0.01 to 0.05 ms in the running app, Aurora's `sound`
+function included (`GMNB_SOUND_TRACE`); p50 0.009 ms, max 0.02 ms in
+`cargo test`; and from the press to its sound at the stand-in server,
+p50 4.2 ms, max 5.0 ms (the stand-in asks every 5 ms). The libraries GMNB
+links (`readelf -d`) are the same 16 as before.
+
 ### From event to sound
 
 For each `press`, `result`, `error`, `mode` and `option` event, after the
-layers have been given it:
+layers have been given it (`Layers::emit` tells its listener, the hub's
+`hear_event`, in the window's coordinates; only while a theme with sounds
+is loaded and sound is on, so that the base look does nothing more for
+it):
 
-1. Stop if sound is unavailable or off, the window is not active, the app
-   has been on screen for less than 500 ms, or `via` is `"assistive"`.
-2. If the theme has `sound` and it is not switched off: call it (2 ms).
-   `false`: stop. A sound, a play or a list: check it and go to 5. `nil`
-   or a failure: go on.
-3. Find the event's name: `mode`, `error` and `result` (the last two on
-   the Calculator page only) are themselves; `option` has none. A press
+1. Stop if `via` is `"assistive"` (a press, or the result or error such a
+   press brought about), the window is not active (`GMNB_ACTIVE` takes it
+   to be), the window has been on screen for less than 500 ms, or sound is
+   off or unavailable.
+2. If the theme has `sound` and it is not switched off: call it (2 ms)
+   with the event and the whole `ctx` (`Theme::sound_choice`). `false`:
+   stop. A sound, a play or a list: check it and go to 5. `nil` or a
+   failure: go on. A sound it made in the call is handed to the engine
+   (`SoundEngine::extend`); a failure is a note, and the one that switches
+   it off a toast, once.
+3. Find the event's name: `mode` is itself; `error` and `result` are
+   themselves on the Calculator page, `result` only when its `cause` is
+   `"equals"` or `"function"`, and they have none otherwise; `option` has
+   none. A press
    with `action` `"clear"`, `"backspace"` or `"memory"` has that name; a
    press on a key is `digit`, `operator`, `func`, `equals` or `toggle` by
    `key.kind` (`"other"` is `func`); any other press is `button`.
@@ -1580,19 +1613,38 @@ without a key cycle). A range under `"key"` is `low + (high − low) ×
 (hash / 2³²)`, with a different hash per field.
 `pan = "position"` is `(2x / width − 1) × 0.6`.
 
+Steps 1 to 4 but the window's are `gmnb_theme::sound::decide`; the app's
+`Voice::hear` (`apps/gmnb/src/sound.rs`) calls it, then applies step 5,
+and so does the render example's stand-in for the app
+(`crates/gmnb-sound/examples/support/stand_in.rs`), so that what is
+rendered and tested of a theme is what the app plays.
+
 Sound events do not depend on layers. In particular they are produced
 under reduced motion, where layers receive no events.
 
-**Telling an assistive press.** Today (`widgets/keypad.rs`) every way of
-operating a key ends in the button's `clicked`, and a pointer press is
-recognised by the gesture recorded just before it (`last_press`); what is
-left is taken for the keyboard. The accessibility interface arrives the
-same way. To tell it apart, record Space and Enter on the focused control
-in a capture-phase key controller, as the pointer is recorded now: a
-`clicked` with neither a pointer press nor such a key in the last second
-is `"assistive"`. Where the app cannot tell (a row the toolkit activates
-by itself), the press is reported as `"keyboard"`: the rule fails towards
-sound, not towards silence.
+**A result's cause.** Every way of pressing a key tells the layers of the
+press before the calculator is pressed (the pointer's `on_key`, the
+keyboard's `flash` then `vm.press`), and the readout tells them of what
+came of it in the same handler. So a `result` or an `error` takes its
+`cause` and its `via` from the press told less than 250 ms before it
+(`Layers::outcome`); with none so recent, it has neither (a paste, a unit
+chosen, the rates arriving).
+
+**Telling an assistive press.** Every way of operating a key ends in the
+button's `clicked`. The keypad records, in capture-phase controllers that
+claim nothing, each pointer press on it (`last_press`) and each Space or
+Enter on a focused key (`last_activation`): a `clicked` within a second
+of a pointer press inside the key is `"pointer"`, else within a second of
+Space or Enter `"keyboard"`, else `"assistive"` (AT-SPI's "click" is the
+widget's `activate`, which presses nothing first). A key typed on the
+keyboard that presses its key on screen is always `"keyboard"`. Other
+controls are told apart the same way by what the window's backdrop
+records for the whole window, and a popover, whose grab keeps the pointer
+and the keys from the window's controllers, records its own
+(`Layers::watch`: the date picker's). Where the app cannot tell (a
+sidebar row the toolkit activates by itself, and the `mode` that follows)
+there is no `via`, and it sounds: the rule fails towards sound, not
+towards silence.
 
 ### Settings
 
@@ -1601,8 +1653,8 @@ options and Window:
 
 | Row | Kind | Default |
 |---|---|---|
-| Theme sounds | Switch. Subtitle: "‘Name’ has sounds", "This theme has no sounds", "Turned off by the desktop's sound settings" or "No sound system found". | on |
-| Volume | Slider, 0 to 100%. On release it plays the theme's `digit` sound. Insensitive while the switch is off. | 50% |
+| Theme sounds | Switch. Subtitle: "‘Name’ has sounds", "This theme has no sounds", "Turned off by the desktop's sound settings", "No sound system found", or for a run with `GMNB_SOUND=0` "Turned off for this run (GMNB_SOUND=0)". It follows the sound thread's finding at once (`Settings::on_status`, handed to the main loop). | on |
+| Volume | Slider, 0 to 100%, in steps of 5. Let go (the pointer or a touch lifted, or a key that moves it released) it plays the theme's `digit` sound, at the new volume. Insensitive while the switch is off. | 50% |
 
 Saved as `"sound": true` and `"sound_volume": 0.5` in `settings.json`,
 each loading by itself like the other keys. They belong to the app, not
@@ -1611,10 +1663,14 @@ to a theme.
 **Why on.** A sound exists only after the user has chosen a theme that
 has one; the base look is silent. The switch sits directly under the list
 they chose it from. The desktop's own switch is honoured: the
-`gtk-enable-event-sounds` property of `GtkSettings`. (That GTK fills it
-from the desktop's setting on each desktop, and inside a Flatpak, is
-assumed here and to be confirmed when it is wired up.) Off by default would hide the feature from the
-people who picked a theme for it. **Why 50%.** The gain is the slider
+`gtk-enable-event-sounds` property of `GtkSettings`, followed as it
+changes. GTK takes it from `settings.ini` (tested: with
+`gtk-enable-event-sounds=false` in `gtk-4.0/settings.ini` a theme with
+sounds loads and nothing is created, `tests/sound.rs`); that it also
+follows the desktop's own setting (the settings portal, GSettings'
+`event-sounds`) on each desktop and inside a Flatpak could not be checked
+in the isolated test session and is still to be confirmed. Off by default
+would hide the feature from the people who picked a theme for it. **Why 50%.** The gain is the slider
 squared, so 50% is −12 dB. A sound's loudest sample is its `gain`, 0.5 at
 most in the built-in themes, so at the default a sound in the middle peaks
 at −18 dBFS at most, and one panned hard to a side 3 dB above that (the
@@ -1628,16 +1684,20 @@ well under any music playing.
 | `GMNB_SOUND=0` | No sound for this run, whatever Settings says. Nothing sound-related is created. |
 | `GMNB_SOUND=null` | The mixer runs into a sink that discards its output, with no server. For tests: voices and plays can be counted. |
 | `GMNB_SOUND_DUMP=<folder>` | Every sound the theme makes is written there as a 16-bit WAV, named by its order and a hash of its recipe or file name. |
-| `GMNB_SCREENSHOT` (existing) | Also: no sound; and the shot waits for no animation frame (animations show frame 1). |
+| `GMNB_SCREENSHOT` (existing) | Also: no sound (Settings still says what it would be); and the shot waits for no animation frame (animations show frame 1). |
+| `GMNB_SOUND_TRACE=1` | A line on stderr for each event sound hears: the event, its name, and what it played or why nothing (`sound: press (keyboard) key 137: digit: #1 volume 1.00 rate 0.969 pan -0.44 delay 0.00 Queued [0.012 ms]`). |
+| `GMNB_THEME_STATS` (existing) | Also a line for sound: the engine's state, whether its thread exists, the connections to a sound server attempted, plays queued, started and skipped. |
+| `GMNB_STEPS` | Dev/test hook: `keys:<script>` (typed, as `GMNB_KEYS`), `click:<id>` (a key clicked by the pointer at its middle), `activate:<id>` (activated as assistive technology does), `wait:<ms>`, `quit` (the sound line of `GMNB_THEME_STATS` written, and the window closed), separated by `;`, one every 250 ms from 1 s after the window is on screen. The app's sound test drives the window with it. |
 
 ### Where the new events come from
 
 | In the app | Event |
 |---|---|
-| C, CE, the graphing keypad's clear | `press` with `action = "clear"` |
-| Backspace (the key, and the keyboard's) | `press` with `action = "backspace"` |
+| C, CE | `press` with `action = "clear"` (the graphing keypad has no clear) |
+| Backspace (the key, the keyboard's, and the graphing keypad's ⌫) | `press` with `action = "backspace"` |
 | The memory row; MC, M+, M− on a stored value | `press`, `source = "button"`, `action = "memory"` |
 | A control activated through AT-SPI's action interface | `press` with `via = "assistive"` |
+| A result or an error | `cause` and `via` of the press just before it (`Layers::outcome`) |
 | A sidebar row chosen; the calculator's mode changed, by pointer or shortcut | `mode`, `page` = the new page, `rect` = the page |
 
 ### Tests
@@ -1673,7 +1733,8 @@ well under any music playing.
 9. **Field**: the pass on a fixed field and ramp equals a stored picture
    byte for byte; `quality` and the pixel cap give the sizes of step 1.
 10. **Sound and screen readers**: a press delivered with
-    `via = "assistive"` reaches layers and makes no play.
+    `via = "assistive"` reaches layers and makes no play, and neither does
+    the result it brings about.
 11. **DGMNB**: the widened `cargo tree` check.
 12. **A built-in theme's sounds** (`crates/gmnb-theme/tests/aurora_sound.rs`
     for Aurora): they load with no note, each within the gain a built-in
@@ -1686,9 +1747,33 @@ well under any music playing.
     no reverb or delay without a `length`, the bytes) stays under a fifth
     of what a theme may ask for. The events are made by the stand-in for
     the app that the render example uses
-    (`crates/gmnb-sound/examples/support/stand_in.rs`) until the app has
-    its own path from an event to a play. The levels are measured outside
-    `cargo test`, by `tools/theming/sound_check.py` on the theme's render.
+    (`crates/gmnb-sound/examples/support/stand_in.rs`), and decided by the
+    app's own code (`gmnb_theme::sound::decide`). The levels are measured
+    outside `cargo test`, by `tools/theming/sound_check.py` on the theme's
+    render.
+13. **From event to sound in the app** (`apps/gmnb/src/sound.rs`, plain
+    `cargo test`, no display): a theme's sounds by event (a typed key as
+    the clicked one, the running total silent, the 30 ms rule, the volume's
+    preview); its `sound` first, a sound made in it played once rendered,
+    three failures and it is asked no more; with a stand-in server, the
+    base look, a theme without sounds, the switch off and the desktop's
+    event sounds off making no thread and no connection, and a theme with
+    sounds one of each; no sound system, and Settings saying so; a press
+    to its play (p50 0.009 ms, max 0.02) and to the stand-in server
+    (p50 4.2 ms, max 5.0: the stand-in asks every 5 ms).
+14. **The app itself** (`apps/gmnb/tests/sound.rs`, on the test display:
+    skipped without `GMNB_TEST_WAYLAND_DISPLAY` or
+    `DGMNB_TEST_WAYLAND_DISPLAY`): GMNB run with `GMNB_STEPS` and
+    `GMNB_SOUND_TRACE`, in a runtime folder of its own with no `PULSE_*`
+    and no session bus. With the null sink: a digit typed and clicked, =
+    and its result, an error, a change of mode, each the designed sound; an
+    assistive press and the result after it, nothing. With a stand-in
+    server in that runtime folder: the base look, the switch off
+    (`settings.json`) and the desktop's event sounds off
+    (`gtk-4.0/settings.ini`) connect to nothing; a theme with sounds
+    connects once, to it (so to no other), and its sound arrives; and at
+    rest (Aurora, a key played and the stream corked) its two threads do
+    not run once in 5 s and the server is asked for nothing.
 
 **The pictures' tests, as built** (5 to 9). Ten small files by other
 programs' encoders are in `crates/gmnb-media/tests/fixtures`, 2 KiB in
@@ -1817,17 +1902,33 @@ Decided here, and worth a second look by the owner:
 8. **The engine connects to the sound server when a theme with sounds is
    loaded**, not at its first sound, so that Settings can say early that no
    sound system was found.
-9. **No time is given back to a theme** (`Engine::credit` was not built):
-   pictures are decoded outside the theme's calls, and what is left
-   inside them (reading a file) counts.
-10. **An animation counts as 4¼ to 6 of its frames, by format**, not 4:
+9. **The `sounds` table plays `result` only after `=` or a function
+   key** (`cause` `"equals"` or `"function"`): not for the running total
+   an operator shows, a value a digit or a memory button puts there, nor a
+   paste. `error` it plays whatever brought it about: an error is always
+   news. `sound` hears them all.
+10. **A result or an error is the doing of the press told less than
+    250 ms before it** (its `cause` and `via`). Both are told in one
+    handler; the window is generous, and a result long after a press (a
+    paste a second later) has neither.
+11. **What follows an assistive press is silent too**: its `via` is
+    carried to the result or error it brings, which layers also see.
+12. **`gtk-enable-event-sounds` from the desktop** is honoured as GTK
+    reports it; that GTK fills it from each desktop's own setting, and
+    inside a Flatpak, is not confirmed (only `settings.ini` was tried).
+13. **`GMNB_SOUND=0`** says so under *Theme sounds* ("Turned off for this
+    run"), a subtitle the table above did not have.
+14. **No time is given back to a theme** (`Engine::credit` was not built):
+    pictures are decoded outside the theme's calls, and what is left
+    inside them (reading a file) counts.
+15. **An animation counts as 4¼ to 6 of its frames, by format**, not 4:
     that is what playing one was counted to hold. The animated PNG's 6 is
     the `png` crate keeping a frame and a half of buffers between frames.
-11. **`image-webp` 0.2.4 is kept at arm's length.** It composites no
+16. **`image-webp` 0.2.4 is kept at arm's length.** It composites no
     animation here, and sees no bitstream whose own size wasn't checked
     first. What it can still be made to do is ask for 16 MiB it never
     touches, for a moment. A later version may make all of this
     unnecessary; the checks cost nothing to keep.
-12. **A picture that changes too often is made good one frame later**
+17. **A picture that changes too often is made good one frame later**
     (the layer is owed a frame), under reduced motion too. Without it a
     still picture could stand out of date.

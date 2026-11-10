@@ -372,6 +372,13 @@ impl Frames {
 
 fn event_table(lua: &Lua, age: f64, e: &Event) -> mlua::Result<Table> {
     let t = lua.create_table_with_capacity(0, 11)?;
+    write_event(lua, &t, age, e)?;
+    Ok(frozen(t))
+}
+
+/// Writes an event's fields into `t` (what `frame.events` holds of it, and
+/// what a theme's `sound` function is given).
+pub(crate) fn write_event(lua: &Lua, t: &Table, age: f64, e: &Event) -> mlua::Result<()> {
     t.raw_set("kind", e.kind.name())?;
     t.raw_set("age", age)?;
     t.raw_set("x", e.x)?;
@@ -383,6 +390,9 @@ fn event_table(lua: &Lua, age: f64, e: &Event) -> mlua::Result<Table> {
     }
     if let Some(via) = e.via {
         t.raw_set("via", via.name())?;
+    }
+    if let Some(cause) = e.cause {
+        t.raw_set("cause", cause.name())?;
     }
     if let Some(action) = e.action {
         t.raw_set("action", action.name())?;
@@ -403,7 +413,7 @@ fn event_table(lua: &Lua, age: f64, e: &Event) -> mlua::Result<Table> {
             OptionValue::Bool(b) => t.raw_set("value", *b)?,
         }
     }
-    Ok(frozen(t))
+    Ok(())
 }
 
 const STATES: [&str; 4] = ["enabled", "hovered", "pressed", "checked"];

@@ -101,6 +101,58 @@ impl Action {
     }
 }
 
+/// What brought a `result` or an `error` about: the press just before
+/// it. A theme's `sounds` table plays `result` and `error` only for
+/// [`Cause::Equals`] and [`Cause::Function`] (a calculation that ended),
+/// not for the running total an operator shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cause {
+    /// The = key, or Enter.
+    Equals,
+    /// + − × ÷ and their like: the running total.
+    Operator,
+    /// Any other function key (√, x², sin, %, …).
+    Function,
+    /// A number key (the converter's value follows each).
+    Digit,
+    Clear,
+    Backspace,
+    /// A memory button (MR, a stored value's M+ …).
+    Memory,
+    /// Another control: the converter's swap, a date picked, F-E.
+    Button,
+}
+
+impl Cause {
+    pub fn name(self) -> &'static str {
+        match self {
+            Cause::Equals => "equals",
+            Cause::Operator => "operator",
+            Cause::Function => "function",
+            Cause::Digit => "digit",
+            Cause::Clear => "clear",
+            Cause::Backspace => "backspace",
+            Cause::Memory => "memory",
+            Cause::Button => "button",
+        }
+    }
+
+    /// What a press of this kind brings about: by what the control does
+    /// first, then by what it is.
+    pub fn of_press(action: Option<Action>, key: Option<KeyKind>) -> Cause {
+        match (action, key) {
+            (Some(Action::Clear), _) => Cause::Clear,
+            (Some(Action::Backspace), _) => Cause::Backspace,
+            (Some(Action::Memory), _) => Cause::Memory,
+            (None, Some(KeyKind::Equals)) => Cause::Equals,
+            (None, Some(KeyKind::Operator)) => Cause::Operator,
+            (None, Some(KeyKind::Number)) => Cause::Digit,
+            (None, Some(KeyKind::Func | KeyKind::Toggle | KeyKind::Other)) => Cause::Function,
+            (None, None) => Cause::Button,
+        }
+    }
+}
+
 /// What a key is to a theme: its class, and whether it is a toggle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyKind {
@@ -157,9 +209,14 @@ pub struct Event {
     /// middle of `rect`.
     pub x: f32,
     pub y: f32,
-    /// A press: what was pressed and how.
+    /// A press: what was pressed and how. A result or an error: how the
+    /// press that brought it about was made (one through the
+    /// accessibility interface silences what follows from it too).
     pub source: Option<Source>,
     pub via: Option<Via>,
+    /// A result or an error: the press that brought it about, if one
+    /// did.
+    pub cause: Option<Cause>,
     pub action: Option<Action>,
     /// A press on a key: its number (the same every time; absent on a key
     /// the calculator doesn't number) and its kind.
@@ -179,6 +236,7 @@ impl Event {
             y: rect[1] + rect[3] / 2.0,
             source: None,
             via: None,
+            cause: None,
             action: None,
             key: None,
             option: None,

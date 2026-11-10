@@ -161,6 +161,12 @@ fn focus_kind(w: &gtk::Widget, key: impl FnOnce(&gtk::Widget) -> bool) -> Focus 
 /// neither, as one of the app's own that takes its keys itself (a
 /// converter value field): the key then goes on to it.
 fn activate(focus: &gtk::Widget) -> bool {
+    // The key stops here, before what notes how a control was used sees
+    // it: noted here, the control is known to be the keyboard's doing
+    // (not assistive technology's, which makes no sound).
+    if let Some(hub) = crate::theme::Hub::current() {
+        hub.layers().key_activated();
+    }
     let text = focus.downcast_ref::<gtk::Text>().cloned().or_else(|| {
         focus
             .ancestor(gtk::Text::static_type())
@@ -621,6 +627,8 @@ fn theme_config(settings: &crate::settings::Settings) -> crate::theme::Config {
         system_accent: settings.system_accent,
         accent: env("GMNB_ACCENT").and_then(|v| crate::theme::accent_from_env(&v)),
         dev_dir,
+        sound: settings.sound,
+        sound_volume: crate::settings::sound_volume(settings.sound_volume),
     }
 }
 

@@ -722,21 +722,36 @@ fn what_is_wrong_in_the_sounds_table_is_noted() {
 
 #[test]
 fn a_theme_may_have_a_sound_function() {
+    use gmnb_theme::events::{Cause, Event, EventKind, Page};
     let folder = Folder::new(
         r#"
 local chime = gmnb.synth({ layers = { { freq = "E6" } } })
 local streak = 0
 return {
 	api = 1, name = "Hook",
+	options = {
+		{ id = "palette", type = "choice", label = "Palette", default = "ember",
+		  choices = { { id = "ember", label = "Ember" }, { id = "abyss", label = "Abyss" } } },
+	},
 	sound = function(event, ctx)
-		if event.kind == "result" then
+		if event.kind == "result" and event.cause == "equals" then
 			streak += 1
 			return { sound = chime, rate = math.min(1 + streak * 0.06, 1.5) }
-		elseif event.kind == "late" then
+		elseif event.kind == "result" then
+			-- It hears every result, the running total's too.
+			if event.cause == "operator" then
+				return false
+			end
+		elseif event.kind == "mode" then
 			-- A sound made inside the function: it joins the theme's sounds.
 			return gmnb.synth({ layers = { { freq = "G6" } } })
-		elseif event.kind == "many" then
+		elseif event.kind == "error" then
 			return { chime, { sound = chime, delay = 0.08, pan = 0.5 } }
+		elseif event.kind == "option" then
+			-- The whole ctx, the theme's options among it.
+			if ctx.options.palette == "abyss" and ctx.dark and ctx.opacity == 1 then
+				return chime
+			end
 		elseif event.kind == "press" then
 			return false
 		end
@@ -750,48 +765,67 @@ return {
     let sounds = theme.sounds();
     assert!(sounds.hook && sounds.any() && sounds.table.is_empty());
     assert_eq!(theme.sounds_declared(), 1);
-    let hook = theme.def.sound.clone().unwrap();
 
-    let call = |kind: &str| {
-        let event = theme.engine().lua().create_table().unwrap();
-        event.raw_set("kind", kind).unwrap();
-        // (A real call has `sound::HOOK_TIME`; a test on a busy machine
-        // gets more.)
-        let budget = gmnb_theme::Budget::Custom(std::time::Duration::from_millis(250));
-        let value = theme.engine().call(&hook, budget, event).unwrap();
-        let mut notes = Notes::default();
-        let choice = parse_choice(&value, &mut notes);
+    let mut ctx = gmnb_theme::Ctx::default();
+    let call = |ctx: &gmnb_theme::Ctx, kind, cause| {
+        let event = Event {
+            cause,
+            ..Event::at(kind, Page::Calculator, [0.0; 4])
+        };
+        let choice = theme.sound_choice(&event, 0.0, ctx);
+        let notes = theme.take_sound_notes();
         assert!(notes.is_empty(), "{notes:?}");
-        choice
+        choice.expect("asked").expect("no failure")
     };
-    assert_eq!(call("mode"), Choice::Table);
-    assert_eq!(call("press"), Choice::Silence);
-    let Choice::Plays(first) = call("result") else {
+    let equals = Some(Cause::Equals);
+    assert_eq!(call(&ctx, EventKind::Show, None), Choice::Table);
+    assert_eq!(call(&ctx, EventKind::Press, None), Choice::Silence);
+    assert_eq!(
+        call(&ctx, EventKind::Result, Some(Cause::Operator)),
+        Choice::Silence
+    );
+    assert_eq!(
+        call(&ctx, EventKind::Result, Some(Cause::Digit)),
+        Choice::Table
+    );
+    let Choice::Plays(first) = call(&ctx, EventKind::Result, equals) else {
         panic!()
     };
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].sound, SoundId(1));
     assert!((first[0].params.rate - 1.06).abs() < 1e-6);
-    let Choice::Plays(second) = call("result") else {
+    let Choice::Plays(second) = call(&ctx, EventKind::Result, equals) else {
         panic!()
     };
     assert!((second[0].params.rate - 1.12).abs() < 1e-6);
-    let Choice::Plays(many) = call("many") else {
+    let Choice::Plays(many) = call(&ctx, EventKind::Error, equals) else {
         panic!()
     };
     assert_eq!(many.len(), 2);
     assert_eq!(many[0].params, gmnb_sound::PlayParams::default());
     assert_eq!((many[1].params.delay, many[1].params.pan), (0.08, 0.5));
 
+    // It is given the whole ctx: the theme's options, light or dark, ...
+    assert_eq!(call(&ctx, EventKind::Option, None), Choice::Table);
+    ctx.dark = true;
+    ctx.options.insert(
+        "palette".into(),
+        gmnb_theme::OptionValue::Text("abyss".into()),
+    );
+    let Choice::Plays(told) = call(&ctx, EventKind::Option, None) else {
+        panic!("the hook wasn't given the ctx")
+    };
+    assert_eq!(told[0].sound, SoundId(1));
+
     // A sound made in the function: there is one more now, for the engine
     // to be told of.
-    let Choice::Plays(late) = call("late") else {
+    let Choice::Plays(late) = call(&ctx, EventKind::Mode, None) else {
         panic!()
     };
     assert_eq!(late[0].sound, SoundId(2));
     assert_eq!(theme.sounds_declared(), 2);
     assert_eq!(theme.sounds().sounds.len(), 2);
-    call("late");
+    call(&ctx, EventKind::Mode, None);
     assert_eq!(theme.sounds_declared(), 2);
 }
 
@@ -855,6 +889,86 @@ fn what_sound_returns_is_checked() {
     }
 }
 
+/// What the app asks of a theme's `sound` for an event: it is given the
+/// event as a layer sees it, with `age` 0 and `pan`, and `ctx`; what it
+/// returns is checked into the sound notes; three failures switch it off.
+#[test]
+fn the_sound_function_is_asked_for_each_event() {
+    use gmnb_theme::events::{Event, EventKind, KeyKind, Page, Source as From, Via};
+    let folder = Folder::new(
+        r#"
+local click = gmnb.synth({ layers = { { freq = "A5" } } })
+return {
+	api = 1, name = "Asked",
+	sound = function(event, ctx)
+		if event.kind == "error" then
+			error("no")
+		elseif event.kind == "mode" then
+			return 7
+		elseif event.kind == "option" then
+			return gmnb.synth({ layers = { { freq = "B5" } } })
+		end
+		-- What it was told, back as the play's numbers.
+		assert(event.age == 0 and event.page == "calculator" and event.via == "pointer")
+		assert(event.key.id == 137 and event.key.kind == "number")
+		assert(event.x == 30 and event.y == 40 and ctx.dark == false)
+		return { sound = click, pan = event.pan, rate = 1 + event.rect.w / 100 }
+	end,
+}"#,
+    );
+    let theme = folder.load();
+    let ctx = gmnb_theme::Ctx::default();
+    let mut press = Event::at(EventKind::Press, Page::Calculator, [10.0, 20.0, 40.0, 40.0]);
+    press.source = Some(From::Key);
+    press.via = Some(Via::Pointer);
+    press.key = Some((Some(137), KeyKind::Number));
+    assert!(theme.asks_sound());
+    let Some(Ok(Choice::Plays(plays))) = theme.sound_choice(&press, -0.25, &ctx) else {
+        panic!("{:?}", theme.sound_choice(&press, -0.25, &ctx))
+    };
+    assert_eq!(plays[0].sound, SoundId(1));
+    assert_eq!((plays[0].params.pan, plays[0].params.rate), (-0.25, 1.4));
+
+    // What is no play is noted for the author; the table decides.
+    let mode = Event::at(EventKind::Mode, Page::Graphing, [0.0; 4]);
+    assert_eq!(
+        theme.sound_choice(&mode, 0.0, &ctx),
+        Some(Ok(Choice::Table))
+    );
+    let notes = theme.take_sound_notes();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(notes[0].path, "sound()");
+
+    // A sound made inside it: the theme has one more.
+    assert_eq!(theme.sounds_declared(), 1);
+    let option = Event::at(EventKind::Option, Page::Settings, [0.0; 4]);
+    let Some(Ok(Choice::Plays(made))) = theme.sound_choice(&option, 0.0, &ctx) else {
+        panic!()
+    };
+    assert_eq!((made[0].sound, theme.sounds_declared()), (SoundId(2), 2));
+
+    // Three failures, and it is asked no more.
+    let error = Event::at(EventKind::Error, Page::Calculator, [0.0; 4]);
+    for _ in 0..3 {
+        assert!(matches!(
+            theme.sound_choice(&error, 0.0, &ctx),
+            Some(Err(_))
+        ));
+    }
+    assert!(!theme.asks_sound());
+    assert_eq!(theme.sound_choice(&press, 0.0, &ctx), None);
+
+    // A theme with none is never asked.
+    let (plain, _f) = theme_with_table("");
+    assert!(!plain.asks_sound());
+    assert_eq!(plain.sound_choice(&press, 0.0, &ctx), None);
+}
+
+fn theme_with_table(table: &str) -> (Theme, Folder) {
+    let folder = Folder::new(&format!("return {{ api = 1, name = \"T\", {table} }}"));
+    (folder.load(), folder)
+}
+
 // ---- Events ------------------------------------------------------------------------
 
 #[test]
@@ -902,17 +1016,62 @@ fn an_event_gets_its_name() {
         ..button.clone()
     };
     assert_eq!(event_name(&memory), Some(EventName::Memory));
-    // Results and errors are the Calculator page's; a mode is a mode.
+    // Results and errors are the Calculator page's. Results only those
+    // that end a calculation: brought about by = or a function key, not
+    // the running total an operator shows. An error whatever brought it
+    // about. A mode is a mode.
+    use gmnb_theme::events::Cause;
+    let ended = |kind, page, cause| Event {
+        cause,
+        ..at(kind, page)
+    };
+    for (cause, name) in [
+        (Some(Cause::Equals), Some(EventName::Result)),
+        (Some(Cause::Function), Some(EventName::Result)),
+        (Some(Cause::Operator), None),
+        (Some(Cause::Digit), None),
+        (Some(Cause::Memory), None),
+        (Some(Cause::Clear), None),
+        (None, None),
+    ] {
+        assert_eq!(
+            event_name(&ended(EventKind::Result, Page::Calculator, cause)),
+            name
+        );
+        assert_eq!(
+            event_name(&ended(EventKind::Error, Page::Calculator, cause)),
+            Some(EventName::Error)
+        );
+    }
+    let equals = Some(Cause::Equals);
     assert_eq!(
-        event_name(&at(EventKind::Result, Page::Calculator)),
-        Some(EventName::Result)
+        event_name(&ended(EventKind::Result, Page::Converter, equals)),
+        None
     );
-    assert_eq!(event_name(&at(EventKind::Result, Page::Converter)), None);
     assert_eq!(
-        event_name(&at(EventKind::Error, Page::Calculator)),
-        Some(EventName::Error)
+        event_name(&ended(EventKind::Error, Page::Date, equals)),
+        None
     );
-    assert_eq!(event_name(&at(EventKind::Error, Page::Date)), None);
+    // What a press brings about.
+    assert_eq!(Cause::of_press(None, Some(KeyKind::Equals)), Cause::Equals);
+    assert_eq!(
+        Cause::of_press(None, Some(KeyKind::Operator)),
+        Cause::Operator
+    );
+    assert_eq!(Cause::of_press(None, Some(KeyKind::Func)), Cause::Function);
+    assert_eq!(Cause::of_press(None, Some(KeyKind::Number)), Cause::Digit);
+    assert_eq!(
+        Cause::of_press(Some(Action::Clear), Some(KeyKind::Func)),
+        Cause::Clear
+    );
+    assert_eq!(Cause::of_press(Some(Action::Memory), None), Cause::Memory);
+    assert_eq!(Cause::of_press(None, None), Cause::Button);
+    // A result that followed an assistive press is not answered either.
+    let after = Event {
+        via: Some(Via::Assistive),
+        ..ended(EventKind::Result, Page::Calculator, equals)
+    };
+    assert!(!answers(&after));
     assert_eq!(
         event_name(&at(EventKind::Mode, Page::Graphing)),
         Some(EventName::Mode)

@@ -1240,6 +1240,7 @@ dependencies = [
  "chrono",
  "datecalc",
  "gmnb-media",
+ "gmnb-sound",
  "gmnb-theme",
  "graphing",
  "gtk4",
