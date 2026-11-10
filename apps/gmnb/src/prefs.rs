@@ -845,6 +845,8 @@ fn sound_group(ctx: &Rc<Ctx>) -> adw::PreferencesGroup {
     ctx.hub.subscribe_sound(&switch, |row, text| {
         row.set_subtitle(&gtk::glib::markup_escape_text(text))
     });
+    // (tests/settings.rs finds the switch and the slider by these.)
+    switch.add_css_class("wc-sound-switch");
     group.add(&switch);
 
     let percent = |v: f64| format!("{}%", (v * 100.0).round());
@@ -857,6 +859,7 @@ fn sound_group(ctx: &Rc<Ctx>) -> adw::PreferencesGroup {
     scale.set_hexpand(true);
     scale.set_valign(gtk::Align::Center);
     scale.set_width_request(160);
+    scale.add_css_class("wc-sound-volume-slider");
     scale.update_property(&[
         gtk::accessible::Property::Label("Volume"),
         gtk::accessible::Property::ValueText(&percent(saved)),

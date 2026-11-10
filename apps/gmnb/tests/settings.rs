@@ -238,3 +238,37 @@ return { api = 1, name = "Tiles", options = options }"#;
         "{tiles} previews to open Settings"
     );
 }
+
+/// Settings → Sound has its switch (the theme's sounds on or off: the
+/// mute) and its volume slider, in the base look and with a theme that has
+/// sounds. Each takes the keyboard's focus there (`GMNB_FOCUS`), which
+/// says when nothing does, as it does for a class no widget has.
+#[test]
+fn settings_has_a_sound_switch_and_a_volume_slider() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    const THEME: &str = r#"return { api = 1, name = "Plain" }"#;
+    let missing = |theme: &str, class: &str| {
+        let env = [
+            ("GMNB_THEME", theme),
+            ("GMNB_PREFS", "1"),
+            ("GMNB_FOCUS", class),
+        ];
+        run(&display, THEME, &env, 4_000)
+            .contains(&format!("GMNB_FOCUS: nothing focusable with class {class}"))
+    };
+    assert!(
+        missing("base", "wc-no-such-row"),
+        "GMNB_FOCUS didn't say it found nothing for a class no widget has"
+    );
+    for theme in ["base", "glazed"] {
+        for class in ["wc-sound-switch", "wc-sound-volume-slider"] {
+            assert!(
+                !missing(theme, class),
+                "{theme}: Settings -> Sound has no {class}"
+            );
+        }
+    }
+}
