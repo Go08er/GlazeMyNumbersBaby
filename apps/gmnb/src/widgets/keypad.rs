@@ -106,6 +106,10 @@ mod imp {
         pub told: RefCell<(u64, Vec<KeyCell>)>,
         /// `GMNB_POINTER`: where the pointer is taken to be.
         pub fixed_pointer: Cell<Option<(f32, f32)>>,
+        /// The keypad came into view and the theme hasn't been told yet:
+        /// it is told when the keypad is next drawn, which is when it has
+        /// its place in the window.
+        pub show_pending: Cell<bool>,
     }
 
     impl Default for Keypad {
@@ -127,6 +131,7 @@ mod imp {
                 pad: Cell::new(0),
                 told: RefCell::default(),
                 fixed_pointer: Cell::new(None),
+                show_pending: Cell::new(false),
             }
         }
     }
@@ -500,11 +505,11 @@ impl Keypad {
     }
 
     /// The keypad came into view (it was mapped, or its page's mode
-    /// changed): the theme's layers are told (`show`).
+    /// changed): the theme's layers are told (`show`) when it is next
+    /// drawn.
     pub fn cascade(&self) {
-        if let Some(hub) = Hub::current() {
-            hub.layers().shown(self);
-        }
+        self.imp().show_pending.set(true);
+        self.queue_draw();
     }
 
     /// The cells as a layer is told them: those on screen, by row and
@@ -543,9 +548,15 @@ impl Keypad {
 
     fn draw(&self, s: &gtk::Snapshot) {
         let imp = self.imp();
-        let layer = self
-            .layer()
-            .filter(|_| Hub::current().is_some_and(|h| h.layers().draws(LayerKind::Keypad)));
+        // The layer first: it has to be there to be told.
+        let layer = self.layer();
+        if imp.show_pending.replace(false)
+            && let Some(hub) = Hub::current()
+        {
+            hub.layers().shown(self);
+        }
+        let layer =
+            layer.filter(|_| Hub::current().is_some_and(|h| h.layers().draws(LayerKind::Keypad)));
         let Some(layer) = layer else {
             // No layer: the keys, as the toolkit draws them.
             let mut child = self.first_child();

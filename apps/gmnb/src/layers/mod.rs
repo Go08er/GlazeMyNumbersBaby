@@ -67,9 +67,12 @@ pub struct Stats {
     pub armed: u32,
     /// Events emitted.
     pub events: u64,
-    /// Milliseconds spent in hooks, and in the slowest one.
-    pub hook_ms: f64,
+    /// Milliseconds spent in each kind's hooks, and in the slowest frame.
+    pub hook_ms: [f64; 4],
     pub worst_ms: f64,
+    /// Pictures replayed into a snapshot, and the milliseconds that took.
+    pub replays: u64,
+    pub replay_ms: f64,
 }
 
 fn slot(kind: LayerKind) -> usize {
@@ -227,11 +230,11 @@ impl Layers {
         self.stats.set(stats);
     }
 
-    /// A layer's hooks ran for this long.
-    pub fn hook_took(&self, time: Duration) {
+    /// The hooks of a layer of `kind` ran for this long.
+    pub fn hook_took(&self, kind: LayerKind, time: Duration) {
         let ms = time.as_secs_f64() * 1000.0;
         self.count(|s| {
-            s.hook_ms += ms;
+            s.hook_ms[slot(kind)] += ms;
             s.worst_ms = s.worst_ms.max(ms);
         });
     }
@@ -283,6 +286,7 @@ impl Layers {
             state: RefCell::new(State::default()),
         });
         self.instances.borrow_mut().push(Rc::downgrade(&instance));
+        instance.adopt(self);
         // Coming on screen and leaving it are conditions of animating.
         let weak = Rc::downgrade(&instance);
         widget.connect_map(move |_| {
@@ -732,8 +736,8 @@ impl Instance {
         }
     }
 
-    /// Forgets everything of the theme that was (its timers first), and
-    /// has the widget drawn again.
+    /// Forgets everything of the theme that was (its timers first),
+    /// takes up the theme that is, and has the widget drawn again.
     fn reset(&self) {
         {
             let mut st = self.state.borrow_mut();
@@ -744,9 +748,36 @@ impl Instance {
                 ..State::default()
             };
         }
+        if let Some(layers) = self.layers.upgrade() {
+            self.adopt(&layers);
+        }
         if let Some(widget) = self.widget.upgrade() {
             widget.queue_draw();
         }
+    }
+
+    /// Takes up the loaded theme's layer of this kind: which events it
+    /// listens for and for how long, and whether it asked for the
+    /// pointer. From then on events are kept for it, also before its
+    /// first frame.
+    fn adopt(&self, layers: &Layers) {
+        let (events, pointer) = layers
+            .hub()
+            .map(|hub| {
+                hub.with_theme(|t| {
+                    t.and_then(|t| t.layer(self.kind))
+                        .map(|l| (l.events.clone(), l.pointer))
+                        .unwrap_or_default()
+                })
+            })
+            .unwrap_or_default();
+        let mut st = self.state.borrow_mut();
+        st.clock.reset();
+        st.ring = Ring::new(&events);
+        st.wants_pointer = pointer;
+        st.picture = None;
+        st.generation = layers.generation.get();
+        st.dirty = true;
     }
 
     /// The layer's picture for its widget's `snapshot`, of `size`. The
@@ -760,23 +791,11 @@ impl Instance {
             return None;
         }
         let hub = layers.hub()?;
-        let mut st = self.state.borrow_mut();
-        let generation = layers.generation.get();
-        if st.generation != generation {
-            // The first frame of this theme here.
-            let (events, pointer) = hub.with_theme(|t| {
-                t.and_then(|t| t.layer(self.kind))
-                    .map(|l| (l.events.clone(), l.pointer))
-                    .unwrap_or_default()
-            });
-            self.disarm(&mut st);
-            st.clock.reset();
-            st.ring = Ring::new(&events);
-            st.wants_pointer = pointer;
-            st.picture = None;
-            st.generation = generation;
-            st.dirty = true;
+        if self.state.borrow().generation != layers.generation.get() {
+            // A theme this instance hasn't been told of.
+            self.reset();
         }
+        let mut st = self.state.borrow_mut();
         if !st.dirty && st.size == size {
             return st.picture.clone();
         }
@@ -859,6 +878,7 @@ pub fn paint(
         return;
     };
     let pango = widget.pango_context();
+    let start = std::time::Instant::now();
     hub.with_theme(|theme| {
         let scene = replay::Scene {
             cache: &hub.layers().cache,
@@ -867,6 +887,11 @@ pub fn paint(
             glyphs,
         };
         replay::replay(s, list, &scene);
+    });
+    let ms = start.elapsed().as_secs_f64() * 1000.0;
+    hub.layers().count(|s| {
+        s.replays += 1;
+        s.replay_ms += ms;
     });
 }
 

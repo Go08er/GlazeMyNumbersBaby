@@ -219,10 +219,12 @@ fn activate(app: &adw::Application) {
     if let Ok(spec) = std::env::var("GMNB_BENCH") {
         bench::run(&win, &spec);
     }
-    if std::env::var_os("GMNB_THEME_STATS").is_some() {
-        // What theming holds once the window has settled.
+    if let Ok(when) = std::env::var("GMNB_THEME_STATS") {
+        // What theming holds once the window has settled: after 1.2 s, or
+        // after as many milliseconds as the variable says.
         let w = win.clone();
-        glib::timeout_add_local_once(Duration::from_millis(1200), move || {
+        let after = when.parse().unwrap_or(1200);
+        glib::timeout_add_local_once(Duration::from_millis(after), move || {
             let hub = &w.ctx().hub;
             eprintln!("theme: {:?}", hub.stats());
             // Each layer hook: its failures, and whether it was switched off.

@@ -242,6 +242,8 @@ mod imp {
         /// among the window's.
         pub layer: OnceCell<Rc<Instance>>,
         pub readout: Cell<u64>,
+        /// `GMNB_DISPLAY_RECT`: where the readout last said it was.
+        pub reported: Cell<Option<(f32, f32, f32, f32)>>,
     }
 
     impl Default for Display {
@@ -275,6 +277,7 @@ mod imp {
                 align_end: Cell::new(true),
                 layer: OnceCell::new(),
                 readout: Cell::new(0),
+                reported: Cell::new(None),
             }
         }
     }
@@ -784,8 +787,35 @@ impl Display {
         }
     }
 
+    /// Dev hook, for comparing a readout with DGMNB's: with
+    /// `GMNB_DISPLAY_RECT` set, each readout says where in the window it
+    /// is, once, when it is first drawn at a size.
+    fn report_rect(&self) {
+        thread_local! {
+            static ON: bool = std::env::var_os("GMNB_DISPLAY_RECT").is_some();
+        }
+        if !ON.with(|on| *on) {
+            return;
+        }
+        let Some(root) = self.root() else { return };
+        if let Some(b) = self.compute_bounds(&root) {
+            let rect = (b.x(), b.y(), b.width(), b.height());
+            if self.imp().reported.replace(Some(rect)) != Some(rect) {
+                eprintln!(
+                    "display rect: {} {} {} {} value {:?}",
+                    rect.0,
+                    rect.1,
+                    rect.2,
+                    rect.3,
+                    self.imp().value.borrow()
+                );
+            }
+        }
+    }
+
     fn draw(&self, s: &gtk::Snapshot) {
         let imp = self.imp();
+        self.report_rect();
         if imp.laid.borrow().is_none() {
             imp.laid.replace(Some(Rc::new(self.lay())));
         }

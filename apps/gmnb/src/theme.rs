@@ -812,7 +812,7 @@ impl Hub {
         };
         let start = std::time::Instant::now();
         let result = theme.draw(kind, &ctx, frame);
-        self.layers.hook_took(start.elapsed());
+        self.layers.hook_took(kind, start.elapsed());
         self.hear(theme);
         result
     }

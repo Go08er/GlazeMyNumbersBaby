@@ -957,7 +957,7 @@ A theme can draw in four places, its **layers**:
 | `background` | The whole window, under every widget, over `window.background` | The window | Faded to `ctx.opacity` together with `window.background`. Draw it opaque. |
 | `keypad` | Each keypad, over its keys | That keypad | Called once per visible keypad. Can also move its keys (`place`). |
 | `display` | Each readout | That readout | Paints the value **instead of** the app. |
-| `overlay` | The whole window, over every widget | The window | Never takes clicks. Sheets and dialogs inside the window are under it; popovers and menus are separate surfaces and are not. |
+| `overlay` | The whole window, over every widget of the page | The window | Never takes clicks. The header, the sidebar and a page's own sheets are under it. Settings and About are over it, so that no theme can cover the place it is switched off in; popovers and menus are separate surfaces and are not covered either. |
 
 ```lua
 layers = {
@@ -984,6 +984,9 @@ layers = {
 | `ctx` | The same `ctx` as `style` gets. |
 | `keys` | Keypad layer: every cell of this keypad. |
 | `value` | Display layer: the value to paint. |
+
+A frame and everything in it is the app's: read-only, and refilled in
+place for the next frame. Copy what you want to keep.
 
 ### Asking for the next frame
 
@@ -1032,8 +1035,13 @@ An event stays for as many seconds as the layer's `events` table says
 Every event has `age`, `page` (`"calculator"`, `"converter"`, `"date"`,
 `"graphing"`, `"settings"`), `rect` (the control, readout or keypad it
 came from) and `x`, `y`: the exact point pressed for a pointer press on a
-key, else the middle of `rect`. All in the layer's own coordinates; a
-keypad layer gets only its own keypad's events.
+key, else the middle of `rect`. All in the layer's own coordinates.
+
+- A keypad layer is told of its own keypad's keys and its own `show`,
+  never of another keypad's. Everything else reaches it like any layer.
+- An `option` event comes from nowhere in particular: its `rect` is the
+  layer's own area.
+- A layer that is not on screen is told nothing.
 
 For `press`:
 
@@ -1093,7 +1101,8 @@ loaders: see [Decoding stills](theming-media.md#decoding-stills)). `gmnb.noise({
 makes a square of speckles: per pixel, in row order, a 32-bit xorshift
 (`s ^= s << 13; s ^= s >> 17; s ^= s << 5`, starting from `seed`, default
 `0x9e3779b9`) gives `n = (s & 0xff) / 255`, and the pixel is `color` at
-alpha `n × opacity`, premultiplied (`GdkMemoryTexture`, RGBA8). Both are
+alpha `n × opacity` (times the colour's own), premultiplied, each part cut
+down to 8 bits (`GdkMemoryTexture`, RGBA8). Both are
 remembered by their arguments: calling them every frame costs nothing
 after the first.
 
@@ -1104,8 +1113,31 @@ drawn again when the animation's next frame is due, as if `draw` had
 returned that delay; all the rules under
 [Asking for the next frame](#asking-for-the-next-frame) apply to it.
 
-Pushes must be popped and saves restored by the time `draw` returns. The
-app closes what was left open and reports it once.
+Pushes must be popped and saves restored by the time `draw` returns, in
+the order they were made (a `save` made inside a push is restored before
+that push is popped). The app closes what was left open and reports it
+once. `push_mask` and `push_blend` each count as two pushes.
+
+What a call does with what it is given:
+
+- **A wrong argument** (a colour that isn't one, a path that isn't a
+  path, a missing paint) is an error at that line, like any error in
+  Luau. Unless the hook catches it, the frame fails.
+- **Going over a cap** of the [limits](#limits-and-what-happens-when-a-theme-fails)
+  is an error too, and the frame is dropped whatever the hook does after,
+  catching the error included.
+- **A number that isn't finite** is refused. Opacities, colour parts and
+  gradient stops out of range are brought into range without a word;
+  negative sizes and radii count as 0.
+- `draw:text`'s font is laid onto `text.body` of the style; `nil` is that
+  font as it is. A font that can't be read is noted and the rest of it
+  used.
+- A picture that didn't load (see the limits) has no size and draws
+  nothing.
+
+A path holds what its builder calls put in it and can be kept between
+frames and added to; it is read when it is drawn. A glyph of
+`frame.value.previous` carries `previous = true`.
 
 ### The keypad layer
 
@@ -1137,7 +1169,14 @@ end
 ```
 
 `draw` must return `0` while `place` is still moving keys; the app does
-not guess.
+not guess. If `place` fails, or its calls together run past their limit,
+no key is moved that frame.
+
+- The cells listed are the ones on screen, by row and column.
+- `pressed` is also true for the 110 ms a key typed on the keyboard is
+  shown pressed; `checked` is a toggle that is on.
+- The graphing page's small pad is not a keypad to themes: its keys send
+  `press` events, and nothing is drawn over it.
 
 ### The display layer
 
@@ -1369,7 +1408,9 @@ sounds.
 | Time: one `sound` call | 2 ms |
 
 Every entry into the theme's code runs under its time limit, the first
-load included. Files (`fonts`, `credits`, `gmnb.image`) are relative
+load included. **A time limit is of processor time**: what the theme's
+code has run, not what the clock on the wall says. A machine busy with
+other things doesn't fail a theme that did nothing slow. Files (`fonts`, `credits`, `gmnb.image`) are relative
 paths inside the theme's own folder; `..`, absolute paths and links that
 lead outside are refused. The same holds for `gmnb.animation` and
 `gmnb.sound`. Time the app spends decoding a picture or reading a sound
@@ -1384,6 +1425,7 @@ file inside a theme's call does not count against that call's limit.
 | A number is out of range | It is clamped. A note. |
 | A `draw` fails, runs out of time or exceeds a cap | Nothing is drawn for that layer that frame (the display paints the base way). After 3 failures the hook is switched off until the theme is reloaded, and a toast says so, once. |
 | A `draw` takes more than four times its limit | Switched off at once (a library call the app couldn't interrupt). |
+| `place` fails or runs out of time | The keys stay where they are that frame; `draw` still runs. After 3 failures `place` is switched off. |
 | The memory limit is hit | The theme is unloaded: the base look, and a toast. |
 | A font or image can't be read or is too big | The theme loads without it; a note. |
 | An animation or sound can't be read, is too big, or isn't what its first bytes promise | The same: drawing it draws nothing, playing it plays nothing; a note. |
@@ -1576,9 +1618,11 @@ must reach 4.5 (its scrim is computed to). Halos are not counted.
 | `GMNB_PALETTE=<key>` | Kept for the old scripts: the same as `GMNB_THEME=aurora` and `palette=<key>`. |
 | `GMNB_ACCENT=<hex>` or `none` | What `ctx.accent` is. |
 | `GMNB_STILL` | Layers see `motion = false`: no events, no frames, no `place`. The toolkit's own animations are untouched, as now. |
+| `GMNB_DISPLAY_RECT` | Each readout prints where in the window it is (`display rect: x y w h`), for comparing it with DGMNB's. |
+| `GMNB_ACTIVE` | The window counts as the one in use whatever the compositor says. A headless compositor never says so, and layers only animate in a window that is. |
 | `GMNB_POINTER="x,y"` | A pointer position for the first keypad's layer, as now. |
 | `GMNB_BENCH="themes=base,aurora,mono,base;opacity"` | Measure: each theme switch, and an opacity drag from 1 to 0.1 and back, each to the end of the next painted frame; prints the figures and the hub's counters, then quits. |
-| `GMNB_THEME_STATS` | Print the hub's counters once the window has settled (Luau machines, `style` calls, provider loads and their property counts). |
+| `GMNB_THEME_STATS` | Print the hub's counters once the window has settled, after 1.2 s or after as many milliseconds as its value: Luau machines, `style` calls, provider loads and their property counts; and for the layers the frames drawn by kind, the milliseconds their hooks and their replay took, the timers and frame callbacks ever armed and alive now, and each hook's failures. |
 | `GMNB_SOUND=0` | No sound for the run; nothing sound-related is created. `null`: the mixer runs with no sound server, for tests. |
 | `GMNB_SOUND_DUMP=<folder>` | Every sound the theme makes is written there as a WAV file. |
 
@@ -1588,27 +1632,54 @@ rest keep working.
 ### Where events come from
 
 Every place 0.2 called `Ctx::pulse_at`, `Keypad::flash` or
-`Keypad::cascade` becomes an event; the colours and strengths that were
-passed there are now Aurora's business.
+`Keypad::cascade` is an event now; the colours and strengths that were
+passed there are Aurora's business. Every event goes through one
+function, `Layers::emit` (`apps/gmnb/src/layers/mod.rs`): it tells each
+layer that listens, in that layer's coordinates, and then whoever asked to
+hear all events (`Layers::listen`: sound). An event's `page` is read off
+the widget it came from (the name its page has in the window's stack).
 
-| In 0.2 | Event |
+| Where | Call | Event |
+|---|---|---|
+| `calculator.rs` `on_key`, `converter.rs` keypad `connect_pressed` (a key clicked) | `key_pressed(pad, id, Some(point))` | `press`, `source = "key"`, `x, y` = the point pressed, `rect` = the key |
+| `calculator.rs` `flash`, `converter.rs` key handler (a key typed) | `key_pressed(pad, id, None)` | `press`, `source = "key"`, `via = "keyboard"`, `x, y` = the key's middle. The key is also `active` for 110 ms. |
+| `graphing.rs` keypad buttons | `pressed(button, Source::Key, None)` | `press`, `source = "key"`, `page = "graphing"`, `key.kind = "other"`, no `key.id`, `x, y` = the button's middle |
+| `calculator.rs` `press_from` (memory row, F-E) | `pressed(button, Source::Button, …)` | `press`, `source = "button"`; the memory buttons with `action = "memory"` |
+| `converter.rs` swap | `pressed(button, Source::Swap, None)` | `press`, `source = "swap"` |
+| `date.rs` a day picked | `pressed(button, Source::Date, None)` | `press`, `source = "date"`, `rect` = the date button |
+| `Display::set_value` given `Change::Result` or `Change::Error` (the calculator's, the converter's and the date page's readouts alike) | `outcome(readout, error)` | `result` / `error` with the readout's `page`, `rect` = the readout |
+| `Keypad` mapped; `Keypad::cascade` (the calculator's mode changed, the converter shown) | `shown(pad)` | `show`, `rect` = the keypad |
+| `Hub::set_option` | `emit` | `option`, with `id` and `value` |
+| `Window::set_mode`, after the first page | `mode_changed(page)` | `mode`, `page` = the new page, `rect` = the page |
+
+- **`action`**: a key is `"backspace"` by its icon and `"clear"` by its
+  label (C, CE); `Keypad::key_meaning`.
+- **`via`**: the backdrop notes every pointer press in the window and
+  every Space or Enter (capture phase, never claimed). A control that
+  says it was used within a second of a pointer press was used by the
+  pointer; else within a second of Space or Enter, by the keyboard; else
+  through the accessibility interface (`"assistive"`). A key typed on
+  the keyboard that presses its key on screen is always `"keyboard"`.
+
+`Display::set_value`'s `Change` also becomes `frame.value.change` for
+that readout, while a theme's display layer draws it.
+
+### Where the layers' code lives
+
+| Where | What |
 |---|---|
-| `calculator.rs` `on_key`, `converter.rs` keypad `connect_pressed` (a key clicked) | `press`, `source = "key"`, `via = "pointer"`, `x, y` = the point pressed, `rect` = the key |
-| `calculator.rs` `flash`, `converter.rs` key handler (a key typed) | `press`, `source = "key"`, `via = "keyboard"`, `x, y` = the key's middle. The key is also `active` for 110 ms. |
-| `graphing.rs` keypad buttons | `press`, `source = "key"`, `page = "graphing"`, `key.kind = "other"`, `x, y` = the button's middle |
-| `calculator.rs` `press_from` (memory row, F-E) | `press`, `source = "button"` |
-| `converter.rs` swap | `press`, `source = "swap"` |
-| `date.rs` a day picked | `press`, `source = "date"`, `rect` = the date button |
-| `calculator.rs` `sync` with `Change::Result` / `Change::Error` | `result` / `error`, `rect` = the readout |
-| Converter and date values changing with `Change::Result` | `result` with their `page` (0.2 drew nothing for these; Aurora ignores them) |
-| `Keypad` mapped; the calculator's mode changed | `show`, `rect` = the keypad |
-| `prefs.rs` palette chosen | `option`, `id = "palette"`; in general any option change |
-| A sidebar row chosen; the calculator's mode changed (new in 0.3) | `mode`, `page` = the new page, `rect` = the page |
-| C, CE, backspace, the memory buttons (new in 0.3) | their `press`, with `action` = `"clear"`, `"backspace"` or `"memory"` |
-| A control activated through the accessibility interface (new in 0.3) | its `press`, with `via = "assistive"` |
+| `crates/gmnb-theme/src/draw.rs` | The `draw` table: every call recorded into a `DisplayList` of typed `Op`s, the caps, the push/save stack |
+| `…/path.rs`, `…/picture.rs` | Paths (tables of numbers a Luau builder writes; read when drawn) and pictures (a file's header for its size, the noise recipe; pixels made when first drawn) |
+| `…/layer.rs`, `theme.rs` | The frame a hook is told, in host tables kept between frames; `Theme::draw` and `Theme::preview` |
+| `…/sched.rs`, `…/events.rs` | "Asking for the next frame" as a state machine with no clock of its own; a layer's ring of events |
+| `apps/gmnb/src/layers/mod.rs` | The runtime: an `Instance` per place a layer is drawn, the one function that arms a timer or a frame callback, `emit` |
+| `…/layers/replay.rs` | A display list into a `GtkSnapshot`, as the draw API's table maps it; textures and layouts kept between frames |
+| `widgets/backdrop.rs`, `keypad.rs`, `display.rs`, `layers/tile.rs` | Where the four layers and the previews are drawn |
 
-`Display::set_value`'s `Change` becomes `frame.value.change` for that
-readout; it is not an event.
+A layer's hook runs inside its widget's `snapshot`, and only if the
+layer needs a new picture; otherwise the picture it drew last is
+replayed. None of this crate's code knows the toolkit; none of the
+toolkit code knows Aurora.
 
 ### Fonts
 
@@ -1630,9 +1701,18 @@ readout; it is not an event.
 
 Measured for the language choice: 1000 frames of 300 calls into the app,
 with the sandbox, memory limit and deadline on, averaged 76 µs. Aurora
-makes 7 draw calls for a still background and 22 with thirteen pulses at
-once, about 30 for a keypad with the pointer over it, and at most 72 for
-a nine-digit readout mid-animation.
+makes 7 draw calls for a still background and 20 with thirteen pulses at
+once, about 30 for a keypad with the pointer over it, and about 115 for
+a nine-digit readout mid-animation in the dark (each digit twice, its
+glow and itself, each inside a save and three transforms).
+
+Measured in the real engine, under the real limits (`tests/draw.rs`,
+medians of 200 frames): the background with thirteen pulses 0.21 ms, a
+keypad with the pointer over it and a ripple 0.10 ms, the readout
+mid-result 0.06 ms; the limit is 8 ms. Most of a frame is the theme
+making colours and gradients: the `gmnb` library's functions therefore
+run with the heap cap lifted and put back (each builds one small value),
+which more than halved the background's frame.
 
 ### The sandbox, exactly
 
@@ -1659,7 +1739,11 @@ the interrupt's error once; it must not buy more time).
 5. Each limit in the table above, hit on purpose, gives the listed result
    and leaves the app in the base look or with the hook off.
 6. No theme, or a theme whose hooks return `nil`: no timer and no tick
-   callback is installed (count the sources).
+   callback is installed. The policy is tested with a clock it is handed
+   (`sched.rs`: `nil` answers "arm nothing"); the app's sources are
+   counted in its code (`theming_installs_no_sources`: a timer or a frame
+   callback is made in one function only, from that answer); and the
+   running app says how many it ever armed (`GMNB_THEME_STATS`).
 7. Both built-in themes type-check against `types/gmnb.d.luau`, and every
    key they return is one the definitions name.
 8. The readability rules above.
