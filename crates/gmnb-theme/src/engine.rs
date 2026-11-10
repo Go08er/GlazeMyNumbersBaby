@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use mlua::chunk::ChunkMode;
+use mlua::chunk::{ChunkMode, Compiler};
 use mlua::{
     Function, IntoLuaMulti, Lua, LuaOptions, LuaString, MultiValue, StdLib, Table, Value, VmState,
 };
@@ -34,6 +34,254 @@ const REMOVED: [&str; 5] = ["require", "loadstring", "getfenv", "setfenv", "newp
 
 /// How deep `print` may be re-entered (from a `__tostring` it calls).
 const PRINT_NESTING: u32 = 4;
+
+/// Bytes compared, at most, by one plain search (`string.find` with
+/// `plain` or a pattern of no magic characters, `string.split` with a
+/// separator of two bytes or more): the string's length times the
+/// pattern's. Luau compares the pattern at every place with no interrupt
+/// between, a few milliseconds' work at this.
+const PLAIN_WORK: usize = 1 << 30;
+/// Steps, at most, of one pattern search (`string.find`, `match`,
+/// `gmatch`, `gsub`) between two of the interrupt's checks: the string's
+/// length times its longest `[set]`, which `*`, `+` and `-` match against
+/// each character in turn without one. Some 30 ms at this.
+const SET_WORK: usize = 1 << 26;
+/// Elements, at most, `table.move` is told to move: it moves each in turn
+/// (present or not) with no interrupt between, and no table holds as many
+/// within the heap cap.
+const MOVE_COUNT: usize = 1 << 20;
+
+/// The library functions whose work Luau's interrupt can't see into, put
+/// in the libraries' place before they are frozen (`Engine::bound_library`;
+/// given `over`, which says what a search would cost, `SET_WORK` and
+/// `MOVE_COUNT`). Luau checks the interrupt only in its own instructions
+/// and the pattern matcher's steps, so:
+///
+/// - a search or a move whose own loop is too long is refused, with an
+///   error naming the cap, before it starts;
+/// - a library function that calls a function it was handed (`sort`'s
+///   comparator, `find`'s `__eq`, `foreach`'s function, `format`'s `%*`
+///   calling `__tostring`) calls it from Luau instead: that function may be
+///   a library function, as uninterruptible, called once per element.
+///   (`print` checks the deadline itself between its arguments; `gsub`'s
+///   matcher checks it between replacements.)
+///
+/// Everything else is as the original does it, the original doing it.
+const BOUNDED: &str = r#"
+local over, SET_WORK, MOVE_COUNT = ...
+local find, match, gmatch, gsub, split, format =
+    string.find, string.match, string.gmatch, string.gsub, string.split, string.format
+local sort, tfind, foreach, foreachi, move, pack, unpack =
+    table.sort, table.find, table.foreach, table.foreachi, table.move, table.pack, table.unpack
+local byte, error, rawget, select, tonumber, tostring, type =
+    string.byte, error, rawget, select, tonumber, tostring, type
+
+-- Refuses a search too long for one call (the host works out how long
+-- only when the string and the pattern are big at all).
+local function search(what, s, p, plain)
+    if type(s) == "string" and type(p) == "string" and #s * #p > SET_WORK then
+        local why = over(what, s, p, plain)
+        if why then
+            error(why, 3)
+        end
+    end
+end
+
+string.find = function(s, p, ...)
+    search("string.find", s, p, (select(2, ...)))
+    return find(s, p, ...)
+end
+string.match = function(s, p, ...)
+    search("string.match", s, p, false)
+    return match(s, p, ...)
+end
+string.gmatch = function(s, p, ...)
+    search("string.gmatch", s, p, false)
+    return gmatch(s, p, ...)
+end
+string.gsub = function(s, p, ...)
+    search("string.gsub", s, p, false)
+    return gsub(s, p, ...)
+end
+string.split = function(s, sep, ...)
+    search("string.split", s, sep, true)
+    return split(s, sep, ...)
+end
+
+table.move = function(a, f, e, ...)
+    local from, to = tonumber(f), tonumber(e)
+    if from and to and to - from >= MOVE_COUNT then
+        error(`table.move: too much work for one call: {to - from + 1} elements (at most {MOVE_COUNT})`, 2)
+    end
+    return move(a, f, e, ...)
+end
+
+-- Sorting tables compares them by `__lt` (numbers and strings, and
+-- anything mixed with them, never call one).
+local function less(a, b)
+    return a < b
+end
+table.sort = function(t, comp, ...)
+    if comp == nil then
+        local first = type(t) == "table" and type(rawget(t, 1))
+        if first ~= "table" and first ~= "userdata" then
+            return sort(t, comp, ...)
+        end
+        return sort(t, less, ...)
+    end
+    if type(comp) ~= "function" then
+        return sort(t, comp, ...)
+    end
+    return sort(t, function(a, b)
+        return comp(a, b)
+    end, ...)
+end
+
+-- Only a table can have `__eq`: one is looked for here, as the original
+-- does it (raw reads from `init` to the first nil).
+table.find = function(t, v, init, ...)
+    local i = if init == nil then 1 else tonumber(init)
+    if type(t) ~= "table" or type(v) ~= "table" or not i or i < 1 or i >= 2147483648 then
+        return tfind(t, v, init, ...)
+    end
+    i = i // 1
+    while true do
+        local e = rawget(t, i)
+        if e == nil then
+            return nil
+        end
+        if v == e then
+            return i
+        end
+        i += 1
+    end
+end
+
+table.foreach = function(t, f, ...)
+    if type(f) ~= "function" then
+        return foreach(t, f, ...)
+    end
+    return foreach(t, function(k, v)
+        return f(k, v)
+    end, ...)
+end
+table.foreachi = function(t, f, ...)
+    if type(f) ~= "function" then
+        return foreachi(t, f, ...)
+    end
+    return foreachi(t, function(i, v)
+        return f(i, v)
+    end, ...)
+end
+
+-- The arguments `%*` takes, by position, scanning as the original does.
+local function stars(fmt)
+    local out, arg, at = nil, 0, 1
+    while true do
+        at = find(fmt, "%", at, true)
+        if not at then
+            return out
+        end
+        local c = byte(fmt, at + 1)
+        if c == 37 then -- %%
+            at += 2
+        elseif c == 42 then -- %*
+            arg += 1
+            out = out or {}
+            out[#out + 1] = arg
+            at += 2
+        else
+            arg += 1
+            local _, e = find(fmt, "^[-+ #0]*%d?%d?%.?%d?%d?.", at + 1)
+            at = (e or #fmt) + 1
+        end
+    end
+end
+-- `%*` writes a table as `tostring` does: done here, from Luau.
+string.format = function(fmt, ...)
+    if type(fmt) ~= "string" or not find(fmt, "%*", 1, true) then
+        return format(fmt, ...)
+    end
+    local at = stars(fmt)
+    if not at then
+        return format(fmt, ...)
+    end
+    local args = pack(...)
+    for _, k in at do
+        local kind = type(args[k])
+        if kind == "table" or kind == "userdata" then
+            args[k] = tostring(args[k])
+        end
+    end
+    return format(fmt, unpack(args, 1, args.n))
+end
+"#;
+
+/// Why a search (`what`: `string.find`, ...) of `p` in `s` is too much
+/// for one call, if it is ([`BOUNDED`]).
+fn search_work(what: &str, s: &[u8], p: &[u8], plain: bool) -> Option<String> {
+    const MAGIC: &[u8] = b"^$*+?.([%-";
+    let plain = match what {
+        "string.find" => plain || !p.iter().any(|b| MAGIC.contains(b)),
+        "string.split" if p.len() < 2 => return None,
+        "string.split" => true,
+        _ => false,
+    };
+    let (work, cap, of) = if plain {
+        (s.len().saturating_mul(p.len()), PLAIN_WORK, "pattern")
+    } else {
+        (s.len().saturating_mul(longest_set(p)), SET_WORK, "[set]")
+    };
+    (work > cap).then(|| {
+        format!(
+            "{what}: too much work for one call: a string of {} bytes × a {of} of {} \
+             (at most {cap} together)",
+            s.len(),
+            if plain { p.len() } else { longest_set(p) },
+        )
+    })
+}
+
+/// The longest `[set]` in a pattern, in bytes (1 if it has none): what a
+/// repeated item costs per character, at most. A set with no end is left
+/// out (Luau refuses the pattern before matching anything).
+fn longest_set(p: &[u8]) -> usize {
+    let mut longest = 1;
+    let mut i = 0;
+    while i < p.len() {
+        match p[i] {
+            b'%' => i += 2,
+            b'[' => {
+                let start = i;
+                i += 1;
+                if p.get(i) == Some(&b'^') {
+                    i += 1;
+                }
+                // As Luau's `classEnd`: the first byte is in the set even
+                // if it is `]`, and `%` escapes the byte after it.
+                let mut closed = false;
+                while i < p.len() {
+                    let c = p[i];
+                    i += 1;
+                    if c == b'%' && i < p.len() {
+                        i += 1;
+                    }
+                    if p.get(i) == Some(&b']') {
+                        closed = true;
+                        break;
+                    }
+                }
+                if !closed {
+                    break;
+                }
+                i += 1;
+                longest = longest.max(i - start);
+            }
+            _ => i += 1,
+        }
+    }
+    longest
+}
 
 /// The Luau memory category of the host's own tables ([`HostTable`]): what
 /// is allocated while it is active is counted apart from the theme's
@@ -72,6 +320,30 @@ struct Shared {
     dead: RefCell<Option<ThemeError>>,
     print_nesting: Cell<u32>,
     log: RefCell<LogBuf>,
+}
+
+impl Shared {
+    /// Whether the running entry's time is up (the interrupt's test, which
+    /// then sets `timed_out`). When the wall's clock says so but the call
+    /// lost the processor meanwhile, it is given what it is owed.
+    fn expired(&self) -> bool {
+        let Some(deadline) = self.deadline.get() else {
+            return false;
+        };
+        if Instant::now() < deadline {
+            return false;
+        }
+        if let Some(span) = self.span.get() {
+            let used = span.used();
+            if used < span.limit {
+                self.deadline
+                    .set(Instant::now().checked_add(span.limit - used));
+                return false;
+            }
+        }
+        self.timed_out.set(true);
+        true
+    }
 }
 
 /// What scripts printed ([`Engine::take_log`]).
@@ -213,31 +485,41 @@ impl Engine {
             globals.raw_set(name, Value::Nil)?;
         }
         globals.raw_set("print", self.print_function()?)?;
+        self.bound_library()?;
         register(lua)?;
         freeze_reachable(&globals)?;
         lua.sandbox(true)?;
         let shared = Rc::clone(&self.shared);
         lua.set_interrupt(move |_| {
-            if let Some(deadline) = shared.deadline.get()
-                && Instant::now() >= deadline
-            {
-                // The wall's clock says the time is up. If the call lost
-                // the processor meanwhile, it is given what it is owed.
-                if let Some(span) = shared.span.get() {
-                    let used = span.used();
-                    if used < span.limit {
-                        shared
-                            .deadline
-                            .set(Instant::now().checked_add(span.limit - used));
-                        return Ok(VmState::Continue);
-                    }
-                }
-                shared.timed_out.set(true);
+            if shared.expired() {
                 return Err(mlua::Error::runtime(TIMEOUT_MESSAGE));
             }
             Ok(VmState::Continue)
         });
         Ok(())
+    }
+
+    /// Puts [`BOUNDED`]'s functions in the libraries' place.
+    fn bound_library(&self) -> mlua::Result<()> {
+        let lua = &self.lua;
+        let over = lua.create_function(
+            |_, (what, s, p, plain): (LuaString, LuaString, LuaString, Value)| {
+                let plain = !matches!(plain, Value::Nil | Value::Boolean(false));
+                Ok(search_work(
+                    &what.to_str()?,
+                    &s.as_bytes(),
+                    &p.as_bytes(),
+                    plain,
+                ))
+            },
+        )?;
+        lua.load(BOUNDED)
+            .set_name("=library")
+            .set_mode(ChunkMode::Text)
+            // No lines: an error a library function raises inside one of
+            // these names no place, rather than a line of this chunk.
+            .set_compiler(Compiler::new().set_debug_level(0))
+            .call::<()>((over, SET_WORK as f64, MOVE_COUNT as f64))
     }
 
     /// `print`: its arguments, as `tostring` writes them, tab-separated,
@@ -252,7 +534,7 @@ impl Engine {
                 return Err(mlua::Error::runtime("print called from print too deeply"));
             }
             shared.print_nesting.set(nesting + 1);
-            let line = print_line(&tostring, args, max);
+            let line = print_line(&shared, &tostring, args, max);
             shared.print_nesting.set(nesting);
             shared.log.borrow_mut().push(line?);
             Ok(())
@@ -665,7 +947,12 @@ impl LogBuf {
     }
 }
 
-fn print_line(tostring: &Function, args: MultiValue, max: usize) -> mlua::Result<String> {
+fn print_line(
+    shared: &Shared,
+    tostring: &Function,
+    args: MultiValue,
+    max: usize,
+) -> mlua::Result<String> {
     let mut line = String::new();
     for (i, v) in args.into_iter().enumerate() {
         if line.len() >= max {
@@ -676,7 +963,10 @@ fn print_line(tostring: &Function, args: MultiValue, max: usize) -> mlua::Result
         }
         let s = match v {
             Value::String(s) => s,
-            // Runs `__tostring`, still under the call's deadline.
+            // Runs `__tostring`, still under the call's deadline. That may
+            // be a library function (no script code, so no interrupt): the
+            // deadline is checked here between them, as the interrupt would.
+            _ if shared.expired() => return Err(mlua::Error::runtime(TIMEOUT_MESSAGE)),
             v => tostring.call::<LuaString>(v)?,
         };
         let bytes = s.as_bytes();
@@ -729,4 +1019,50 @@ fn label(f: &Function) -> String {
         _ => place,
     };
     cap(&label, 200)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{longest_set, search_work};
+
+    #[test]
+    fn a_patterns_longest_set() {
+        for (p, n) in [
+            ("abc", 1),
+            ("[ab]", 4),
+            ("x[%a_]+y[abcdef]", 8),
+            // `]` first is in the set; `%]` is escaped; `%[` is no set.
+            ("[]]", 3),
+            ("[^]a]", 5),
+            ("[%]]", 4),
+            ("%[abc]", 1),
+            ("%f[%w]", 4),
+            // No end: Luau refuses it before matching.
+            ("[abc", 1),
+            ("[ab][abcd", 4),
+        ] {
+            assert_eq!(longest_set(p.as_bytes()), n, "{p}");
+        }
+    }
+
+    #[test]
+    fn what_a_search_costs() {
+        let s = vec![b'a'; 1 << 20];
+        let long = vec![b'a'; 2048];
+        // Plain: string × pattern.
+        assert!(search_work("string.find", &s, &long, true).is_some());
+        assert!(search_work("string.find", &s, &long, false).is_some());
+        assert!(search_work("string.find", &s, &long[..1000], false).is_none());
+        assert!(search_work("string.split", &s, &long, false).is_some());
+        assert!(search_work("string.split", &s, b",", false).is_none());
+        // A pattern: string × its longest set (a long literal is cheap).
+        let mut set = b"[".to_vec();
+        set.extend_from_slice(&long[..100]);
+        set.extend_from_slice(b"]*");
+        assert!(search_work("string.gsub", &s, &set, false).is_some());
+        assert!(search_work("string.find", &s, &set, false).is_some());
+        let literal = [&long[..], b"."].concat();
+        assert!(search_work("string.match", &s, &literal, false).is_none());
+        assert!(search_work("string.gmatch", &s, b"[%w_]+", false).is_none());
+    }
 }

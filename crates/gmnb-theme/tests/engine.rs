@@ -1266,3 +1266,219 @@ fn frame_calls_are_cheap() {
         fill + call
     );
 }
+
+// ---- Library calls the interrupt can't see into --------------------------
+//
+// Luau checks the interrupt only in its own instructions (calls, returns,
+// loops) and in the pattern matcher's steps. A library function's own loop,
+// and a library function calling another library function, are out of its
+// reach: each case below ran for seconds to minutes on the main thread at
+// its full size (one call of each, under any budget). Sized here to run
+// ~0.1–0.6 s unfixed, where the call came back late (a timeout, the hook off
+// at once); fixed, it is refused at once, or stopped at its deadline.
+
+/// A hook doing `body`, after `setup` (run at load).
+fn library_hook(e: &Engine, setup: &str, body: &str) -> FunctionHandle {
+    hook(e, &format!("{setup}\nreturn function() {body} end"))
+}
+
+#[test]
+fn searches_the_interrupt_cant_stop_are_refused() {
+    // Plain searches compare the pattern at every place (string bytes ×
+    // pattern bytes); a `[set]` repeated by `*`, `+` or `-` is matched
+    // against each character with no interrupt between (string bytes × set
+    // bytes); `table.move` copies one element at a time however many it is
+    // told, present or not.
+    let plain = "local s = string.rep('a', 200000) local p = string.rep('a', 100000) .. 'b'";
+    let set = "local s = string.rep('a', 20000) local p = '^[' .. string.rep('b', 20000) .. 'a]*c'";
+    for (setup, body, what) in [
+        (plain, "return (string.find(s, p, 1, true))", "string.find"),
+        (plain, "return (s:find(p))", "string.find"),
+        (plain, "return #s:split(p)", "string.split"),
+        (set, "return (s:find(p))", "string.find"),
+        (set, "return (string.match(s, p))", "string.match"),
+        (set, "return (s:gsub(p, ''))", "string.gsub"),
+        (set, "for _ in s:gmatch(p) do end", "string.gmatch"),
+        ("", "table.move({}, 1, 10000000, 2, {})", "table.move"),
+    ] {
+        let e = engine();
+        let f = library_hook(&e, setup, body);
+        let t = Instant::now();
+        match e.call(&f, Budget::Custom(ms(10)), ()) {
+            Err(ThemeError::Runtime { message, .. }) => {
+                assert!(message.contains(what), "{body}: {message}");
+                assert!(message.contains("too much"), "{body}: {message}");
+            }
+            other => panic!("{body}: {other:?} after {:?}", t.elapsed()),
+        }
+        assert_prompt(t);
+        // An error like any other: one strike, the hook still on.
+        assert_eq!(f.strikes(), 1, "{body}");
+        assert!(!f.is_disabled(), "{body}");
+        assert_usable(&e);
+    }
+}
+
+#[test]
+fn library_loops_that_call_back_keep_the_deadline() {
+    // A library function that calls a function it is given (a comparator,
+    // `__eq`, `__lt`, `__tostring`) calls a library function as directly,
+    // with no interrupt between: n × m work in one call.
+    let n = "local T = table.create(4000, 1) local t = table.create(4000, T)";
+    let lt = "local A = setmetatable(table.create(4000, 1), {__lt = table.find})
+              local t = table.create(4000, A)";
+    let eq = "local mt = {__eq = table.find}
+              local v = setmetatable(table.create(10000, 1), mt)
+              local X = table.create(10000, setmetatable({}, mt))";
+    let ts = "local T = setmetatable(table.create(5000, ''), {__tostring = table.concat})
+              local args = table.create(7000, T) local f = string.rep('%*', 7000)";
+    for (setup, body) in [
+        (n, "table.sort(t, table.find)"),
+        (lt, "table.sort(t)"),
+        (eq, "return table.find(X, v)"),
+        (ts, "return #string.format(f, table.unpack(args))"),
+        (ts, "print(table.unpack(args))"),
+    ] {
+        let e = engine();
+        let f = library_hook(&e, setup, body);
+        let t = Instant::now();
+        assert_eq!(
+            e.call(&f, Budget::Custom(ms(10)), ()),
+            Err(ThemeError::Timeout(ms(10))),
+            "{body}"
+        );
+        assert_prompt(t);
+        // Stopped at its deadline, not long after it.
+        assert!(
+            !f.is_disabled(),
+            "{body}: came back after {:?}",
+            t.elapsed()
+        );
+        assert_usable(&e);
+    }
+}
+
+#[test]
+fn the_bounded_library_works_as_before() {
+    // Each line: what one call returned, all of it.
+    let e = engine();
+    let v = load(
+        &e,
+        r##"
+        local out = {}
+        local function add(...)
+            local parts = {}
+            for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+            out[#out + 1] = table.concat(parts, " ")
+        end
+        add(string.find("hello world", "o w"))
+        add(string.find("a.b", ".", 1, true))
+        add(("hello"):find("l+"))
+        add(string.find("hello", "l", -2))
+        add(string.find("x", "y"))
+        add(string.match("key = value", "^(%w+)%s*=%s*(%w+)$"))
+        add(("abc"):match("b", 3))
+        local words = {}
+        for w in ("one two  three"):gmatch("%a+") do words[#words + 1] = w end
+        add(table.concat(words, ","))
+        add(("a-b-c"):gsub("-", "+"))
+        add(("abc"):gsub("%w", { a = "1" }))
+        add(("abc"):gsub(".", string.upper, 2))
+        add(#("a,b,,c"):split(","), #string.split("a--b", "--"), #("abc"):split(""))
+        local named = setmetatable({}, { __tostring = function() return "named" end })
+        add(string.format("%d|%5.1f|%s|%*|%*|%%*", 7, 2.25, "s", named, 3))
+        local t = { 3, 1, 2 }
+        table.sort(t)
+        add(table.concat(t))
+        table.sort(t, function(a, b) return a > b end)
+        add(table.concat(t))
+        local mt = { __lt = function(a, b) return a.k < b.k end, __eq = function(a, b) return a.k == b.k end }
+        local objs = { setmetatable({ k = 2 }, mt), setmetatable({ k = 1 }, mt) }
+        table.sort(objs)
+        add(objs[1].k, objs[2].k)
+        add(table.find(objs, setmetatable({ k = 2 }, mt)), table.find({ 5, 6, 5 }, 5, 2), table.find(objs, {}))
+        add(table.concat(table.move({ 1, 2, 3 }, 1, 3, 2), ","))
+        add(table.foreachi({ "x", "y" }, function(i, v) if v == "y" then return i end end))
+        add(table.foreach({ a = 1 }, function(k, v) return k .. v end))
+        add(pcall(string.find, "x", "["))
+        add(pcall(table.sort, { 1 }, 5))
+        add(pcall(table.find, nil, 1))
+        return out
+        "##,
+    );
+    let ThemeValue::Array(out) = v.unwrap() else {
+        panic!()
+    };
+    let out: Vec<&str> = out.iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(
+        &out[..22],
+        [
+            "5 7",
+            "2 2",
+            "3 4",
+            "4 4",
+            "nil",
+            "key value",
+            "nil",
+            "one,two,three",
+            "a+b+c 2",
+            "1bc 3",
+            "ABc 2",
+            "4 2 3",
+            "7|  2.2|s|named|3|%*",
+            "123",
+            "321",
+            "1 2",
+            "2 3 nil",
+            "1,1,2,3",
+            "2",
+            "a1",
+            // Errors are still errors, with the functions' own messages.
+            out[20],
+            out[21],
+        ]
+    );
+    assert!(
+        out[20].starts_with("false ") && out[20].contains("malformed pattern"),
+        "{}",
+        out[20]
+    );
+    assert!(
+        out[21].starts_with("false ") && out[21].contains("invalid argument #2 to 'sort'"),
+        "{}",
+        out[21]
+    );
+    assert!(
+        out[22].starts_with("false ") && out[22].contains("invalid argument #1 to 'find'"),
+        "{}",
+        out[22]
+    );
+    eprintln!("ERRS {:?}", &out[20..]);
+    assert_eq!(out.len(), 23);
+}
+
+#[test]
+fn a_theme_listed_but_not_chosen_cant_hold_up_settings() {
+    // Settings (and About) run every installed theme's file to list it:
+    // a theme only installed, never chosen, ran this at each opening.
+    use gmnb_theme::theme::{self, Source};
+    let dir = std::env::temp_dir().join(format!("gmnb-engine-{}-search", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("theme.luau"),
+        "local s = string.rep('a', 400000)
+         string.find(s, string.rep('a', 200000) .. 'b', 1, true)
+         return { api = 1, name = 'Search' }",
+    )
+    .unwrap();
+    let t = Instant::now();
+    let listed = theme::list(&[Source::folder("search", &dir)], &Limits::default());
+    let _ = std::fs::remove_dir_all(&dir);
+    let error = listed[0].meta.as_ref().unwrap_err();
+    assert!(
+        error.contains("string.find"),
+        "{error} after {:?}",
+        t.elapsed()
+    );
+}

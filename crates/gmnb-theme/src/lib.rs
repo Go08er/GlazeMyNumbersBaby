@@ -19,7 +19,11 @@
 //!    (they swap a function's globals, and turn off Luau's fast paths), and
 //!    `newproxy` (userdata, which no theme needs and the host can't convert).
 //! 3. `print` writes to a capped log the host reads ([`Engine::take_log`]),
-//!    not to stdout.
+//!    not to stdout. The library functions whose own loops the interrupt
+//!    can't see into are bounded: the searches and `table.move` refuse
+//!    work past a cap, and those that call a function they are handed
+//!    (`table.sort`, `table.find`'s `__eq`, `foreach`, `format`'s `%*`)
+//!    call it from Luau (docs/theming.md, "The sandbox, exactly").
 //! 4. The API layer registers its globals ([`Engine::with_globals`]).
 //! 5. Every table then reachable from the globals is frozen (read-only),
 //!    with its metatable, and `Lua::sandbox(true)` freezes the globals

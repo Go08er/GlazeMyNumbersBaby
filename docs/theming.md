@@ -1478,6 +1478,7 @@ sounds.
 | Time: `style` | 50 ms |
 | Time: one `draw` call; all `place` calls of one keypad frame | 8 ms; 2 ms |
 | Time: one `preview`, `visible` or action | 10 ms |
+| One library call's own work, which the time limit can't stop midway: a plain search (`string.find` with `plain` or a pattern of no magic characters, `string.split`); a pattern search (`find`, `match`, `gmatch`, `gsub`); `table.move` | 2^30 bytes (string × pattern); 2^26 (string bytes × the pattern's longest `[set]`); 2^20 elements. Past them the call is an error. |
 | Draw calls per `draw` | 4096 |
 | Open pushes / saves at once | 32 each |
 | Path segments per frame | 16 384 |
@@ -1963,6 +1964,18 @@ create the machine with a memory limit of 8 MiB; remove `require` and
 that fails once the call's deadline has passed, and keep the deadline in
 force until the call returns to Rust (a `pcall` in the theme can catch
 the interrupt's error once; it must not buy more time).
+
+Luau checks the interrupt only in its own instructions and the pattern
+matcher's steps, never inside a library function's loop. So, before the
+libraries are frozen: the searches and `table.move` refuse work past the
+caps above; and the library functions that call a function they are
+handed (`table.sort`'s comparator or `__lt`, `table.find`'s `__eq`,
+`table.foreach`, `table.foreachi`, `string.format`'s `%*` and
+`__tostring`) call it from Luau, so that one library function can't call
+another once per element with no check between (`print` checks the
+deadline itself between its arguments). An error a library function
+raises inside one of these names no line of its own (the traceback has
+the theme's).
 
 ### Tests the engine must have
 
