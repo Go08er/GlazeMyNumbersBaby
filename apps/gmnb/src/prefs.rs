@@ -296,11 +296,13 @@ impl ThemeSettings {
             // subscription for them all (one a grid drew every grid's
             // tiles again, for each grid).
             let weak = Rc::downgrade(&this);
-            this.ctx.hub.subscribe_style(&this.options_box, move |_, _| {
-                if let Some(t) = weak.upgrade() {
-                    t.draw_tiles();
-                }
-            });
+            this.ctx
+                .hub
+                .subscribe_style(&this.options_box, move |_, _| {
+                    if let Some(t) = weak.upgrade() {
+                        t.draw_tiles();
+                    }
+                });
         }
         {
             let weak = Rc::downgrade(&this);
@@ -1266,9 +1268,8 @@ mod tests {
     #[test]
     fn every_built_in_credit_is_in_every_package() {
         use gmnb_theme::theme::{BUILT_IN, Source, Theme};
-        let flatpak = include_str!(
-            "../../../packaging/flatpak/io.github.Go08er.GlazeMyNumbersBaby.json"
-        );
+        let flatpak =
+            include_str!("../../../packaging/flatpak/io.github.Go08er.GlazeMyNumbersBaby.json");
         let arch = include_str!("../../../packaging/arch/PKGBUILD");
         let fedora = include_str!("../../../packaging/fedora/gmnb.spec");
         let debian = include_str!("../../../packaging/debian/copyright");

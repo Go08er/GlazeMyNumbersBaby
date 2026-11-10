@@ -146,7 +146,10 @@ return { api = 1, name = "Broken", style = function(ctx) error("no style", 0) en
     let (a, b) = (std::fs::read(&started), std::fs::read(&switched));
     let _ = std::fs::remove_dir_all(&shots);
     let (a, b) = (a.expect("a picture"), b.expect("a picture"));
-    assert!(a == b, "chosen after Glazed, the broken theme isn't the base look");
+    assert!(
+        a == b,
+        "chosen after Glazed, the broken theme isn't the base look"
+    );
 }
 
 /// A theme that doesn't load when GMNB starts: "the base look, and a
@@ -216,7 +219,10 @@ return { api = 1, name = "Tiles", options = options }"#;
         &[("GMNB_PREFS", "1"), ("GMNB_THEME_STATS", "1")],
         6_000,
     );
-    assert!(err.contains("Settings built in"), "Settings never opened: {err}");
+    assert!(
+        err.contains("Settings built in"),
+        "Settings never opened: {err}"
+    );
     let tiles = err.lines().filter(|l| l.contains(": tile ")).count();
     // 384 tiles; twice that if `ctx` changed meanwhile.
     assert!(
