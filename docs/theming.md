@@ -150,7 +150,7 @@ mytheme/
   `~/.var/app/io.github.Go08er.GlazeMyNumbersBaby/data/gmnb/themes/<id>/`.
   No extra permission is needed. Settings → Theme → *Open themes folder*
   opens it either way.
-- Built-in themes (`aurora`, `mono`, `glazed`) are compiled into the app from
+- Built-in themes (`aurora`, `mono`, `glazed`, `swirls`) are compiled into the app from
   `apps/gmnb/themes/`. A folder of yours with the same id replaces the
   built-in one; Settings marks it "your copy".
 - `theme.luau` is Luau source text, at most 512 KiB. Compiled bytecode is
@@ -1341,7 +1341,9 @@ Common fields: `id` (letters, digits, `_`; unique in the theme), `label`,
 `group` sit under that heading, in the order given), `default`.
 
 - **`visible(options, ctx)`** returns whether the option is shown now. It
-  is asked again after every change.
+  is asked again after every change. Only `false` hides the option: if
+  the function fails, runs out of its 10 ms or returns anything else, the
+  option is shown.
 - **`actions`** are small buttons at the end of an option's row. An
   action's `run(options, ctx)` returns the options to change:
 
@@ -1486,8 +1488,9 @@ sounds.
 | Images: file; decoded size; count; total decoded | 4 MiB; 2048×2048; 16; 32 MiB |
 | Noise: size; count | 512×512; 8 |
 | Fonts: file; count; total | 16 MiB; 8; 32 MiB |
-| Any string the theme returns or passes to the app | 4 KiB (longer: refused) |
-| A `credits` text file | 64 KiB |
+| Any string the theme returns or passes to the app | 4 KiB (longer: refused); a line of `print` or `gmnb.warn` is cut short at 16 KiB instead, and the log keeps no more than its last 200 lines and 16 KiB |
+| A `credits` text file; entries | 64 KiB; 8 |
+| Options: per theme; actions on one; family names in one font | 24; 4; 8 |
 | Events kept per layer; longest kept | 32; 5 s |
 | Images: formats | PNG, JPEG, WebP, GIF |
 | Animations: file; frame size; frames; count | 8 MiB; 1024×1024; 2048; 4 |

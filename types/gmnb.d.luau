@@ -524,6 +524,8 @@ export type GraphStyle = {
 		transition: Transition?,
 	}?,
 	add: Control?,
+	-- The "Variables" heading.
+	variables: Text?,
 	variable: Text?,
 	analysis: { title: Text?, card: Surface?, card_title: Text?, value: Text?, text: Text?, note: Text? }?,
 	toolbar: Surface?,
@@ -626,7 +628,8 @@ export type Style = {
 	slider: SliderStyle?,
 	switch: SwitchStyle?,
 	scrollbar: { width: number?, color: Color?, radius: number?, inset: number? }?,
-	card: Surface?,
+	-- `heading`: the headings over Settings' and About's cards.
+	card: (Surface & { heading: Text? })?,
 	-- Flyouts: the keys' own popovers, the calendar, the graph's options.
 	popover: Surface?,
 	-- Menus and dropdown lists.
@@ -1158,7 +1161,7 @@ export type Option = {
 	step: number?,
 	-- slider: how the value is shown.
 	format: ("number" | "percent")?,
-	-- Shown only when this returns true.
+	-- Hidden when this returns false; shown otherwise (also if it fails).
 	visible: ((options: { [string]: OptionValue }, ctx: Ctx) -> boolean)?,
 	-- Buttons beside the option.
 	actions: { OptionAction }?,

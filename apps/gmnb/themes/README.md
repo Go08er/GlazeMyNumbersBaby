@@ -86,26 +86,21 @@ engine's tests.
 3. For autocomplete, point luau-lsp at `types/gmnb.d.luau` (the file's
    first lines say how).
 
-## What is drawn so far
+## What a theme can do
 
-The style pipeline is in: a theme's `style` restyles the window, the keys,
-segmented controls, the History/Memory switch and the readout, and its
-options show in Settings, a choice with a `preview` as tiles the theme
-draws. The other elements are accepted (a theme returning them is checked)
-but still drawn the old way from the theme's tokens.
+Everything in [the contract](../../../docs/theming.md) is in the app: a
+theme's `style` restyles every element the reference lists (the window,
+keys, readout, panels, pages, the toolkit's own dialogs and menus), its
+options show in Settings (a choice with a `preview` as tiles the theme
+draws), and its `background`, `keypad`, `display` and `overlay` layers
+draw from the theme's Luau on the app's frame clock and events.
 
-The draw layers are in: `background`, `keypad`, `display` and `overlay`
-run from the theme's Luau, on the app's frame clock and events. Aurora's
-drift, grain, pulses, ripples, pointer light, key cascade and every
-effect of its readout are in its `theme.luau`. Pictures from files
-(`gmnb.image`) are sized and counted but not drawn yet: decoding them
-comes with the media chapter's code.
+Pictures from files (`gmnb.image`, `gmnb.animation`) and pictures a theme
+computes (`gmnb.pixels`, `draw:field` and `gmnb.ramp`) are drawn: Glazed
+is made of the first, Swirls of the second.
 
-Pictures a theme computes are in too (`gmnb.pixels`, `draw:field` and
-`gmnb.ramp`): Swirls is made of one.
-
-Sounds are declared and checked (`sounds`, `sound`, `gmnb.synth`), and the
-app plays them (`crates/gmnb-sound`; Settings → Sound turns them off and
-sets their volume). They can also be rendered to WAV files, measured and
-drawn without the app, decided as the app decides them:
+Sounds (`sounds`, `sound`, `gmnb.synth`, `gmnb.sound`) are played by the
+app (`crates/gmnb-sound`; Settings → Sound turns them off and sets their
+volume). They can also be rendered to WAV files, measured and drawn
+without the app, decided as the app decides them:
 [Designing sounds](../../../docs/theming-media.md#designing-sounds-a-few-rules-that-work).

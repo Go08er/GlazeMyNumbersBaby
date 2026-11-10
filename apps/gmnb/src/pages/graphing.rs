@@ -417,11 +417,18 @@ impl GraphingPage {
 
         {
             let weak = Rc::downgrade(&page);
-            let (split, side_stack, view_stack) =
-                (split.clone(), side_stack.clone(), view_stack.clone());
+            let (split, side_stack, view_stack, pad) = (
+                split.clone(),
+                side_stack.clone(),
+                view_stack.clone(),
+                pad.clone(),
+            );
             ctx.hub.subscribe_style(&page.graph_view, move |gv, style| {
                 let Some(p) = weak.upgrade() else { return };
                 gv.set_style(style);
+                // The keypad's room, less the line above it.
+                let room = style.number("layout.graph.pad_height") - mg::PAD_TRIM;
+                pad.set_size_request(-1, room.round().max(0.0) as i32);
                 for r in p.rows.borrow().iter() {
                     p.paint_swatch(r);
                     gv.set_color(r.id, series(style, r.color.get()));
