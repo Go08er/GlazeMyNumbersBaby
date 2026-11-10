@@ -51,15 +51,16 @@ pub fn answers(event: &Event) -> bool {
 
 /// The name an event goes by in the `sounds` table (step 3). `None`: the
 /// table plays nothing for it (an `option`; a result or an error on
-/// another page than the Calculator, or one that no `=` or function key
+/// another page than the Calculator; a result that no `=` or function key
 /// brought about: [`concludes`]), though the theme's `sound` function is
-/// still asked.
+/// still asked. An error on the Calculator page is always news, whatever
+/// brought it about (`1 ÷ 0 +` too).
 pub fn event_name(event: &Event) -> Option<EventName> {
-    let ended = event.page == Page::Calculator && concludes(event.cause);
+    let calculator = event.page == Page::Calculator;
     match event.kind {
         EventKind::Mode => Some(EventName::Mode),
-        EventKind::Result if ended => Some(EventName::Result),
-        EventKind::Error if ended => Some(EventName::Error),
+        EventKind::Result if calculator && concludes(event.cause) => Some(EventName::Result),
+        EventKind::Error if calculator => Some(EventName::Error),
         EventKind::Press => Some(match (event.action, event.key) {
             (Some(Action::Clear), _) => EventName::Clear,
             (Some(Action::Backspace), _) => EventName::Backspace,
@@ -75,7 +76,7 @@ pub fn event_name(event: &Event) -> Option<EventName> {
     }
 }
 
-/// Whether a result or an error brought about by `cause` is the end of a
+/// Whether a result brought about by `cause` is the end of a
 /// calculation, which the `sounds` table plays: `=` (or Enter), or a
 /// function key. Not the running total an operator shows (`1 + 2 +`
 /// chimes once, at `=`), nor a value a digit, a memory button or a paste

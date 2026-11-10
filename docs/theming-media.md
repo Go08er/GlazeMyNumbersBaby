@@ -402,7 +402,7 @@ that has one; `false` stops the search and plays nothing.
 | `memory` | MC, MR, M+, M−, MS, and the buttons on a stored value | `button`, `press` |
 | `button` | F-E, the converter's swap, a date picked, other buttons | `press` |
 | `result` | A calculation ended in a value, on the Calculator page: after `=` (or Enter) or a function key, not the running total an operator shows (its `cause` is `"equals"` or `"function"`) | |
-| `error` | It ended in an error, on the Calculator page (the same two causes) | |
+| `error` | It ended in an error, on the Calculator page, whatever brought it about (`1 ÷ 0 +` too) | |
 | `mode` | The page or the calculator's mode was changed | |
 
 A key typed on the keyboard sounds the same as the key clicked.
@@ -602,9 +602,9 @@ themes are reviewed for it.
   whenever a calculation gives a new value: after `=`, and also after `+`
   once a number is in (the sum so far) and after `sin` or `√`. Each says
   what brought it about, its `cause`: `"equals"`, `"operator"`,
-  `"function"`, and so on. The table plays `sounds.result` (and
-  `sounds.error`) for `"equals"` and `"function"` only, so a chime there
-  rings once in `1 + 2 + 3 =`. `sound` hears every one, and can answer
+  `"function"`, and so on. The table plays `sounds.result` for
+  `"equals"` and `"function"` only, so a chime there rings once in
+  `1 + 2 + 3 =`; `sounds.error` it plays whatever the cause. `sound` hears every one, and can answer
   each in its own way: by `event.cause`, or by the key pressed last (the
   press comes first, then what it came to), as Aurora does.
 - **Panned is louder.** A sound in the middle plays at its `gain` in both
@@ -1357,8 +1357,9 @@ it):
    (`SoundEngine::extend`); a failure is a note, and the one that switches
    it off a toast, once.
 3. Find the event's name: `mode` is itself; `error` and `result` are
-   themselves on the Calculator page when their `cause` is `"equals"` or
-   `"function"`, and have none otherwise; `option` has none. A press
+   themselves on the Calculator page, `result` only when its `cause` is
+   `"equals"` or `"function"`, and they have none otherwise; `option` has
+   none. A press
    with `action` `"clear"`, `"backspace"` or `"memory"` has that name; a
    press on a key is `digit`, `operator`, `func`, `equals` or `toggle` by
    `key.kind` (`"other"` is `func`); any other press is `button`.
@@ -1640,10 +1641,11 @@ Decided here, and worth a second look by the owner:
 8. **The engine connects to the sound server when a theme with sounds is
    loaded**, not at its first sound, so that Settings can say early that no
    sound system was found.
-9. **The `sounds` table plays `result` and `error` only after `=` or a
-   function key** (`cause` `"equals"` or `"function"`): not for the
-   running total an operator shows, a value a digit or a memory button
-   puts there, nor a paste. `sound` hears them all.
+9. **The `sounds` table plays `result` only after `=` or a function
+   key** (`cause` `"equals"` or `"function"`): not for the running total
+   an operator shows, a value a digit or a memory button puts there, nor a
+   paste. `error` it plays whatever brought it about: an error is always
+   news. `sound` hears them all.
 10. **A result or an error is the doing of the press told less than
     250 ms before it** (its `cause` and `via`). Both are told in one
     handler; the window is generous, and a result long after a press (a

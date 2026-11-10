@@ -837,8 +837,8 @@ export type Event = {
 	-- result / error: what brought it about, the press just before it.
 	-- "equals" is = (or Enter), "operator" the running total + − × ÷ show,
 	-- "function" any other function key. A theme's `sounds` table plays
-	-- `result` and `error` for "equals" and "function" only; `sound(event,
-	-- ctx)` sees every one. Absent when no press did (a paste).
+	-- `result` for "equals" and "function" only, `error` for every cause;
+	-- `sound(event, ctx)` sees every one. Absent when no press did (a paste).
 	cause: ("equals" | "operator" | "function" | "digit" | "clear" | "backspace" | "memory" | "button")?,
 	-- press: what the control does, when it is one of these.
 	action: ("clear" | "backspace" | "memory")?,

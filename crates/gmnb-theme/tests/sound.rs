@@ -1016,9 +1016,10 @@ fn an_event_gets_its_name() {
         ..button.clone()
     };
     assert_eq!(event_name(&memory), Some(EventName::Memory));
-    // Results and errors are the Calculator page's, and only those that
-    // end a calculation: brought about by = or a function key, not the
-    // running total an operator shows. A mode is a mode.
+    // Results and errors are the Calculator page's. Results only those
+    // that end a calculation: brought about by = or a function key, not
+    // the running total an operator shows. An error whatever brought it
+    // about. A mode is a mode.
     use gmnb_theme::events::Cause;
     let ended = |kind, page, cause| Event {
         cause,
@@ -1037,10 +1038,9 @@ fn an_event_gets_its_name() {
             event_name(&ended(EventKind::Result, Page::Calculator, cause)),
             name
         );
-        let error = name.map(|_| EventName::Error);
         assert_eq!(
             event_name(&ended(EventKind::Error, Page::Calculator, cause)),
-            error
+            Some(EventName::Error)
         );
     }
     let equals = Some(Cause::Equals);
