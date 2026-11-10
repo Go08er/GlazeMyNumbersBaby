@@ -345,3 +345,216 @@ fn damaged_files_never_panic() {
     // The test is of the files that are still read, too.
     assert!(read > 100, "only {read} damaged files were read");
 }
+
+// ---- Vorbis headers that ask for more memory than there is -------------------------
+
+/// Ogg's CRC-32 (polynomial 0x04c11db7, not reflected, from 0).
+fn ogg_crc(data: &[u8]) -> u32 {
+    let mut crc = 0u32;
+    for &b in data {
+        crc ^= u32::from(b) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ 0x04c1_1db7
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
+}
+
+/// An Ogg file of one stream, one packet to a page.
+fn ogg(packets: &[Vec<u8>]) -> Vec<u8> {
+    let mut file = Vec::new();
+    for (seq, packet) in packets.iter().enumerate() {
+        let mut lacing = vec![255u8; packet.len() / 255];
+        lacing.push((packet.len() % 255) as u8);
+        let mut page = b"OggS".to_vec();
+        page.push(0);
+        page.push(if seq == 0 { 2 } else { 0 });
+        page.extend_from_slice(&0u64.to_le_bytes());
+        page.extend_from_slice(&0x424e_4d47u32.to_le_bytes());
+        page.extend_from_slice(&(seq as u32).to_le_bytes());
+        page.extend_from_slice(&[0; 4]);
+        page.push(lacing.len() as u8);
+        page.extend_from_slice(&lacing);
+        page.extend_from_slice(packet);
+        let crc = ogg_crc(&page);
+        page[22..26].copy_from_slice(&crc.to_le_bytes());
+        file.extend_from_slice(&page);
+    }
+    file
+}
+
+/// A Vorbis identification header: mono, 44.1 kHz, blocks of 256 and
+/// 2048.
+fn vorbis_ident() -> Vec<u8> {
+    let mut p = b"\x01vorbis".to_vec();
+    p.extend_from_slice(&0u32.to_le_bytes());
+    p.push(1);
+    p.extend_from_slice(&44_100u32.to_le_bytes());
+    p.extend_from_slice(&[0; 12]);
+    p.push(0xb8);
+    p.push(1);
+    p
+}
+
+/// A Vorbis comment header: a vendor string of `vendor` bytes and
+/// `count` comments, none of which the packet holds.
+fn vorbis_comments(vendor: u32, count: u32) -> Vec<u8> {
+    let mut p = b"\x03vorbis".to_vec();
+    p.extend_from_slice(&vendor.to_le_bytes());
+    if vendor == 0 {
+        p.extend_from_slice(&count.to_le_bytes());
+        p.push(1);
+    }
+    p
+}
+
+/// Vorbis packs its setup header in bits, least significant first.
+#[derive(Default)]
+struct Bits {
+    bytes: Vec<u8>,
+    at: usize,
+}
+
+impl Bits {
+    fn put(&mut self, value: u64, bits: u32) {
+        for i in 0..bits {
+            if self.at.is_multiple_of(8) {
+                self.bytes.push(0);
+            }
+            if (value >> i) & 1 == 1 {
+                *self.bytes.last_mut().unwrap() |= 1 << (self.at % 8);
+            }
+            self.at += 1;
+        }
+    }
+}
+
+/// A Vorbis setup header of `books` codebooks, each of `entries` entries
+/// of `dimensions` scalars, all of them codewords of length `length`;
+/// with `lookup`, a vector table of the first kind holding one value. A
+/// few bytes each, describing `entries × dimensions` numbers.
+fn vorbis_setup(books: u8, entries: u32, dimensions: u16, length: u8, lookup: bool) -> Vec<u8> {
+    let mut b = Bits::default();
+    for byte in b"\x05vorbis" {
+        b.put(u64::from(*byte), 8);
+    }
+    b.put(u64::from(books - 1), 8);
+    for _ in 0..books {
+        b.put(0x56_4342, 24);
+        b.put(u64::from(dimensions), 16);
+        b.put(u64::from(entries), 24);
+        b.put(1, 1); // ordered: runs of one length
+        b.put(u64::from(length - 1), 5);
+        b.put(u64::from(entries), 32 - entries.leading_zeros()); // one run: every entry
+        if lookup {
+            b.put(1, 4); // the first kind
+            b.put(0, 32);
+            b.put(0, 32);
+            b.put(0, 4); // values of 1 bit
+            b.put(0, 1);
+            b.put(0, 1); // the one value
+        } else {
+            b.put(0, 4);
+        }
+    }
+    b.put(0, 32);
+    b.bytes
+}
+
+/// Hostile Vorbis files: each describes far more than it holds.
+fn greedy_vorbis() -> Vec<(&'static str, Vec<u8>)> {
+    vec![
+        (
+            "four billion comments",
+            ogg(&[vorbis_ident(), vorbis_comments(0, u32::MAX)]),
+        ),
+        (
+            "a vendor string of 4 GiB",
+            ogg(&[vorbis_ident(), vorbis_comments(u32::MAX, 0)]),
+        ),
+        (
+            "a codebook of 2^24 entries of 65535 dimensions",
+            ogg(&[
+                vorbis_ident(),
+                vorbis_comments(0, 0),
+                vorbis_setup(1, 0xff_ffff, 0xffff, 1, true),
+            ]),
+        ),
+        (
+            "255 codebooks of 2^23 entries each",
+            ogg(&[
+                vorbis_ident(),
+                vorbis_comments(0, 0),
+                vorbis_setup(255, 1 << 23, 1, 23, false),
+            ]),
+        ),
+        (
+            // A file may chain streams: lewton reads the next one's
+            // headers as it decodes.
+            "a good file and then a greedy one, chained",
+            [
+                TONE_MONO,
+                &ogg(&[vorbis_ident(), vorbis_comments(0, u32::MAX)]),
+            ]
+            .concat(),
+        ),
+    ]
+}
+
+/// Run by [`greedy_vorbis_headers_are_refused_not_fatal`], in a process
+/// of its own (a failed allocation aborts the process, which no test can
+/// catch): decodes each hostile file.
+#[test]
+#[ignore = "run by greedy_vorbis_headers_are_refused_not_fatal, in a process of its own"]
+fn greedy_vorbis_child() {
+    // "all", or which one.
+    let Ok(which) = std::env::var("GMNB_SOUND_GREEDY_CHILD") else {
+        return;
+    };
+    let files = greedy_vorbis().into_iter().enumerate();
+    for (_, (what, file)) in files.filter(|(i, _)| which == "all" || which == i.to_string()) {
+        eprintln!("decoding: {what}");
+        let decoded = decode(&file, None);
+        eprintln!("refused: {:?}", decoded.as_ref().err());
+        assert!(decoded.is_err(), "{what}");
+        // As the sound thread meets it: from the theme's list.
+        let made = prepare_all(&[SoundSource::File {
+            name: "greedy.ogg".into(),
+            data: FileData::Bytes(file.into()),
+            gain: Some(0.5),
+        }]);
+        assert!(made[0].is_err(), "{what}");
+    }
+    eprintln!("decoded: all");
+}
+
+/// A sound file in a theme's folder is the theme author's, and the
+/// decoder reads its headers: one whose headers ask for more memory than
+/// the machine has is refused like any damaged file, and does not take
+/// the app down with it. (In a child with 4 GiB of address space where
+/// the shell can set that, so that the outcome is the same whatever the
+/// machine's overcommit policy.)
+#[test]
+fn greedy_vorbis_headers_are_refused_not_fatal() {
+    let exe = std::env::current_exe().unwrap();
+    let out = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(concat!(
+            "ulimit -v 4194304; exec \"$0\" --exact greedy_vorbis_child",
+            " --ignored --nocapture --test-threads=1"
+        ))
+        .arg(&exe)
+        .env("GMNB_SOUND_GREEDY_CHILD", "all")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && text.contains("decoded: all"),
+        "the decoder took the process down ({}):\n{text}",
+        out.status
+    );
+}

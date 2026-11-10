@@ -850,26 +850,131 @@ fn a_server_that_never_answers_does_not_hold_the_engine() {
     );
 
     // Unloaded while the sound thread is waiting on the mute server:
-    // unloading does not wait for it (the thread is still there)...
+    // unloading does not wait for it...
     let mut engine2 = SoundEngine::new(patient(&lines));
-    let made = Instant::now();
     engine2.load(&theme(vec![tone(0.02)]));
     let tid2 = thread_of(&engine2);
+    let unloading = Instant::now();
     engine2.unload();
-    if made.elapsed() < Duration::from_millis(500) {
-        assert!(thread_exists(tid2), "unload waited for the sound thread");
-    }
-    // ...and dropping does: it joins the thread, which gives the server
-    // its second first.
-    drop(engine2);
     assert!(
-        made.elapsed() >= Duration::from_millis(950),
-        "the engine was dropped without its thread being joined"
+        unloading.elapsed() < Duration::from_millis(500),
+        "unload waited for the sound thread"
     );
+    // ...and dropping joins the thread, which was hung up on rather than
+    // left to give the server its second.
+    let dropping = Instant::now();
+    drop(engine2);
     assert!(thread_gone(tid2));
+    assert!(
+        dropping.elapsed() < Duration::from_millis(900),
+        "the engine waited {:?} for the server",
+        dropping.elapsed()
+    );
     drop(engine);
     assert!(thread_gone(tid));
     stop.send(()).unwrap();
     holding.join().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A server that greets the engine a byte at a time, each byte well
+/// inside the limit on one wait (the greeting's blocking reads are timed
+/// one by one): it would hold the sound thread for seconds.
+fn trickle(listener: std::os::unix::net::UnixListener, gap: Duration, conns: usize) {
+    use pulseaudio::protocol::{self, Command};
+    use std::io::{Read, Write};
+    const VERSION: u16 = 35;
+    let mut serving = Vec::new();
+    for conn in listener.incoming().take(conns) {
+        let Ok(mut conn) = conn else { break };
+        serving.push(std::thread::spawn(move || {
+            let mut payload = Vec::new();
+            while let Ok(desc) = protocol::read_descriptor(&mut conn) {
+                payload.resize((desc.length as usize).min(1 << 16), 0);
+                if conn.read_exact(&mut payload).is_err() {
+                    return;
+                }
+                let read = Command::read_tag_prefixed(&mut std::io::Cursor::new(&payload), VERSION);
+                let mut answer = Vec::new();
+                match read {
+                    Ok((seq, Command::Auth(_))) => {
+                        let r = protocol::AuthReply {
+                            version: VERSION,
+                            ..Default::default()
+                        };
+                        protocol::write_reply_message(&mut answer, seq, &r, VERSION).unwrap();
+                    }
+                    Ok((seq, Command::SetClientName(_))) => {
+                        let r = protocol::SetClientNameReply { client_id: 1 };
+                        protocol::write_reply_message(&mut answer, seq, &r, VERSION).unwrap();
+                    }
+                    _ => return,
+                }
+                for byte in answer {
+                    std::thread::sleep(gap);
+                    if conn.write_all(&[byte]).is_err() {
+                        return;
+                    }
+                }
+            }
+        }));
+    }
+    for s in serving {
+        let _ = s.join();
+    }
+}
+
+#[test]
+fn a_server_that_greets_a_byte_at_a_time_does_not_hold_the_engine() {
+    let dir = scratch("trickle");
+    let socket = dir.join("native");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    // A byte every 100 ms: the greeting would take some 7 s.
+    let serving = std::thread::spawn(move || trickle(listener, Duration::from_millis(100), 2));
+    let lines = Lines::default();
+    let patient = |lines: &Lines| Settings {
+        server_limit: Duration::from_secs(1),
+        ..server(socket.clone(), lines)
+    };
+
+    // Unloaded while it is being greeted: the thread is back at once.
+    let mut engine = SoundEngine::new(patient(&lines));
+    engine.load(&theme(vec![tone(0.02)]));
+    let tid = thread_of(&engine);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(engine.status(), Status::Starting);
+    let unloaded = Instant::now();
+    engine.unload();
+    assert!(
+        thread_gone(tid),
+        "the greeting still holds the sound thread"
+    );
+    assert!(
+        unloaded.elapsed() < Duration::from_secs(1),
+        "the greeting held the sound thread {:?} after the theme went",
+        unloaded.elapsed()
+    );
+
+    // Dropped while it is being greeted: no wait, no thread left behind.
+    let mut engine2 = SoundEngine::new(patient(&lines));
+    engine2.load(&theme(vec![tone(0.02)]));
+    let tid2 = thread_of(&engine2);
+    std::thread::sleep(Duration::from_millis(500));
+    let dropped = Instant::now();
+    drop(engine2);
+    assert!(
+        dropped.elapsed() < Duration::from_secs(1),
+        "dropping the engine took {:?}",
+        dropped.elapsed()
+    );
+    assert!(thread_gone(tid2));
+    // Hung up on to stop, it said nothing: that is not "no sound system".
+    assert!(
+        lines.lock().unwrap().is_empty(),
+        "{:?}",
+        lines.lock().unwrap()
+    );
+    drop(engine);
+    serving.join().unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
 }

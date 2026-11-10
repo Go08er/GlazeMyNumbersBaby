@@ -14,6 +14,7 @@
 
 use std::ffi::CString;
 use std::future::Future;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::pin::{Pin, pin};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -350,24 +351,72 @@ pub struct Output {
     limit: Duration,
 }
 
+/// How the sound thread is got back from a connection being opened.
+///
+/// The greeting is read with blocking reads, each within the limit: a
+/// server that answers a byte at a time can hold it many times longer.
+/// So while a connection is being opened its socket is kept here too, and
+/// [`Hangup::hang_up`] shuts it down: the opening fails at once.
+#[derive(Default)]
+pub struct Hangup {
+    socket: Mutex<Option<UnixStream>>,
+    asked: AtomicBool,
+}
+
+impl Hangup {
+    /// Hangs up on the connection being opened, and on any opened after.
+    pub fn hang_up(&self) {
+        self.asked.store(true, Ordering::SeqCst);
+        if let Some(socket) = lock(&self.socket).as_ref() {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
+    /// Whether [`Hangup::hang_up`] was called.
+    pub fn asked(&self) -> bool {
+        self.asked.load(Ordering::SeqCst)
+    }
+
+    /// Keeps `socket` until the returned guard goes.
+    fn watch(&self, socket: &UnixStream) -> Watching<'_> {
+        *lock(&self.socket) = socket.try_clone().ok();
+        if self.asked() {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+        Watching(self)
+    }
+}
+
+/// While a connection is being opened; it is let go of with this, however
+/// the opening ends.
+struct Watching<'a>(&'a Hangup);
+
+impl Drop for Watching<'_> {
+    fn drop(&mut self) {
+        lock(&self.0.socket).take();
+    }
+}
+
 impl Output {
     /// Connects to the server at `socket` and creates the stream, corked.
-    /// `limit` bounds every wait on the server, this one included.
+    /// `limit` bounds every wait on the server, this one included; and
+    /// `hangup` ends it early.
     pub fn open(
         socket: &Path,
         cookie: &[u8],
         identity: &Identity,
         shared: &Arc<Shared>,
         limit: Duration,
+        hangup: &Hangup,
     ) -> Result<Output, String> {
         ATTEMPTS.fetch_add(1, Ordering::Relaxed);
         let text = |s: &str| CString::new(s.replace('\0', "")).unwrap_or_default();
-        let conn = std::os::unix::net::UnixStream::connect(socket)
-            .map_err(|e| format!("{}: {e}", socket.display()))?;
+        let conn = UnixStream::connect(socket).map_err(|e| format!("{}: {e}", socket.display()))?;
         // The greeting is read with blocking reads.
         conn.set_read_timeout(Some(limit))
             .and_then(|()| conn.set_write_timeout(Some(limit)))
             .map_err(|e| format!("{}: {e}", socket.display()))?;
+        let _watching = hangup.watch(&conn);
         let client = Client::new_unix(text(&identity.name), conn, Some(cookie))
             .map_err(|e| format!("{}: {e}", socket.display()))?;
 

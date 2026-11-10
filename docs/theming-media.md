@@ -1525,9 +1525,12 @@ anywhere else):
   ahead of them. A corked stream is asked 0 times a second, and the
   request after each flush stays the same size (3072 bytes here).
 - **Every wait on the server is bounded** (2 s; the greeting's blocking
-  reads by a socket timeout). A server that stops answering leaves sound
-  "unavailable"; dropping the engine joins its thread, and if that takes
-  more than 5 s leaves it behind with a line on stderr.
+  reads by a socket timeout, each read by itself, so a server that
+  answers a byte at a time could stretch the greeting far past it: unload
+  or switching sound off hangs up on a connection still being opened). A
+  server that stops answering leaves sound "unavailable"; dropping the
+  engine joins its thread, and if that takes more than 5 s leaves it
+  behind with a line on stderr.
 - **A play that waited** more than 50 ms past its own delay in the queue
   (the sound thread was rendering) is dropped, not played late.
 - `PULSE_SERVER` of another kind than `unix:` is passed over, and the
