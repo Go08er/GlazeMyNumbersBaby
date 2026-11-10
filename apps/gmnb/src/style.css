@@ -1,17 +1,9 @@
 /* GMNB — the structure stylesheet: selectors and layout, loaded once.
 
-   Every look property of a migrated surface reads a custom property that
-   the theme engine writes from the checked style (crates/gmnb-theme;
-   docs/theming.md, "How style reaches the app"): no colour, size or font
-   is written here for them. Migrated so far: the window (and what goes
-   under text on a see-through one), the header and its buttons, the
-   sidebar, the keys, segmented controls, the calculator's rows and
-   buttons, the History/Memory panel, the programmer's radix list and
-   bits, the focus ring and the scrollbars.
-
-   Rules that still name @wc_* colours or literal sizes belong to surfaces
-   that are not migrated yet; theme.rs derives those colours from the
-   style meanwhile (TRANSITION). */
+   Every look property reads a custom property that the theme engine
+   writes from the checked style (crates/gmnb-theme; docs/theming.md, "How
+   style reaches the app"): no colour, size or font of a surface is written
+   here. */
 
 /* ------------------------------------------------------------- window */
 
@@ -1562,17 +1554,6 @@ window.gmnb.own-segmented .wc-inert toggle-group.wc-panel-tabs>toggle:checked:di
   font-weight: var(--gmnb-panel-tabs-item-checked-font-weight);
 }
 /* end control */
-
-/* -------------------------------------------------------- glass panels */
-
-.wc-glass-panel {
-  border-radius: 20px;
-  background-image: linear-gradient(to bottom, @wc_glass_hi, @wc_glass);
-  box-shadow:
-    inset 0 1px alpha(white, 0.10),
-    inset 0 0 0 1px @wc_glass_border,
-    0 18px 50px -28px @wc_shade;
-}
 
 /* ------------------------------------------------------------ sidebar */
 

@@ -131,7 +131,7 @@ pub fn show(win: &Rc<Window>) {
         opacity.add_suffix(&scale);
         opacity.add_suffix(&shown);
         {
-            let (ctx, win, shown) = (ctx.clone(), win.widget(), shown.clone());
+            let (ctx, shown) = (ctx.clone(), shown.clone());
             let pending = Rc::default();
             scale.connect_value_changed(move |s| {
                 if ctx.layers.covers(s) {
@@ -147,7 +147,7 @@ pub fn show(win: &Rc<Window>) {
                 shown.set_text(&percent(v));
                 s.update_property(&[gtk::accessible::Property::ValueText(&percent(v))]);
                 let alpha = crate::settings::backdrop_alpha(v);
-                apply_backdrop(&win, &ctx.backdrop, alpha);
+                apply_backdrop(&ctx.backdrop, alpha);
                 // One step of a drag: only the properties that change
                 // with the opacity are rewritten (the live provider).
                 ctx.hub.set_opacity(alpha, true);
