@@ -1444,8 +1444,7 @@ fn picking_colours_for_a_long_while_never_fills_the_heap() {
     let mut start = 0;
     for step in 0..6000u32 {
         let icing = format!("#{:06x}", (step * 2749 + 0x123456) & 0xff_ffff);
-        own.options
-            .insert("icing".into(), OptionValue::Text(icing));
+        own.options.insert("icing".into(), OptionValue::Text(icing));
         tick();
         version += 1;
         let f = Frame {
