@@ -395,14 +395,74 @@ local SHORT_KEY = 24
 -- The display case's shelf: how much of the readout's foot it takes.
 local SHELF = 10
 
+-- A see-through window is the shop window. The wall thins with the
+-- window's opacity, and as it goes the glass of the shop's front comes in:
+-- its frame and a shine across it (section 4, which draws them at full
+-- strength, `fade = false`). The awning stays, solid at any opacity: the
+-- header itself is the awning there. The counter (the display case on its
+-- shelf, the keys) was always solid. All of it moves smoothly with the
+-- opacity slider.
+
+local function smooth(t: number): number
+	t = math.clamp(t, 0, 1)
+	return t * t * (3 - 2 * t)
+end
+
+-- How far the header has become the awning: none of it at full opacity,
+-- all of it from 0.95 down. (Only there do the stripes the background
+-- layer paints and the header's own show together.)
+local function awning_shown(opacity: number): number
+	return 1 - smooth((opacity - 0.95) / 0.05)
+end
+
+-- How far the shop's glass has come in: none of it from 0.95 up, all of it
+-- from 0.6 down.
+local function glazing(opacity: number): number
+	return smooth((0.95 - opacity) / 0.35)
+end
+
+-- The awning as the header's own fill, at `shown`: sixteen stripes across
+-- the header, starting as the drawn awning does. (A style knows no width,
+-- so they are sixteenths of it; a gradient holds sixteen colours, so the
+-- stripes are three gradients' runs, each clear outside its own.)
+local AWNING_STRIPES = 16
+local function awning_fill(s: Scheme, shown: number): Fill
+	local n = AWNING_STRIPES
+	local stripe, other = alpha(s.stripe, shown), alpha(s.stripe_other, shown)
+	local clear = alpha(s.stripe_other, 0)
+	local layers: { Paint } = {}
+	for _, run in { { 0, 5 }, { 6, 10 }, { 11, n - 1 } } do
+		local first, last = run[1], run[2]
+		local colors: { Color }, stops: { number } = {}, {}
+		local function stop(c: Rgba, at: number)
+			table.insert(colors, c)
+			table.insert(stops, at)
+		end
+		if first > 0 then
+			stop(clear, 0)
+			stop(clear, first / n)
+		end
+		for i = first, last do
+			local c = if i % 2 == 0 then stripe else other
+			stop(c, i / n)
+			stop(c, (i + 1) / n)
+		end
+		if last < n - 1 then
+			stop(clear, (last + 1) / n)
+			stop(clear, 1)
+		end
+		table.insert(layers, gmnb.linear({ angle = 90, colors = colors, stops = stops }))
+	end
+	return layers
+end
+
 local function style(ctx: Ctx): Style
 	local s = scheme(ctx)
 	local ink, dim, line = s.ink, s.dim, s.line
 	-- On a see-through window the wall thins and the desktop shows between
 	-- the keys. Everything that carries text stands on something solid at
-	-- any opacity, so only the header needs help: the awning is part of
-	-- the wall's picture and thins with it.
-	local see = ctx.opacity < 1
+	-- any opacity, and the header is the awning (above).
+	local awning = awning_shown(ctx.opacity)
 
 	-- Raised things: a line around, a glint under its top, a lip along the
 	-- foot and a hard shadow beneath. Pressed, the lip is gone.
@@ -523,22 +583,28 @@ local function style(ctx: Ctx): Style
 			graph = { margin = { 6, 8, 6, 8 } },
 		},
 
-		window = { background = s.wall, color = ink },
+		-- The wall's own colour. On a see-through window the background
+		-- layer paints the wall at the window's opacity itself, and this
+		-- goes as the header becomes the awning (it is what the header's
+		-- title lies on until then).
+		window = { background = if awning > 0 then alpha(s.wall, 1 - awning) else s.wall, color = ink },
 		-- Whatever holds text straight on the page (the memory row, the
 		-- number bases, a converter's values, a date's fields) is a card
 		-- on the wall.
 		plain = { background = s.card, radius = 6 },
 		header = {
-			background = if see then s.card else gmnb.transparent,
+			-- Clear over the awning the background layer paints; on a
+			-- see-through window, the awning.
+			background = if awning > 0 then awning_fill(s, awning) else gmnb.transparent,
 			height = HEADER,
 			-- (At one and a half the longest page's name, "Weight and mass",
 			-- fits a new window's 360 pixels beside the buttons.)
-			title = { font = jersey(1.5), color = if see then ink else s.awning_ink },
+			title = { font = jersey(1.5), color = s.awning_ink },
 			button = {
 				min_width = 32,
 				min_height = 32,
 				radius = 4,
-				color = if see then ink else s.awning_ink,
+				color = s.awning_ink,
 				icon = { size = 18 },
 				hover = { background = alpha(s.awning_ink, 0.12) },
 				active = { background = alpha(s.awning_ink, 0.22) },
@@ -548,7 +614,7 @@ local function style(ctx: Ctx): Style
 				min_width = 28,
 				min_height = 28,
 				radius = 4,
-				color = if see then ink else s.awning_ink,
+				color = s.awning_ink,
 				icon = { size = 16 },
 				hover = { background = alpha(s.awning_ink, 0.12) },
 				active = { background = alpha(s.awning_ink, 0.22) },
@@ -879,7 +945,10 @@ end
 -- Bottom to top: the tiled wall (a still, repeated), the sprinkles (a GIF
 -- loop that repeats in space as well as in time, drawn side by side), and
 -- the awning: stripes, and a hem of scallops cut out of three masks and
--- filled with the flavour's colours.
+-- filled with the flavour's colours. On a see-through window the wall and
+-- the sprinkles thin with the window (the layer thins them itself), the
+-- shop's glass comes in where the wall was (a frame, a shine), and the
+-- awning stays solid until the header, which is the awning there, covers it.
 
 local wall_light = gmnb.image("images/wall-light.png")
 local wall_dark = gmnb.image("images/wall-dark.png")
@@ -910,9 +979,42 @@ local function awning(draw: Draw, w: number, s: Scheme)
 	cut_out(draw, hem_line, 0, AWNING, w, HEM, s.line)
 end
 
+-- The shop's glass, as far as it has come in (`glass`, 0 to 1), over the
+-- whole window: a frame round it in the line's colour, and two streaks of
+-- shine across it, stepped as everything here is.
+local SHINE_STEP = 2 * PX
+local function glazed_front(draw: Draw, w: number, h: number, s: Scheme, glass: number)
+	local shine = alpha(white, glass * (if s.dark then 0.22 else 0.4))
+	for _, streak in { { 0.3, 6 }, { 0.42, 2 } } do
+		-- A band rising to the right, `streak[2]` art pixels across.
+		local from, wide = streak[1] * (w + h), streak[2] * SHINE_STEP
+		for y = HEADER, h, SHINE_STEP do
+			local x = snap(from - y)
+			if x < w and x + wide > 0 then
+				draw:rect(x, y, wide, SHINE_STEP, shine)
+			end
+		end
+	end
+	-- The frame, in the margin round the counter: its sides, its sill, and
+	-- the lintel under the awning.
+	local frame_line = alpha(s.line, glass)
+	local thick = 3 * PX
+	draw:rect(0, HEADER, thick, h - HEADER, frame_line)
+	draw:rect(w - thick, HEADER, thick, h - HEADER, frame_line)
+	draw:rect(0, h - thick, w, thick, frame_line)
+	draw:rect(0, HEADER, w, PX, frame_line)
+end
+
 local function background(draw: Draw, frame: Frame): Again
 	local s = scheme(frame.ctx)
 	local w, h = frame.width, frame.height
+	local opacity = frame.ctx.opacity
+	-- The wall and what falls down it thin with the window (this layer is
+	-- drawn at full strength: it says `fade = false`).
+	local thin = opacity < 1
+	if thin then
+		draw:push_opacity(opacity)
+	end
 	draw:tile(if s.dark then wall_dark else wall_light, 0, 0, w, h, NEAREST)
 	if frame.ctx.options.living == true then
 		-- The loop plays on this layer's clock, and the app draws the layer
@@ -927,7 +1029,18 @@ local function background(draw: Draw, frame: Frame): Again
 			end
 		end
 	end
-	awning(draw, w, s)
+	if thin then
+		draw:pop()
+	end
+	-- The shop's glass where the wall was, and the awning, solid: until the
+	-- header is the awning, the awning it lies on.
+	local glass = glazing(opacity)
+	if glass >= 1 / 255 then
+		glazed_front(draw, w, h, s, glass)
+	end
+	if awning_shown(opacity) < 1 then
+		awning(draw, w, s)
+	end
 	return nil
 end
 
@@ -2044,7 +2157,7 @@ local theme: Theme = {
 	sounds = sounds,
 	sound = sound,
 	layers = {
-		background = { draw = background },
+		background = { draw = background, fade = false },
 		overlay = { draw = fountain, events = { press = FOUNTAIN_LIFE + 0.3, result = FOUNTAIN_LIFE, option = RAIN_LIFE } },
 		keypad = { draw = keypad, place = place, events = { press = CRUMB_LIFE, show = 1.2, result = 0.6, error = 0.3 } },
 		display = { draw = display, events = { press = 0.12, result = 1.0, error = 1.1 } },

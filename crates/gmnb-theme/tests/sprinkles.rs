@@ -1310,6 +1310,71 @@ fn the_icing_follows_the_colours() {
     assert_eq!(glazed(&own), picked_again);
 }
 
+/// On a see-through window the shop's front is its window. The layer is
+/// drawn at full strength (`fade = false`) and thins the wall itself: the
+/// tiles and the falling sprinkles under the window's opacity, and
+/// nothing else. As the wall goes, the glass comes in, its frame and its
+/// shine, from none at 0.95 to all of it at 0.6; the awning it paints
+/// stays solid until the header, which is the awning there, covers it
+/// (from 0.95 down); and `window.background`, what the header's title
+/// lies on until then, goes as the header comes. Each step is a little
+/// further than the one before: a drag of the slider moves smoothly.
+#[test]
+fn the_shop_window_comes_in_as_the_wall_goes() {
+    let mut theme = sprinkles();
+    assert!(theme.def.layers["background"].unfaded);
+    for dark in [false, true] {
+        let mut last: Option<(f32, f32, f32)> = None;
+        for step in (2..=20).rev() {
+            let opacity = step as f32 / 20.0;
+            let mut c = ctx(&theme, dark, "strawberry", &[]);
+            c.opacity = opacity;
+            let style = style_of(&mut theme, &c);
+            let ops = ok(theme.draw(LayerKind::Background, &c, &Frame::sized(360.0, 600.0)))
+                .list
+                .ops;
+            // The wall, thinned, and nothing but the wall in that group.
+            let thinned =
+                matches!(ops.first(), Some(Op::PushOpacity(o)) if (o - opacity).abs() < 1e-6);
+            assert_eq!(thinned, opacity < 1.0, "{opacity}");
+            // The glass: the shine (white) and the frame.
+            let shine = ops
+                .iter()
+                .filter_map(|op| match op {
+                    Op::Rect { paint, .. } => {
+                        let p = solid(paint);
+                        (p[0] == 1.0 && p[1] == 1.0 && p[2] == 1.0).then_some(p[3])
+                    }
+                    _ => None,
+                })
+                .fold(0.0f32, f32::max);
+            let awning_drawn = ops.iter().any(
+                |op| matches!(op, Op::Rect { rect, .. } if rect[1] == 0.0 && rect[3] == AWNING),
+            );
+            let header = style.fill("header.background").samples_over([0.0; 4])[0][3];
+            let wall = style.fill("window.background").samples_over([0.0; 4])[0][3];
+            assert_eq!(shine > 0.0, opacity < 0.95, "{opacity}: shine {shine}");
+            assert_eq!(awning_drawn, opacity > 0.95, "{opacity}");
+            assert!(
+                (header + wall - 1.0).abs() < 1e-4,
+                "{opacity}: {header} + {wall}"
+            );
+            assert_eq!(header == 1.0, opacity <= 0.95, "{opacity}: {header}");
+            if opacity <= 0.6 {
+                assert!(shine > 0.15, "{opacity}: shine {shine}");
+            }
+            if let Some((was_shine, was_header, was_opacity)) = last {
+                assert!(
+                    shine >= was_shine && header >= was_header,
+                    "{opacity} after {was_opacity}"
+                );
+            }
+            last = Some((shine, header, opacity));
+        }
+    }
+    assert!(theme.take_draw_notes().is_empty());
+}
+
 /// What stands behind the page is the wall's still and nothing brighter
 /// or darker than the style says: `window.background` is the wall's own
 /// middle colour, so what the style's tables work out against it holds
