@@ -776,7 +776,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph's equation column and its analysis. (An empty list's text in the History panel lies on the panel, a surface of the style's.) |
 | `plain.radius` | Radius | `shape.card_radius` | same |
 | `scrim` | Color | black at 0.30 | The shade over what the sidebar or a sheet covers |
-| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius. `edge`: the keypad (Rust, `widgets/keypad.rs`) draws it around its key that holds the focus |
+| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given); below opacity 1 also `edge { 1, bg }` (around a key the desktop shows through the backdrop) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius. `edge`: the keypad (Rust, `widgets/keypad.rs`) draws it around its key that holds the focus |
 
 ### Header and window buttons
 
@@ -1882,6 +1882,34 @@ straight on a page counts wherever the style puts something under it in
 `plain.background`: the base look's scrim, Aurora's frost, Glazed's cards
 (solid at every opacity: only its wall thins).
 
+**5. The focus ring** (new). The keyboard's focus is never hidden. For
+the base look and each built-in theme, each palette, light and dark, at
+opacity 1, 0.5 and 0.1 (see-through over a black and a white desktop, as
+rule 4): every ring (`focus`, `date.calendar.focus`,
+`converter.value.focus`) is at least 1 px wide and reaches **3** on what
+it lies on. Around a key: the window's background (for Swirls each of
+the 768 colours of its field), and the key's own fill where the ring is
+inside it, the ring or its `edge` counting. Around a control on the
+page's surfaces (`plain`, the header, the sidebar, a panel): that
+surface, the ring alone. The calendar's ring: the popover, and a day. A
+converter value's: its pane, and its field. A ring left to the toolkit
+(`native` lists `focus`) is judged as libadwaita draws it: its accent at
+half opacity, 2 px inside the control. The tests are
+`every_focus_ring_reads` and
+`swirls_focus_ring_reads_over_every_colour_of_the_field`
+(`tests/css.rs`), and in the running app `tests/focus.rs`, which looks at
+the pixels around a key.
+
+The same floor holds for every theme, not only the built-in ones, at the
+window's own colours (`crates/gmnb-theme/src/focus.rs`): a ring under
+1 px, or under 3:1 on what it lies on (with its edge around a key), is
+the base look's ring instead (2 px just outside the control, in the
+theme's `accent_text`, else its `fg`, else black or white, whichever
+reads), and Settings notes why. A `native` ring that doesn't reach 3:1
+is the app's ring instead, held to the same floor. So `width = 0`, a
+transparent colour, or the colour of the keys, can't hide where the
+keyboard is (`a_ring_that_would_hide_the_focus_is_the_base_looks`).
+
 ## For implementers
 
 ### Environment hooks
@@ -2116,3 +2144,19 @@ Decided here, and worth a second look by the owner:
     a pass a frame, while Settings is open, rather than blanks after a
     total. Each change of `ctx` starts the tiles again (an opacity drag
     redraws a pass a frame).
+14. **The focus ring's floor is judged on what the ring lies on**, not
+    on the control it rings ([rule 5](#readability-rules)): a ring outside
+    a key covers the page, not the key. DGMNB's own ring is `accent_text`
+    touching an equals key filled with `accent`: 1.2:1 to that key (1.1
+    in the dark), 4.5:1 and more to the page. Judged against its key, the
+    base look would fail its own floor. A ring the colour of its key's
+    fill, inside it, is caught.
+15. **A ring's `edge` is drawn around a keypad's keys only**: they are
+    the controls that lie straight on the window's background and
+    whatever a theme draws there. Elsewhere a control lies on one of the
+    style's own surfaces, where a ring of one colour can be checked (the
+    toolkit draws an outline in one colour; a second line there would
+    need every control's own shadows rewritten). On a see-through window
+    the base look's ring has an edge of `bg` (rule 5 over a black
+    desktop: 1.15:1 without it in the light palette), which Mono and
+    Glazed, whose rings start from it, keep.

@@ -430,7 +430,14 @@ fn lists_are_taken_whole_and_false_clears() {
         ),
     );
     let noted: Vec<&str> = r.notes.list.iter().map(|n| n.path.as_str()).collect();
-    assert_eq!(noted, ["keys.func.background"], "{:#?}", r.notes.list);
+    // (And the converter's focus ring, which doesn't read on the scrim
+    // over that background: the floor draws the base look's instead.)
+    assert_eq!(
+        noted,
+        ["keys.func.background", "converter.value.focus"],
+        "{:#?}",
+        r.notes.list
+    );
     let s = &r.style;
     // The see-through halo is gone: the theme's list replaced it.
     assert!(s.shadows("window.text_halo").is_empty());

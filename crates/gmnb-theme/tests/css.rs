@@ -1431,3 +1431,231 @@ fn swirls_texts_read_over_every_colour_of_the_field() {
     }
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
+
+// ---- Rule 5: the keyboard's focus ring ------------------------------------------
+
+/// What a style's ring lies on besides a key: the page's surfaces a
+/// control may sit on, each over the window's background.
+const RING_SURFACES: [&str; 4] = [
+    "plain.background",
+    "header.background",
+    "nav.background",
+    "panel",
+];
+
+/// Rule 5 for one style, over each colour of `behind` in turn (what the
+/// window's background shows as): every ring at least 1 px wide and
+/// reaching 3 on what it lies on. Around a key: the window's background,
+/// and the key's own fill where the ring is inside it, the ring or its
+/// edge counting. Around a control on one of the page's surfaces: that
+/// surface, the ring alone. A ring left to the toolkit is judged as
+/// libadwaita draws it.
+fn rings_read(name: &str, style: &Style, behind: &[Rgba]) -> Vec<String> {
+    use gmnb_theme::focus::{self, LEAST_CONTRAST, LEAST_WIDTH};
+    let get = |p: &str| style.get(p).cloned();
+    let mut bad = Vec::new();
+    let mut check = |what: &str, got: f32| {
+        if got < LEAST_CONTRAST {
+            bad.push(format!("{name}: {what} {got:.2} < {LEAST_CONTRAST}"));
+        }
+    };
+    for path in focus::RINGS {
+        let native = path == "focus" && style.native().contains(&"focus");
+        let ring = if native {
+            focus::native_ring(style.color("stock.accent"))
+        } else {
+            focus::ring_at(get, path).unwrap_or_else(|| panic!("{name}: no ring at {path}"))
+        };
+        if ring.width < LEAST_WIDTH {
+            check(&format!("{path}, {} px wide,", ring.width), 0.0);
+        }
+        let grounds = focus::grounds(get, &style.tokens, path, behind);
+        let got = focus::worst(&ring, &grounds.under(&ring), grounds.edge && !native);
+        check(
+            if path == "focus" {
+                "focus around a key"
+            } else {
+                path
+            },
+            got,
+        );
+        if path == "focus" && ring.offset > 0.0 {
+            // Around a control on a surface: the ring alone, outside it.
+            for surface in RING_SURFACES {
+                let fill = match style.get(surface) {
+                    Some(Value::Surface(s)) => s.background.clone(),
+                    _ => style.fill(surface),
+                };
+                let on: Vec<Rgba> = behind.iter().flat_map(|b| fill.samples_over(*b)).collect();
+                check(
+                    &format!("focus on {surface}"),
+                    focus::worst(&ring, &on, false),
+                );
+            }
+        }
+    }
+    bad
+}
+
+/// Rule 5: in the base look and every built-in theme, every palette and
+/// flavour, light and dark, opaque and see-through over a black and a
+/// white desktop, the keyboard's focus ring reads on what it lies on.
+/// None of them leans on the floor: their own rings pass, with no note.
+#[test]
+fn every_focus_ring_reads() {
+    let mut bad = Vec::new();
+    for (name, style) in every_style() {
+        let desktops: Vec<Option<Rgba>> = if style.opacity >= 1.0 {
+            vec![None]
+        } else {
+            vec![Some(BLACK), Some(WHITE)]
+        };
+        for desktop in desktops {
+            let behind = gmnb_theme::focus::backdrop(
+                |p| style.get(p).cloned(),
+                style.tokens.colors.bg,
+                desktop.map(|d| (d, style.opacity)),
+            );
+            let over = match desktop {
+                None => "",
+                Some(d) if d == BLACK => " over black",
+                Some(_) => " over white",
+            };
+            bad.extend(rings_read(&format!("{name}{over}"), &style, &behind));
+        }
+    }
+    for id in ["aurora", "mono", "glazed", "swirls"] {
+        let mut theme = built_in(id);
+        for dark in [false, true] {
+            for opacity in [1.0, 0.5, 0.1] {
+                let ctx = with(&theme, dark, opacity, &[]);
+                for note in &theme.style(&ctx).unwrap().notes.list {
+                    if note.message.contains("focus") {
+                        bad.push(format!("{id} dark={dark} {opacity}: {note}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// Rule 5 for Swirls at the field's worst: around a key its ring lies on
+/// the paint itself, any of the 768 colours of its ramp, the ring's gold
+/// among them; its edge keeps it seen there. In every set of bands under
+/// every glass, opaque and see-through.
+#[test]
+fn swirls_focus_ring_reads_over_every_colour_of_the_field() {
+    let mut bad = Vec::new();
+    for (name, style) in swirls_styles() {
+        let colours = swirls_field_colours(&style);
+        let desktops: &[Option<Rgba>] = if style.opacity >= 1.0 {
+            &[None]
+        } else {
+            &[Some(BLACK), Some(WHITE)]
+        };
+        for desktop in desktops {
+            let behind: Vec<Rgba> = colours
+                .iter()
+                .map(|c| match desktop {
+                    None => *c,
+                    Some(d) => over(alpha(*c, style.opacity), *d),
+                })
+                .collect();
+            bad.extend(rings_read(&format!("{name} {desktop:?}"), &style, &behind));
+        }
+        // The gold alone vanishes on the gold paint: what reads is its edge.
+        let Some(Value::FocusRing(ring)) = style.get("focus") else {
+            panic!("{name}: no focus ring");
+        };
+        let bare = FocusRing {
+            edge: None,
+            ..*ring
+        };
+        let got = gmnb_theme::focus::worst(&bare, &colours, false);
+        assert!(
+            got < 1.5,
+            "{name}: the bare ring reads ({got:.2}): the edge isn't tested"
+        );
+    }
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// The floor (rule 5's): a ring that would hide the keyboard's focus,
+/// under 1 px, transparent or the colour of what is under it, is the base
+/// look's ring instead, with a note; a ring left to the toolkit that
+/// wouldn't read is the app's. A ring that reads stands.
+#[test]
+fn a_ring_that_would_hide_the_focus_is_the_base_looks() {
+    use gmnb_theme::focus::{self, LEAST_CONTRAST};
+    let ctx = Ctx::default();
+    let base = Style::base(&ctx);
+    let engine = Engine::with_globals(Limits::default(), |lua| {
+        gmnb_theme::library::register(lua, gmnb_theme::library::without_drawing)
+    })
+    .unwrap();
+    let style_of = |src: &str| resolve(&ctx, &engine.load("=style", src).unwrap());
+    let hex = |c: Rgba| appcore::color::to_hex(rgb3(c));
+    let bg = hex(base.tokens.colors.bg);
+    let accent = hex(base.tokens.colors.accent_text);
+    for (what, src) in [
+        ("0 px", "return { focus = { width = 0 } }".to_string()),
+        ("0.5 px", "return { focus = { width = 0.5 } }".to_string()),
+        (
+            "transparent",
+            "return { focus = { color = '#00000000' } }".to_string(),
+        ),
+        (
+            "the background's colour",
+            format!("return {{ focus = {{ color = '{bg}', width = 3 }} }}"),
+        ),
+        (
+            "inside keys of its own colour",
+            format!(
+                "return {{ focus = {{ offset = 0 }}, keys = {{ number = {{ background = '{accent}' }} }} }}"
+            ),
+        ),
+        (
+            "the converter's, hidden",
+            "return { converter = { value = { focus = { width = 0 } } } }".to_string(),
+        ),
+        (
+            "the calendar's, hidden",
+            "return { date = { calendar = { focus = { color = '#00000000' } } } }".to_string(),
+        ),
+    ] {
+        let resolved = style_of(&src);
+        let noted = resolved
+            .notes
+            .list
+            .iter()
+            .any(|n| n.message.contains("would hide the keyboard's focus"));
+        assert!(noted, "{what}: no note: {:?}", resolved.notes.list);
+        let get = |p: &str| resolved.style.get(p).cloned();
+        let behind = focus::backdrop(get, resolved.style.tokens.colors.bg, None);
+        for path in focus::RINGS {
+            let ring = focus::ring_at(get, path).unwrap();
+            assert!(ring.width >= 1.0, "{what}: {path} {ring:?}");
+            let grounds = focus::grounds(get, &resolved.style.tokens, path, &behind);
+            let got = focus::worst(&ring, &grounds.under(&ring), grounds.edge);
+            assert!(got >= LEAST_CONTRAST, "{what}: {path} {got:.2}");
+        }
+    }
+    // A ring that reads stands, and so does the base look's own.
+    let fine = style_of("return { focus = { width = 3, offset = 4 } }");
+    assert!(fine.notes.list.is_empty(), "{:?}", fine.notes.list);
+    let ring = focus::ring_at(|p| fine.style.get(p).cloned(), "focus").unwrap();
+    assert_eq!((ring.width, ring.offset), (3.0, 4.0));
+    let empty = gmnb_theme::ThemeValue::Map(BTreeMap::new());
+    assert!(resolve(&ctx, &empty).notes.list.is_empty());
+    // The toolkit's ring, the accent at half opacity, inside keys of the
+    // accent's colour: the app's ring is drawn instead.
+    let native = style_of(&format!(
+        "return {{ native = {{ 'focus' }}, keys = {{ number = {{ background = '{accent}' }} }} }}"
+    ));
+    assert!(
+        !native.style.native().contains(&"focus"),
+        "{:?}",
+        native.notes.list
+    );
+}

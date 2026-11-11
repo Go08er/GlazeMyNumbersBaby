@@ -611,7 +611,13 @@ pub static ROWS: &[Row] = &[
             color: s.t.colors.accent_text,
             offset: metrics::focus::OFFSET,
             radius: None,
-            edge: None,
+            // See-through, a key lies on whatever the desktop is: a line
+            // of the background's colour outside the ring keeps it seen
+            // there (DGMNB, always opaque, has none).
+            edge: (s.ctx.opacity() < 1.0).then_some(Border {
+                width: 1.0,
+                color: s.t.colors.bg,
+            }),
         })
     }),
     // -- Header and window buttons.
