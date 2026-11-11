@@ -343,6 +343,10 @@ end
 -- chooser makes a new one each step: a few dozen at most are kept.)
 local schemes: { [string]: Scheme } = {}
 local scheme_count = 0
+-- The colours of the schemes kept, packed (section 3's `pack`), by table:
+-- let go of with the schemes they belong to, or a long drag through the
+-- colour chooser fills the theme's heap with colours nobody draws with.
+local packed: { [Rgba]: number } = {}
 
 local function scheme_for(id: string, ctx: Ctx): Scheme
 	local icing, second, name = flavour_colours(id, ctx)
@@ -351,6 +355,7 @@ local function scheme_for(id: string, ctx: Ctx): Scheme
 	if not s then
 		if scheme_count >= 32 then
 			schemes, scheme_count = {}, 0
+			table.clear(packed)
 		end
 		s = build(key, icing, second, ctx.dark, if FLAVOURS[id] then 1 else 1.02)
 		schemes[key] = s
@@ -887,8 +892,8 @@ local function byte(v: number): number
 end
 
 -- A colour as `buffer.writeu32` wants it: 0xAABBGGRR. A scheme's colours
--- are the same tables from frame to frame, so each is worked out once.
-local packed: { [Rgba]: number } = {}
+-- are the same tables from frame to frame, so each is worked out once
+-- (`packed` is declared with the schemes, which it goes with).
 local function pack(c: Rgba): number
 	local n = packed[c]
 	if not n then
