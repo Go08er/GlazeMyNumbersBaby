@@ -1333,6 +1333,208 @@ fn auroras_palettes_stay_readable() {
     assert!(bad.is_empty(), "{bad:#?}");
 }
 
+// ---- Aurora: text over light that moves ---------------------------------------------
+
+/// A `ctx` for each thing Aurora can look like: its seven palettes, and
+/// System and Freestyle from rule 2's extreme colours (with the
+/// complement, and with the colour twice), light and dark, at three
+/// opacities.
+fn auroras_ctxs(aurora: &Theme) -> Vec<(String, Ctx)> {
+    let mut out = Vec::new();
+    for dark in [false, true] {
+        // (Also at the opacities between the rules' three: what a
+        // see-through window shows changes all the way down.)
+        for opacity in [1.0, 0.85, 0.7, 0.5, 0.3, 0.15, 0.1] {
+            for palette in PALETTES {
+                let ctx = with(aurora, dark, opacity, &[("palette", text(palette))]);
+                out.push((format!("aurora {palette} dark={dark} {opacity}"), ctx));
+            }
+            for (name, hex) in EXTREMES {
+                let colour = appcore::color::hex(hex);
+                let as_text = |c: [f32; 3]| text(&appcore::color::to_hex(c));
+                let mut ctx = with(aurora, dark, opacity, &[("palette", text("system"))]);
+                ctx.accent = Some(colour);
+                out.push((format!("aurora system {name} dark={dark} {opacity}"), ctx));
+                for (kind, second) in [
+                    ("complement", appcore::color::complement(colour)),
+                    ("twice", colour),
+                ] {
+                    let options = [
+                        ("palette", text("custom")),
+                        ("primary", as_text(colour)),
+                        ("secondary", as_text(second)),
+                    ];
+                    out.push((
+                        format!("aurora freestyle {name} {kind} dark={dark} {opacity}"),
+                        with(aurora, dark, opacity, &options),
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Every colour Aurora's window can show under what is in it, over
+/// `desktop` (none: the window is opaque). The sky is the window's own
+/// background, a gradient top to bottom, which the app thins to the
+/// window's opacity. Over it the background layer, which thins itself
+/// (`fade = false`), draws stars, and through a mask the palette's lights
+/// (a gradient by height, as strong as the layer makes them at that
+/// opacity): so a pixel at some height is the sky there over the desktop,
+/// the light there over that, or a blend of the two; or a star, and a
+/// star is no brighter than one colour. `tests/aurora.rs` holds the layer
+/// to that, standing, drifting and with every kind of pulse
+/// (`the_background_is_lights_and_stars_and_nothing_else`).
+///
+/// Sampled at 17 heights: the sky, the light, and three blends of them;
+/// and a star at its brightest, at the top and at the bottom.
+fn auroras_sky_colours(
+    aurora: &Theme,
+    ctx: &Ctx,
+    style: &Style,
+    desktop: Option<Rgba>,
+) -> Vec<Rgba> {
+    use gmnb_theme::draw::Op;
+    use gmnb_theme::layer::{Frame, LayerKind};
+    let Some(Paint::Gradient(sky)) = style.fill("window.background").0.first().cloned() else {
+        panic!("Aurora's window.background is the sky's gradient");
+    };
+    assert!(sky.colors.iter().all(|c| c[3] == 1.0), "{sky:?}");
+    let frame = Frame {
+        motion: false,
+        ..Frame::sized(760.0, 640.0)
+    };
+    let drawn = match aurora.draw(LayerKind::Background, ctx, &frame) {
+        Ok(d) => d,
+        Err(e) => panic!("Aurora's background: {e:?}"),
+    };
+    let mut lights = None;
+    let mut star: Option<Rgba> = None;
+    for op in &drawn.list.ops {
+        match op {
+            Op::Rect {
+                paint: Paint::Gradient(g),
+                ..
+            } => {
+                assert!(lights.is_none(), "one gradient: the lights");
+                lights = Some(g.clone());
+            }
+            // A star: the brightest is the one most opaque.
+            Op::Rect {
+                paint: Paint::Color(c),
+                ..
+            } if star.is_none_or(|s| c[3] > s[3]) => star = Some(*c),
+            _ => {}
+        }
+    }
+    let lights = lights.expect("the lights");
+    // An opaque window shows all of each light.
+    assert!(
+        ctx.opacity < 1.0 || lights.colors.iter().all(|c| c[3] == 1.0),
+        "{lights:?}"
+    );
+    let air = |sky: Rgba| match desktop {
+        None => sky,
+        Some(d) => over(alpha(sky, ctx.opacity), d),
+    };
+    let mut out = Vec::new();
+    for k in 0..=16 {
+        let t = k as f32 / 16.0;
+        let (s, l) = (air(sky.at_stop(t)), lights.at_stop(t));
+        for m in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            out.push(over(alpha(l, m), s));
+        }
+        if let Some(star) = star.filter(|_| k % 16 == 0) {
+            out.push(over(star, s));
+        }
+    }
+    out
+}
+
+/// Rules 3 and 4 at the aurora's worst: every pair of the table with each
+/// colour the window can show under it in turn (the sky, each light at
+/// its height, the blends between them, a star), opaque and see-through
+/// over black and over white (the sky thinned to the window's opacity,
+/// the lights hanging over the desktop as strong as the layer draws
+/// them), in each of the seven palettes and in System and Freestyle from
+/// the extreme colours. Wherever a curtain wanders, and whatever pulse
+/// plays, each pixel is one of those.
+#[test]
+fn auroras_texts_read_over_every_colour_of_the_sky() {
+    let mut aurora = built_in("aurora");
+    let mut bad = Vec::new();
+    for (name, ctx) in auroras_ctxs(&aurora) {
+        let style = aurora.style(&ctx).unwrap().style.clone();
+        let all = {
+            let mut all = page_pairs(&style, true);
+            all.extend(chrome_pairs(&style));
+            all.extend(pairs(&style, true));
+            all
+        };
+        let desktops: &[Option<Rgba>] = if style.opacity >= 1.0 {
+            &[None]
+        } else {
+            &[Some(BLACK), Some(WHITE)]
+        };
+        for desktop in desktops {
+            let over_what = match desktop {
+                None => "",
+                Some(d) if *d == BLACK => " over black",
+                Some(_) => " over white",
+            };
+            let colours = auroras_sky_colours(&aurora, &ctx, &style, *desktop);
+            // The worst of each pair over all the sky's colours.
+            let mut worst_of = vec![(f32::INFINITY, 0usize); all.len()];
+            for (k, shown) in colours.iter().enumerate() {
+                let behind = [*shown; 3];
+                for (i, (_, text, _, fills)) in all.iter().enumerate() {
+                    let fills: Vec<&Fill> = fills.iter().collect();
+                    let got = worst(*text, &fills, &behind);
+                    if got < worst_of[i].0 {
+                        worst_of[i] = (got, k);
+                    }
+                }
+            }
+            for ((what, _, at_rest, _), (got, k)) in all.iter().zip(worst_of) {
+                let want = match desktop {
+                    None => *at_rest,
+                    Some(_) => at_rest.min(UI_CONTRAST),
+                };
+                if got < want {
+                    bad.push(format!(
+                        "{name}{over_what}: {what} {got:.2} < {want} (over colour {k})"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// Rule 5 at the aurora's worst: around a key the ring lies on the sky or
+/// on a curtain, any colour the background can show; its edge keeps it
+/// seen where the light is the ring's own colour. In every palette and
+/// from the extreme colours, opaque and see-through.
+#[test]
+fn auroras_focus_ring_reads_over_every_colour_of_the_sky() {
+    let mut aurora = built_in("aurora");
+    let mut bad = Vec::new();
+    for (name, ctx) in auroras_ctxs(&aurora) {
+        let style = aurora.style(&ctx).unwrap().style.clone();
+        let desktops: &[Option<Rgba>] = if style.opacity >= 1.0 {
+            &[None]
+        } else {
+            &[Some(BLACK), Some(WHITE)]
+        };
+        for desktop in desktops {
+            let behind = auroras_sky_colours(&aurora, &ctx, &style, *desktop);
+            bad.extend(rings_read(&format!("{name} {desktop:?}"), &style, &behind));
+        }
+    }
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
 // ---- Swirls: text over paint that moves ------------------------------------------
 
 /// Swirls' sets of bands and strengths of glass: every value of the two

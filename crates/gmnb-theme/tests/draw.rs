@@ -2075,12 +2075,26 @@ fn auroras_layers_draw_within_their_limits() {
         let still = aurora_ctx(dark, palette, false);
         let f = Frame::sized(760.0, 640.0);
         let drawn = ok(theme.draw(LayerKind::Background, &still, &f));
-        // The base, four blobs, two veils, the vignette and the grain; and
-        // it stands.
-        assert_eq!(drawn.list.ops.len(), 9, "{palette}");
+        // Over the sky, which is the window's own background: its stars
+        // in the dark (a window of this size has all 160), the aurora's
+        // light as a mask (a field over the top four fifths of the
+        // window), the lights that show through it and the grain; and it
+        // stands.
+        let stars = if dark { 160 } else { 0 };
+        let ops = &drawn.list.ops;
+        assert_eq!(ops.len(), stars + 6, "{palette}");
         assert_eq!(drawn.again, None);
+        assert!(matches!(ops[stars], Op::PushMask(MaskMode::Alpha)));
         assert!(
-            matches!(drawn.list.ops[8], Op::Tile { rect, .. } if rect == [0.0, 0.0, 760.0, 640.0])
+            matches!(&ops[stars + 1], Op::Field { rect, .. } if *rect == [0.0, 0.0, 760.0, 512.0])
+        );
+        assert!(matches!(ops[stars + 2], Op::Pop));
+        assert!(
+            matches!(&ops[stars + 3], Op::Rect { rect, paint: Paint::Gradient(g) }
+                if *rect == [0.0, 0.0, 760.0, 640.0] && g.colors.len() == 6)
+        );
+        assert!(
+            matches!(ops[stars + 5], Op::Tile { rect, .. } if rect == [0.0, 0.0, 760.0, 640.0])
         );
         // Living: again in a fifteenth of a second.
         let living = aurora_ctx(dark, palette, true);
@@ -2096,9 +2110,11 @@ fn auroras_layers_draw_within_their_limits() {
                 .list
                 .ops
                 .len(),
-            9
+            stars + 6
         );
     }
+    // (The dark Aurora from here on: 160 stars and six more.)
+    let standing = 166;
     let living = aurora_ctx(true, "aurora", true);
     let mut press = Event::at(
         EventKind::Press,
@@ -2122,9 +2138,10 @@ fn auroras_layers_draw_within_their_limits() {
         ..Frame::sized(760.0, 640.0)
     };
     let pulsing = ok(theme.draw(LayerKind::Background, &living, &f));
-    // A number key's pulse is one bloom.
-    assert_eq!(pulsing.list.ops.len(), 9 + 13);
-    assert_eq!(pulsing.again, Some(0.0));
+    // A number key's pulse is one ray, drawn into the aurora's mask; and
+    // while one plays, thirty pictures a second.
+    assert_eq!(pulsing.list.ops.len(), standing + 13);
+    assert_eq!(pulsing.again, Some(0.032));
     let mut times = Vec::new();
     for _ in 0..200 {
         let t = Instant::now();
@@ -2132,15 +2149,23 @@ fn auroras_layers_draw_within_their_limits() {
         times.push(t.elapsed().as_secs_f64() * 1000.0);
     }
     let background_ms = median(times);
-    // A result's, and each of the four a new palette sends, is a bloom
-    // and the wavefront ahead of it.
+    // A result's is a ray and the light it spreads round it; a new
+    // palette sends four rays, one after another.
     f.events = vec![(0.2, &result), (0.4, &option)];
     assert_eq!(
         ok(theme.draw(LayerKind::Background, &living, &f))
             .list
             .ops
             .len(),
-        9 + 2 + 4 * 2
+        standing + 2 + 4
+    );
+    f.events = vec![(0.1, &option)];
+    assert_eq!(
+        ok(theme.draw(LayerKind::Background, &living, &f))
+            .list
+            .ops
+            .len(),
+        standing + 2
     );
 
     // ---- Keypad: the cascade, a ripple, the pointer's light.
@@ -2308,15 +2333,18 @@ fn auroras_layers_draw_within_their_limits() {
     );
     let notes = theme.take_draw_notes();
     assert!(notes.is_empty(), "{notes:?}");
-    // Its busiest frames cost within what a frame may to draw. Aurora is
-    // made of radial gradients, which the software renderer draws at 5 ms
-    // the window each: standing, its background is a fifth of what a frame
-    // may; a new palette's four blooms over the window, the dearest frame
-    // of all, a little over half.
+    // Its busiest frames cost within what a frame may to draw. The
+    // aurora is one field behind one mask and a gradient that runs
+    // straight down: standing, its background is 5.5% of what a frame
+    // may; with thirteen rays up at once, the dearest frame here, 9%.
+    // (0.2's four blobs and two veils, radial gradients the software
+    // renderer draws at 5 ms the window each, were a fifth standing and
+    // over half at their dearest. `tests/aurora.rs` has the rest: 11% for
+    // a result after = or a new palette, 20% with all of it at once.)
     let busiest = theme.api().busiest_frame();
     println!(
         "aurora: the busiest frame cost {:.1}% of what one may",
         busiest * 100.0
     );
-    assert!(busiest > 0.0 && busiest < 0.6, "{busiest}");
+    assert!(busiest > 0.0 && busiest < 0.3, "{busiest}");
 }
