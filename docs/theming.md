@@ -1609,7 +1609,7 @@ sounds.
 | Animations: frames shown; decoding | 30 a second; a quarter of one core, all animations together |
 | Pixel pictures: size; count; changes | 512×512; 4; 30 a second each |
 | Fields: points; per `draw`; computed pixels per call; passes | 16 384, each side 2 to 256; 2; 262 144; 30 a second per layer |
-| Ramps: colours; count | 2 to 16; 8 |
+| Ramps: colours; held at once | 2 to 16; 8 (a theme may make any number: one let go is made again, the same, when it is drawn again) |
 | Sounds: count; length; all together | 32; 4 s; 8 MiB (43 s) |
 | Sound files: size; kinds | 1 MiB; WAV (8, 16, 24 or 32-bit, or float), Ogg Vorbis; 1 or 2 channels; 8 to 96 kHz |
 | Sound recipes: layers; effects; layer-seconds over the whole theme | 8; 4; 64 |

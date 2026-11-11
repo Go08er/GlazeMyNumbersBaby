@@ -75,7 +75,8 @@ pub struct DrawLimits {
     pub canvases: usize,
     /// Fields per `draw`.
     pub fields: usize,
-    /// Ramps a theme may make.
+    /// Ramps whose colours are held at once (a theme may make any number:
+    /// one let go is made again when it is drawn again).
     pub ramps: usize,
 }
 

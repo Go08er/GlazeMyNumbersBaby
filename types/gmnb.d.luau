@@ -1289,6 +1289,8 @@ export type Gmnb = {
 	noise: (spec: { size: number?, seed: number?, color: Color?, opacity: number? }) -> Image,
 	animation: (file: string) -> Animation,
 	pixels: (width: number, height: number) -> Pixels,
+	-- Any number, at any time; the same spec again is the same ramp. The
+	-- app holds the colours of eight at once and makes again one it let go.
 	ramp: (spec: RampSpec) -> Ramp,
 
 	-- Sound.

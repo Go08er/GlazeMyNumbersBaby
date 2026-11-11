@@ -938,21 +938,38 @@ fn a_ramp_is_declared_once_and_read_back() {
         local many = {}
         for i = 1, 17 do many[i] = "#102030" end
         assert(not pcall(gmnb.ramp, { colors = many }))
-        -- Eight ramps; the ninth colours nothing.
-        local made = { ramp, map }
-        for i = 3, 9 do made[i] = gmnb.ramp({ colors = { "#000000", gmnb.rgb(i / 9, 0, 0) } }) end
+        -- As many ramps as a theme likes: twelve more.
+        local made = {}
+        for i = 1, 12 do made[i] = gmnb.ramp({ colors = { gmnb.rgb(i / 12, 0, 0), "#0000ff" } }) end
+        made[13], made[14] = ramp, map
+        -- Asked for again, still the same table.
+        assert(made[1] == gmnb.ramp({ colors = { gmnb.rgb(1 / 12, 0, 0), "#0000ff" } }))
         local buf = buffer.create(2 * 2 * 4)
+        for i = 0, 3 do buffer.writef32(buf, i * 4, i / 4) end
         "##,
         r##"
-        draw:field(0, 0, 40, 40, { data = buf, cols = 2, rows = 2, channels = 1, ramp = made[8] })
-        draw:field(0, 0, 40, 40, { data = buf, cols = 2, rows = 2, channels = 1, ramp = made[9] })
+        -- Frame n draws ramp n; frame 15 the first again, long after its
+        -- colours were let go.
+        local n = math.floor(frame.time)
+        draw:field(0, 0, 40, 40, { data = buf, cols = 2, rows = 2, channels = 1, ramp = made[if n == 15 then 1 else n] })
         "##,
     );
+    assert!(notes(&theme).is_empty());
+    let now = clock(&theme, 1.0);
+    let mut hashes = Vec::new();
+    for n in 1..=15 {
+        now.set(n as f64);
+        let pictures = pictures(&drawn(&theme, n as f64));
+        assert_eq!(pictures.len(), 1, "ramp {n}");
+        hashes.push(pictures[0].3);
+    }
     let told = notes(&theme);
-    assert_eq!(told.len(), 1, "{told:?}");
-    assert!(told[0].contains("may make 8 ramps"), "{told:?}");
-    clock(&theme, 1.0);
-    assert_eq!(pictures(&drawn(&theme, 0.0)).len(), 1);
+    assert!(told.is_empty(), "{told:?}");
+    // Each ramp in its own colours; the first, made again, in the same
+    // colours as before.
+    let distinct: std::collections::HashSet<_> = hashes[..14].iter().collect();
+    assert_eq!(distinct.len(), 14, "{hashes:?}");
+    assert_eq!(hashes[14], hashes[0]);
 }
 
 #[test]

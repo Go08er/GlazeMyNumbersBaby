@@ -22,6 +22,13 @@
 //! nothing spent. So a layer that is drawn again for another reason (an
 //! event, the pointer, the frame it was owed) pays only for the fields
 //! that changed.
+//!
+//! **Ramps.** A theme may make as many as it likes (a theme whose
+//! colours follow the desktop's accent, or colours the user picks, makes
+//! a new one for each), but the tables of only `Limits::ramps` are held
+//! at once: making or drawing one past that lets go of the one used
+//! longest ago, and a ramp let go is made again, the same, from its own
+//! table when it is next drawn (a few microseconds).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -35,7 +42,7 @@ use crate::library::color_arg;
 
 /// What one pass made: a picture to be scaled over the rectangle the
 /// field was drawn in.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct FieldPicture {
     /// A number no other picture of this theme has: what a texture made
     /// of it is known by.
@@ -44,6 +51,22 @@ pub struct FieldPicture {
     pub height: u32,
     /// RGBA8, premultiplied, `width × 4` bytes a row.
     pub pixels: Bytes,
+    /// The ramp it was coloured through: every pixel is one of its
+    /// table's colours, or a blend of neighbours as the picture is
+    /// scaled. (For the tests that hold what is drawn to what reads.)
+    pub ramp: Rc<Ramp>,
+}
+
+impl std::fmt::Debug for FieldPicture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // (The ramp's table is a few thousand colours: left out.)
+        f.debug_struct("FieldPicture")
+            .field("serial", &self.serial)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("pixels", &self.pixels)
+            .finish()
+    }
 }
 
 /// One layer's allowance, and which of its fields went without last.
@@ -60,11 +83,19 @@ struct Turn {
 /// A theme's ramps, and what its layers' fields made last.
 #[derive(Default)]
 pub(crate) struct Fields {
-    ramps: Vec<Rc<Ramp>>,
-    /// What each ramp was asked for by (its colours, edges and cycle),
-    /// and its table's place among the ramps' tables.
+    /// The ramps whose colours are held: at most `Limits::ramps`, by
+    /// number, each with when it was last made or drawn. A ramp let go is
+    /// made again from its own table when it is next drawn.
+    held: Vec<(u64, Rc<Ramp>, u64)>,
+    /// How many ramps have been made: the number the last one got.
+    made: u64,
+    /// The clock `held` is kept by: a tick for each ramp made or drawn.
+    used: u64,
+    /// What the last ramps were asked for by (their colours, edges and
+    /// cycle), and each one's table's place among the ramps' tables: the
+    /// same ramp asked for again is the same table.
     asked: Vec<(String, usize)>,
-    /// How many tables have been made (the ones over the count too).
+    /// How many tables have been made.
     tables: usize,
     serial: u64,
     turns: HashMap<u64, Turn>,
@@ -79,6 +110,8 @@ pub(crate) struct Fields {
 struct Asked {
     values: Vec<f32>,
     shape: (usize, usize, usize),
+    /// The ramp's number: a ramp made again is the same ramp.
+    ramp_id: u64,
     ramp: Rc<Ramp>,
     /// As bits: the same number, not merely an equal one.
     scale: u32,
@@ -90,7 +123,7 @@ impl PartialEq for Asked {
         self.shape == other.shape
             && self.scale == other.scale
             && self.offset == other.offset
-            && Rc::ptr_eq(&self.ramp, &other.ramp)
+            && self.ramp_id == other.ramp_id
             && self.values.len() == other.values.len()
             && self
                 .values
@@ -119,8 +152,63 @@ fn finite(what: &str, v: &Value) -> mlua::Result<f64> {
     }
 }
 
-/// Adds `gmnb.ramp`. Each ramp's table is made once and kept in a table
-/// of the registry's.
+/// Specs whose ramp `gmnb.ramp` hands out again rather than make anew.
+const ASKED: usize = 64;
+
+/// Holds `ramp` as ramp number `id`, the newest: at most `limit` are
+/// held, and the one made or drawn longest ago is let go to make room.
+fn hold(fields: &mut Fields, limit: usize, id: u64, ramp: Rc<Ramp>) {
+    fields.used += 1;
+    let now = fields.used;
+    fields.held.retain(|(held, _, _)| *held != id);
+    while !fields.held.is_empty() && fields.held.len() >= limit.max(1) {
+        let oldest = (0..fields.held.len())
+            .min_by_key(|&i| fields.held[i].2)
+            .unwrap_or(0);
+        fields.held.swap_remove(oldest);
+    }
+    fields.held.push((id, ramp, now));
+}
+
+/// The colours ramp number `id` is drawn in: the ones held, else made
+/// again from its table (`colors`, `edge` and `cycle`, as `gmnb.ramp`
+/// wrote them), and then held.
+fn ramp_of(shared: &Shared, what: &str, id: u64, t: &Table) -> mlua::Result<Rc<Ramp>> {
+    let limit = shared.recorder.borrow().limits().ramps;
+    let mut fields = shared.fields.borrow_mut();
+    let not_one = || bad(what, "`ramp` is not a ramp of this theme");
+    if id == 0 || id > fields.made {
+        return Err(not_one());
+    }
+    fields.used += 1;
+    let now = fields.used;
+    if let Some(held) = fields.held.iter_mut().find(|(held, _, _)| *held == id) {
+        held.2 = now;
+        return Ok(held.1.clone());
+    }
+    let colors = match t.raw_get::<Value>("colors")? {
+        Value::Table(list) => (1..=list.raw_len())
+            .map(|i| color_arg("ramp", &list.raw_get::<Value>(i)?))
+            .collect::<mlua::Result<Vec<_>>>()?,
+        _ => return Err(not_one()),
+    };
+    let edge = match t.raw_get::<Value>("edge")? {
+        Value::Table(e) => {
+            let at = |i: usize| -> mlua::Result<f32> {
+                Ok(finite(what, &e.raw_get::<Value>(i)?)? as f32)
+            };
+            [at(1)?, at(2)?]
+        }
+        _ => return Err(not_one()),
+    };
+    let cycle = matches!(t.raw_get::<Value>("cycle")?, Value::Boolean(true));
+    let ramp = Rc::new(Ramp::new(&colors, edge, cycle).ok_or_else(not_one)?);
+    hold(&mut fields, limit, id, ramp.clone());
+    Ok(ramp)
+}
+
+/// Adds `gmnb.ramp`. Each ramp's table is made once, and the last few
+/// asked for are kept in a table of the registry's to be handed out again.
 pub(crate) fn register(lua: &Lua, gmnb: &Table, shared: &Rc<Shared>) -> mlua::Result<()> {
     let tables = Rc::new(lua.create_registry_value(lua.create_table()?)?);
     let s = shared.clone();
@@ -171,6 +259,9 @@ pub(crate) fn register(lua: &Lua, gmnb: &Table, shared: &Rc<Shared>) -> mlua::Re
             if let Some((_, at)) = fields.asked.iter().find(|(k, _)| *k == key) {
                 return tables.raw_get::<Table>(*at);
             }
+            // The checks above are the ramp's own.
+            let ramp = Ramp::new(&colors, edge, cycle)
+                .ok_or_else(|| bad(what, "a ramp that can't be made"))?;
             // What the theme reads back: its colours as the app took
             // them, and the number the app knows the ramp by.
             let t = lua.create_table_with_capacity(0, 4)?;
@@ -190,24 +281,21 @@ pub(crate) fn register(lua: &Lua, gmnb: &Table, shared: &Rc<Shared>) -> mlua::Re
             t.raw_set("edge", edges)?;
             t.raw_set("cycle", cycle)?;
             let limit = s.recorder.borrow().limits().ramps;
-            if fields.ramps.len() < limit {
-                // The checks above are the ramp's own.
-                let ramp = Ramp::new(&colors, edge, cycle)
-                    .ok_or_else(|| bad(what, "a ramp that can't be made"))?;
-                fields.ramps.push(Rc::new(ramp));
-                t.raw_set("id", fields.ramps.len())?;
-            } else {
-                // One too many: a ramp that colours nothing.
-                s.pictures.borrow_mut().note(format!(
-                    "gmnb.ramp: a theme may make {limit} ramps; a field drawn with this one draws nothing"
-                ));
-            }
+            fields.made += 1;
+            let id = fields.made;
+            hold(&mut fields, limit, id, Rc::new(ramp));
+            t.raw_set("id", id)?;
             t.set_readonly(true);
+            // Kept to be handed out again for the same spec: the last 64
+            // asked for. An older one is the theme's to keep (drawn
+            // again, it is made again) or to let go.
             fields.tables += 1;
             let at = fields.tables;
             tables.raw_seti(at, t.clone())?;
-            if fields.asked.len() < 64 {
-                fields.asked.push((key, at));
+            fields.asked.push((key, at));
+            if fields.asked.len() > ASKED {
+                let (_, gone) = fields.asked.remove(0);
+                tables.raw_seti(gone, Value::Nil)?;
             }
             Ok(t)
         })?,
@@ -272,20 +360,18 @@ pub(crate) fn draw_field(
     };
     let data = buffer("data", true)?;
     let next = buffer("next", false)?;
-    // The ramp: a table `gmnb.ramp` made. One made past the count has no
-    // number, and colours nothing.
-    let ramp = match spec.raw_get::<Value>("ramp")? {
-        Value::Table(t) => match t.raw_get::<Value>("id")? {
-            Value::Nil => None,
-            v => {
-                let n = finite(what, &v)?;
-                let fields = shared.fields.borrow();
-                let found = (n.fract() == 0.0 && n >= 1.0)
-                    .then(|| fields.ramps.get(n as usize - 1).cloned())
-                    .flatten();
-                Some(found.ok_or_else(|| bad(what, "`ramp` is not a ramp of this theme"))?)
+    // The ramp: a table `gmnb.ramp` made, known by its number.
+    let (ramp_id, ramp) = match spec.raw_get::<Value>("ramp")? {
+        Value::Table(t) => {
+            let n = match t.raw_get::<Value>("id")? {
+                Value::Nil => return Err(bad(what, "`ramp` is not a ramp of this theme")),
+                v => finite(what, &v)?,
+            };
+            if n.fract() != 0.0 || n < 1.0 {
+                return Err(bad(what, "`ramp` is not a ramp of this theme"));
             }
-        },
+            (n as u64, ramp_of(shared, what, n as u64, &t)?)
+        }
         _ => return Err(bad(what, "`ramp` is a ramp made by gmnb.ramp")),
     };
 
@@ -317,7 +403,7 @@ pub(crate) fn draw_field(
         ));
         return Ok(());
     }
-    let (Some(ramp), Some(data)) = (ramp, data) else {
+    let Some(data) = data else {
         return Ok(());
     };
     if rect[2] <= 0.0 || rect[3] <= 0.0 {
@@ -330,6 +416,7 @@ pub(crate) fn draw_field(
     let asked = Asked {
         values,
         shape: (cols, rows, channels),
+        ramp_id,
         ramp,
         scale: scale.to_bits(),
         offset: offset.to_bits(),
@@ -410,6 +497,7 @@ pub(crate) fn draw_field(
             width,
             height,
             pixels: Bytes::new(pixels),
+            ramp: asked.ramp.clone(),
         });
         fields.last.insert((layer, slot), (asked, picture.clone()));
         Some(picture)
