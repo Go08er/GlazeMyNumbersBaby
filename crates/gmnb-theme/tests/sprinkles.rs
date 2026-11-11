@@ -370,8 +370,8 @@ fn sprinkles_loads_and_returns_only_known_keys() {
                         "{path}"
                     );
                 }
-                // The awning is the wall's picture and thins with it; on
-                // a see-through window the header has a card of its own.
+                // The awning is the background layer's at full opacity; on a
+                // see-through window (0.5, 0.1) the header is the awning itself.
                 let header = s.fill("header.background");
                 let shows = header.samples_over([0.0, 0.0, 0.0, 0.0])[0][3];
                 assert_eq!(shows, if opacity < 1.0 { 1.0 } else { 0.0 });

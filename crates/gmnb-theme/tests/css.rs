@@ -1643,9 +1643,9 @@ fn swirls_unreadable_over_the_field(cases: &[Swirl]) -> Vec<String> {
     } in cases
     {
         let all = {
-            let mut all = page_pairs(&style, true);
-            all.extend(chrome_pairs(&style));
-            all.extend(pairs(&style, true));
+            let mut all = page_pairs(style, true);
+            all.extend(chrome_pairs(style));
+            all.extend(pairs(style, true));
             all
         };
         // What the figures lie on: the readout; a converter's field, at
