@@ -3,6 +3,8 @@
 //! previews, pictures, and the built-in themes' layers in the real engine
 //! (docs/theming.md, "Drawing" and "Limits").
 
+mod common;
+
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -1824,7 +1826,7 @@ fn built_in(id: &str, limits: Limits) -> Theme {
 
 #[test]
 fn mono_has_no_layers() {
-    let theme = built_in("mono", Limits::default());
+    let theme = built_in("mono", common::limits());
     assert!(theme.def.layers.is_empty());
     assert!(theme.hooks().is_empty());
     for kind in LayerKind::ALL {
@@ -1882,7 +1884,7 @@ fn median(mut times: Vec<f64>) -> f64 {
 /// taking the processor away for a while fails nothing here.)
 #[test]
 fn auroras_layers_draw_within_their_limits() {
-    let theme = built_in("aurora", Limits::default());
+    let theme = built_in("aurora", common::limits());
     assert_eq!(
         theme
             .hooks()
