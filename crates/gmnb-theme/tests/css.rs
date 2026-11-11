@@ -1290,7 +1290,7 @@ fn auroras_palettes_stay_readable() {
 
 /// Swirls' sets of bands and strengths of glass: every value of the two
 /// options of its that change a colour (System here on a desktop that
-/// shares no accent, Freestyle in its own colours; `swirls_own_styles`
+/// shares no accent, Freestyle in its own colours; `swirls_own_cases`
 /// has them in many more).
 const SWIRLS_BANDS: [&str; 8] = [
     "party", "lava", "lagoon", "orchid", "absinthe", "marble", "system", "custom",
@@ -1319,13 +1319,9 @@ fn swirls_styles() -> Vec<(String, Style)> {
 /// each: with its complement over a dark band of the next colour, and the
 /// colour three times over. Under each of `glasses`, at each of
 /// `opacities`.
-fn swirls_own_styles(
-    colours: &[[f32; 3]],
-    glasses: &[&str],
-    opacities: &[f32],
-) -> Vec<(String, Style)> {
+fn swirls_own_cases(colours: &[[f32; 3]], glasses: &[&str], opacities: &[f32]) -> Vec<Swirl> {
     let mut out = Vec::new();
-    let mut swirls = built_in("swirls");
+    let (mut swirls, clock) = swirls_on_a_clock();
     let hex = |c: [f32; 3]| appcore::color::to_hex(c);
     for &opacity in opacities {
         for &glass in glasses {
@@ -1337,10 +1333,8 @@ fn swirls_own_styles(
                     &[("bands", text("system")), ("glass", text(glass))],
                 );
                 ctx.accent = Some(c);
-                out.push((
-                    format!("swirls system {} {glass} {opacity}", hex(c)),
-                    swirls.style(&ctx).unwrap().style.clone(),
-                ));
+                let name = format!("swirls system {} {glass} {opacity}", hex(c));
+                out.push(swirl(&mut swirls, &clock, name, &ctx));
                 let next = colours[(i + 1) % colours.len()];
                 for [first, second, dark] in [[c, appcore::color::complement(c), next], [c, c, c]] {
                     let ctx = with(
@@ -1355,15 +1349,13 @@ fn swirls_own_styles(
                             ("paint_dark", text(&hex(dark))),
                         ],
                     );
-                    out.push((
-                        format!(
-                            "swirls freestyle {} {} {} {glass} {opacity}",
-                            hex(first),
-                            hex(second),
-                            hex(dark)
-                        ),
-                        swirls.style(&ctx).unwrap().style.clone(),
-                    ));
+                    let name = format!(
+                        "swirls freestyle {} {} {} {glass} {opacity}",
+                        hex(first),
+                        hex(second),
+                        hex(dark)
+                    );
+                    out.push(swirl(&mut swirls, &clock, name, &ctx));
                 }
             }
         }
@@ -1420,23 +1412,137 @@ fn swirls_is_dark_in_both_modes() {
     }
 }
 
-/// Every colour Swirls' field can show for the bands a style names: the
-/// whole table of its ramp, as the app makes it (`gmnb_media::Ramp`), the
-/// first band's entries first. `tests/swirls.rs` holds the theme's layers
-/// to it: every pixel they draw, stirred or still, is one of these.
-fn swirls_field_colours(style: &Style) -> Vec<Rgba> {
-    let Some(Paint::Gradient(g)) = style.fill("window.background").0.first().cloned() else {
-        panic!("Swirls' window.background is a gradient of its three bands");
-    };
-    let [a, ground, b] = g.colors[..] else {
-        panic!("three bands, not {}", g.colors.len());
-    };
-    let ramp = gmnb_media::Ramp::new(&[a, b, ground], [0.08, 0.92], true).unwrap();
-    (0..3 * 256)
+/// One look of Swirls: its style, and the colours its paint can show,
+/// taken from what its background layer draws.
+#[derive(Clone)]
+struct Swirl {
+    name: String,
+    style: Style,
+    /// Every entry of the ramp the paint is coloured through (on a
+    /// see-through window, the paint thinned: each with its opacity), the
+    /// first band's first. Its layer is drawn at full strength
+    /// (`fade = false`), in no group of its own, and over nothing on a
+    /// see-through window (`window.background` is clear there), so this is
+    /// what lies over the desktop. `tests/swirls.rs` holds the layers to it:
+    /// every pixel they draw, stirred or still, is one of these.
+    field: Vec<Rgba>,
+    /// What the figures are painted in: the first band of the bands
+    /// themselves, solid at any opacity.
+    figures: Vec<Rgba>,
+}
+
+/// Every entry of `ramp`'s table, its colour and its opacity.
+fn entries(ramp: &gmnb_media::Ramp) -> Vec<Rgba> {
+    (0..ramp.colors() * 256)
         .map(|k| {
-            let [r, g, b, _] = ramp.at((k as f32 + 0.5) / 256.0);
-            [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+            let [r, g, b, a] = ramp.at((k as f32 + 0.5) / 256.0);
+            let a = a as f32 / 255.0;
+            let straight = |c: u8| {
+                if a > 0.0 {
+                    (c as f32 / 255.0 / a).min(1.0)
+                } else {
+                    0.0
+                }
+            };
+            [straight(r), straight(g), straight(b), a]
         })
+        .collect()
+}
+
+/// The ramp Swirls' background is drawn through for `ctx`, drawn on a
+/// clock of its own (the fields' allowance runs on it); the field in no
+/// opacity group, as the paint's own opacity is all its thinning.
+fn paint_ramp(
+    theme: &Theme,
+    ctx: &Ctx,
+    clock: &std::rc::Rc<std::cell::Cell<f64>>,
+) -> std::rc::Rc<gmnb_media::Ramp> {
+    use gmnb_theme::draw::Op;
+    use gmnb_theme::layer::{Frame, LayerKind};
+    clock.set(clock.get() + 1.0);
+    assert!(
+        theme.def.layers["background"].unfaded,
+        "Swirls' paint thins itself"
+    );
+    let drawn = theme
+        .draw(LayerKind::Background, ctx, &Frame::sized(360.0, 600.0))
+        .unwrap_or_else(|_| panic!("the background didn't draw"));
+    let mut ramps = Vec::new();
+    for op in &drawn.list.ops {
+        match op {
+            Op::PushOpacity(_) => panic!("the paint is thinned in a group"),
+            Op::Field { picture, .. } => ramps.push(picture.ramp.clone()),
+            _ => {}
+        }
+    }
+    assert_eq!(ramps.len(), 1);
+    ramps.remove(0)
+}
+
+/// Swirl for `ctx`: its style, its paint and its figures.
+fn swirl(
+    theme: &mut Theme,
+    clock: &std::rc::Rc<std::cell::Cell<f64>>,
+    name: String,
+    ctx: &Ctx,
+) -> Swirl {
+    let style = theme.style(ctx).unwrap().style.clone();
+    if ctx.opacity < 1.0 {
+        let clear = style.fill("window.background").samples_over([0.0; 4]);
+        assert!(
+            clear.iter().all(|c| c[3] == 0.0),
+            "{name}: something under the paint"
+        );
+    }
+    let field = entries(&paint_ramp(theme, ctx, clock));
+    let whole = Ctx {
+        opacity: 1.0,
+        ..ctx.clone()
+    };
+    let figures = entries(&paint_ramp(theme, &whole, clock))[..256].to_vec();
+    assert!(
+        figures.iter().all(|c| c[3] == 1.0),
+        "{name}: figures not solid"
+    );
+    Swirl {
+        name,
+        style,
+        field,
+        figures,
+    }
+}
+
+/// Swirls, with a clock for its fields.
+fn swirls_on_a_clock() -> (Theme, std::rc::Rc<std::cell::Cell<f64>>) {
+    let theme = built_in("swirls");
+    let clock = std::rc::Rc::new(std::cell::Cell::new(100.0));
+    let read = clock.clone();
+    theme.api().set_clock(std::rc::Rc::new(move || read.get()));
+    (theme, clock)
+}
+
+/// `swirls_styles`, with their paint: every set of bands under every
+/// glass at `opacities`.
+fn swirls_cases(opacities: &[f32], glasses: &[&str]) -> Vec<Swirl> {
+    let (mut swirls, clock) = swirls_on_a_clock();
+    let mut out = Vec::new();
+    for &opacity in opacities {
+        for bands in SWIRLS_BANDS {
+            for &glass in glasses {
+                let options = [("bands", text(bands)), ("glass", text(glass))];
+                let ctx = with(&swirls, true, opacity, &options);
+                let name = format!("swirls {bands} {glass} {opacity}");
+                out.push(swirl(&mut swirls, &clock, name, &ctx));
+            }
+        }
+    }
+    out
+}
+
+fn named(cases: &[Swirl]) -> Vec<(String, Style)> {
+    cases
+        .iter()
+        .map(|c| (c.name.clone(), c.style.clone()))
         .collect()
 }
 
@@ -1452,7 +1558,22 @@ fn swirls_field_colours(style: &Style) -> Vec<Rgba> {
 /// result, over every colour of the field.
 #[test]
 fn swirls_texts_read_over_every_colour_of_the_field() {
-    let bad = swirls_unreadable_over_the_field(swirls_styles());
+    let bad = swirls_unreadable_over_the_field(&swirls_cases(&[1.0, 0.5, 0.1], &SWIRLS_GLASS));
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// The paint thins with the window's opacity all the way down, and the
+/// glass with it: so the same at every twentieth from 0.1 to 1, in every
+/// set of bands under the clearest glass (the others are only ever
+/// stronger), every pair of the table, the figures and the focus ring over
+/// every colour of the field.
+#[test]
+fn swirls_reads_at_every_opacity() {
+    let opacities: Vec<f32> = (2..=20).map(|step| step as f32 / 20.0).collect();
+    let cases = swirls_cases(&opacities, &["clear"]);
+    let mut bad = swirls_unreadable_over_the_field(&cases);
+    bad.extend(swirls_rings_unreadable_over_the_field(&cases));
+    bad.extend(unreadable(named(&cases)));
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
 
@@ -1464,10 +1585,10 @@ fn swirls_texts_read_over_every_colour_of_the_field() {
 #[test]
 fn swirls_own_colours_read_over_every_colour_of_the_field() {
     let extremes = EXTREMES.map(|(_, hex)| appcore::color::hex(hex));
-    let styles = swirls_own_styles(&extremes, &SWIRLS_GLASS, &[1.0, 0.5, 0.1]);
-    let mut bad = swirls_unreadable_over_the_field(styles.clone());
-    bad.extend(unreadable(styles.clone()));
-    bad.extend(swirls_rings_unreadable_over_the_field(styles));
+    let cases = swirls_own_cases(&extremes, &SWIRLS_GLASS, &[1.0, 0.85, 0.5, 0.15, 0.1]);
+    let mut bad = swirls_unreadable_over_the_field(&cases);
+    bad.extend(unreadable(named(&cases)));
+    bad.extend(swirls_rings_unreadable_over_the_field(&cases));
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
 
@@ -1494,16 +1615,33 @@ fn swirls_under_any_accent_read_over_every_colour_of_the_field() {
             .wrapping_add(1442695040888963407);
         colours.push(appcore::color::hex(((seed >> 33) & 0xff_ffff) as u32));
     }
-    let styles = swirls_own_styles(&colours, &["clear"], &[1.0, 0.1]);
-    let mut bad = swirls_unreadable_over_the_field(styles.clone());
-    bad.extend(swirls_rings_unreadable_over_the_field(styles));
+    let cases = swirls_own_cases(&colours, &["clear"], &[1.0, 0.5, 0.1]);
+    let mut bad = swirls_unreadable_over_the_field(&cases);
+    bad.extend(swirls_rings_unreadable_over_the_field(&cases));
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
 
-fn swirls_unreadable_over_the_field(styles: Vec<(String, Style)>) -> Vec<String> {
+/// What a colour of the field shows as: itself on an opaque window, and
+/// on a see-through one laid over the desktop (nothing else is under it).
+fn shown(colour: Rgba, desktop: Option<Rgba>) -> Rgba {
+    match desktop {
+        None => {
+            assert_eq!(colour[3], 1.0, "the paint is solid on an opaque window");
+            colour
+        }
+        Some(d) => over(colour, d),
+    }
+}
+
+fn swirls_unreadable_over_the_field(cases: &[Swirl]) -> Vec<String> {
     let mut bad = Vec::new();
-    for (name, style) in styles {
-        let colours = swirls_field_colours(&style);
+    for Swirl {
+        name,
+        style,
+        field: colours,
+        figures,
+    } in cases
+    {
         let all = {
             let mut all = page_pairs(&style, true);
             all.extend(chrome_pairs(&style));
@@ -1547,11 +1685,7 @@ fn swirls_unreadable_over_the_field(styles: Vec<(String, Style)>) -> Vec<String>
             let mut worst_of = vec![(f32::INFINITY, 0usize); all.len()];
             let mut worst_figure = vec![(f32::INFINITY, 0usize); under_figures.len()];
             for (k, colour) in colours.iter().enumerate() {
-                let shown = match desktop {
-                    None => *colour,
-                    Some(d) => over(alpha(*colour, style.opacity), *d),
-                };
-                let behind = [shown; 3];
+                let behind = [shown(*colour, *desktop); 3];
                 for (i, (_, text, _, fills)) in all.iter().enumerate() {
                     let fills: Vec<&Fill> = fills.iter().collect();
                     let got = worst(*text, &fills, &behind);
@@ -1562,7 +1696,7 @@ fn swirls_unreadable_over_the_field(styles: Vec<(String, Style)>) -> Vec<String>
                 for (i, (_, fills)) in under_figures.iter().enumerate() {
                     let fills: Vec<&Fill> = fills.iter().collect();
                     // (Every eighth of the first band's entries, and its last.)
-                    for figure in colours[..256].iter().step_by(8).chain(&colours[255..256]) {
+                    for figure in figures.iter().step_by(8).chain(&figures[255..256]) {
                         let got = worst(*figure, &fills, &behind);
                         if got < worst_figure[i].0 {
                             worst_figure[i] = (got, k);
@@ -1758,13 +1892,17 @@ fn rings_unreadable(styles: Vec<(String, Style)>) -> Vec<String> {
 /// every glass, opaque and see-through.
 #[test]
 fn swirls_focus_ring_reads_over_every_colour_of_the_field() {
-    let styles = swirls_styles();
-    let bad = swirls_rings_unreadable_over_the_field(styles.clone());
+    let cases = swirls_cases(&[1.0, 0.5, 0.1], &SWIRLS_GLASS);
+    let bad = swirls_rings_unreadable_over_the_field(&cases);
     // The gold alone vanishes on the gold paint: what reads is its edge.
-    // (So in the design's own sets. In one's own the ring may have been
-    // lifted off the first band, and then it reads alone as well.)
-    for (name, style) in styles {
-        if name.contains("system") || name.contains("custom") {
+    // (So in the design's own sets, on an opaque window. In one's own the
+    // ring may have been lifted off the first band, and then it reads alone
+    // as well.)
+    for Swirl {
+        name, style, field, ..
+    } in &cases
+    {
+        if name.contains("system") || name.contains("custom") || style.opacity < 1.0 {
             continue;
         }
         let Some(Value::FocusRing(ring)) = style.get("focus") else {
@@ -1774,7 +1912,7 @@ fn swirls_focus_ring_reads_over_every_colour_of_the_field() {
             edge: None,
             ..*ring
         };
-        let got = gmnb_theme::focus::worst(&bare, &swirls_field_colours(&style), false);
+        let got = gmnb_theme::focus::worst(&bare, field, false);
         assert!(
             got < 1.5,
             "{name}: the bare ring reads ({got:.2}): the edge isn't tested"
@@ -1783,26 +1921,22 @@ fn swirls_focus_ring_reads_over_every_colour_of_the_field() {
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
 
-/// Rule 5 for each Swirls style over every colour of its field, opaque or
-/// see-through over a black and a white desktop: what fails.
-fn swirls_rings_unreadable_over_the_field(styles: Vec<(String, Style)>) -> Vec<String> {
+/// Rule 5 for each look of Swirls over every colour of its field, opaque
+/// or see-through over a black and a white desktop: what fails.
+fn swirls_rings_unreadable_over_the_field(cases: &[Swirl]) -> Vec<String> {
     let mut bad = Vec::new();
-    for (name, style) in styles {
-        let colours = swirls_field_colours(&style);
+    for Swirl {
+        name, style, field, ..
+    } in cases
+    {
         let desktops: &[Option<Rgba>] = if style.opacity >= 1.0 {
             &[None]
         } else {
             &[Some(BLACK), Some(WHITE)]
         };
         for desktop in desktops {
-            let behind: Vec<Rgba> = colours
-                .iter()
-                .map(|c| match desktop {
-                    None => *c,
-                    Some(d) => over(alpha(*c, style.opacity), *d),
-                })
-                .collect();
-            bad.extend(rings_read(&format!("{name} {desktop:?}"), &style, &behind));
+            let behind: Vec<Rgba> = field.iter().map(|c| shown(*c, *desktop)).collect();
+            bad.extend(rings_read(&format!("{name} {desktop:?}"), style, &behind));
         }
     }
     bad

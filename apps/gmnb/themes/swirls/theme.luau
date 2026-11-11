@@ -16,6 +16,8 @@
 --                 type, and carries a ripple out from every result
 --   the digits    are cut out of the same paint, without its black
 --   the keypad    swirls into place
+--   see-through   the dark band clears first, and the paint is ribbons of
+--                 its bright bands over the desktop, under the same glass
 --
 -- The file reads top to bottom:
 --   1. Colours     the six sets of bands, and two of your own
@@ -266,11 +268,32 @@ local function bands_for(id: string, ctx: Ctx): Bands
 	return BANDS[id]
 end
 
+-- A see-through window. The paint thins itself (its layer says
+-- `fade = false`, and is drawn at full strength over the desktop): its
+-- dark band clears first, so that from half opacity down the desktop shows
+-- clear between ribbons of the two bright bands, and they keep much of
+-- their colour to the end (two fifths at 0.1). The glass keys and panels stay,
+-- as strong as the text on them needs over whatever shows through. Both
+-- move smoothly with the slider, and are the paint as it was at 1.
+-- Returns how opaque the bright bands are, and the dark one.
+local function thinned(opacity: number): (number, number)
+	local function smooth(t: number): number
+		t = clamp(t, 0, 1)
+		return t * t * (3 - 2 * t)
+	end
+	return 0.4 + 0.6 * smooth((opacity - 0.1) / 0.9), smooth((opacity - 0.5) / 0.5)
+end
+
 -- A set of bands, and everything worked out from it.
 type Scheme = {
 	id: string,
-	-- The ramp its paint and its figures are coloured through.
+	-- The ramp its paint is coloured through (on a see-through window, the
+	-- paint thinned), and the one its figures and tiles are: the bands
+	-- themselves.
 	ramp: Ramp,
+	figure_ramp: Ramp,
+	-- How far the dark band has cleared: 0 on an opaque window.
+	cleared: number,
 	a: Rgba,
 	b: Rgba,
 	ground: Rgba,
@@ -305,16 +328,33 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 	local lift = mix(mix(ground, b, 0.08), fg, 0.07)
 	local colours = { a, b, ground }
 
-	-- What the field shows as: itself, or on a see-through window what is
-	-- left of it over a black desktop and over a white one.
+	-- What the field shows as: itself, or on a see-through window the paint
+	-- as it thins (`thinned`), each band at its own opacity and the blends
+	-- between two as the ramp makes them (colour and opacity blended
+	-- together), over a black desktop and over a white one. (Glass is dark
+	-- and the inks light: the brightest of these is what matters, and a
+	-- blend is between its ends.)
+	local bright, dark = thinned(opacity)
 	local backs: { Rgba } = {}
 	if opacity >= 1 then
 		backs = colours
 	else
+		local ends: { { color: Rgba, opacity: number } } = {
+			{ color = a, opacity = bright },
+			{ color = b, opacity = bright },
+			{ color = ground, opacity = dark },
+		}
 		for _, desktop in { black, white } do
-			for _, band in colours do
-				table.insert(backs, over(alpha(band, opacity), desktop))
+			for i, from in ends do
+				local to = ends[i % 3 + 1]
+				for _, t in { 0, 0.25, 0.5, 0.75 } do
+					local c = mix(from.color, to.color, t)
+					table.insert(backs, over(alpha(c, from.opacity + (to.opacity - from.opacity) * t), desktop))
+				end
 			end
+			-- And the desktop itself: what shows where the dark band has
+			-- cleared, and everywhere if the paint is ever not drawn.
+			table.insert(backs, desktop)
 		end
 	end
 
@@ -387,9 +427,22 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 		series[i] = legible(c, on_panel, UI * 1.05)
 	end
 
+	-- The paint's ramp: the bands themselves, or thinned.
+	local whole = RAMPS[id] or ramp_of(set)
+	local paint = whole
+	if opacity < 1 then
+		paint = gmnb.ramp({
+			colors = { alpha(a, bright), alpha(b, bright), alpha(ground, dark) },
+			edge = { 0.08, 0.92 },
+			cycle = true,
+		})
+	end
+
 	return {
 		id = id,
-		ramp = RAMPS[id] or ramp_of(set),
+		ramp = paint,
+		figure_ramp = whole,
+		cleared = 1 - dark,
 		a = a,
 		b = b,
 		ground = ground,
@@ -487,9 +540,10 @@ local function style(ctx: Ctx): Style
 	local pane = alpha(ground, s.glass)
 	local raised = alpha(lift, s.glass)
 	local slab = alpha(ground, s.panel)
-	-- The design's lines: its cyan at 0.6 around a panel, fainter round a key.
+	-- The design's lines: its cyan at 0.6 around a panel, fainter round a
+	-- key (a little less faint as the paint clears from behind the keys).
 	local line = alpha(b, 0.6)
-	local hair = alpha(b, 0.3)
+	local hair = alpha(b, 0.3 + 0.25 * s.cleared)
 	local on_a = ground
 	-- The design's shadow under a panel: 0 8px 32px #01060955.
 	local drop: Shadow = { y = 8, blur = 32, color = alpha(ground, 0.33) }
@@ -611,8 +665,9 @@ local function style(ctx: Ctx): Style
 
 		window = {
 			-- Under the field, which covers it: the design's own backdrop, its
-			-- three bands on a slant.
-			background = gmnb.linear({ angle = 135, colors = { a, ground, b } }),
+			-- three bands on a slant. On a see-through window nothing: the
+			-- thinned paint is all there is between the desktop and the glass.
+			background = if see then gmnb.transparent else gmnb.linear({ angle = 135, colors = { a, ground, b } }),
 			color = fg,
 			font = sans(system.size),
 			text_halo = halo,
@@ -1831,7 +1886,7 @@ local function display(draw: Draw, frame: Frame): Again
 		cols = cols,
 		rows = rows,
 		channels = 1,
-		ramp = s.ramp,
+		ramp = s.figure_ramp,
 	})
 	if kind == "result" then
 		-- The figures land white-hot, and cool into their paint.
@@ -1868,15 +1923,17 @@ local function tile_swirl(draw: Draw, w: number, h: number, ramp: Ramp)
 end
 
 -- A set of bands: its swirl, and a key of its glass with its equals sign.
+-- (The bands alone, and their own ramp: a tile is drawn in a tenth of the
+-- time a style may take, and needs no glass worked out.)
 local function bands_tile(draw: Draw, frame: Preview, choice: string)
 	local id = bands_id(choice)
-	local s = scheme_for(id, frame.ctx)
+	local set = bands_for(id, frame.ctx)
 	local w, h = frame.width, frame.height
 	draw:push_clip(0, 0, w, h, RADIUS)
-	tile_swirl(draw, w, h, s.ramp)
-	draw:rounded_rect(w - 40, h - 30, 30, 20, 6, s.a)
-	draw:rect(w - 31, h - 23, 12, 2, s.ground)
-	draw:rect(w - 31, h - 19, 12, 2, s.ground)
+	tile_swirl(draw, w, h, RAMPS[id] or ramp_of(set))
+	draw:rounded_rect(w - 40, h - 30, 30, 20, 6, set.a)
+	draw:rect(w - 31, h - 23, 12, 2, set.ground)
+	draw:rect(w - 31, h - 19, 12, 2, set.ground)
 	draw:pop()
 end
 
@@ -1887,7 +1944,7 @@ local function glass_tile(draw: Draw, frame: Preview, choice: string)
 	-- (As strong as it would be: the strength named, or what the text needs.)
 	local strength = max(STRENGTH[choice] or SMOKED, s.least)
 	draw:push_clip(0, 0, w, h, RADIUS)
-	tile_swirl(draw, w, h, s.ramp)
+	tile_swirl(draw, w, h, s.figure_ramp)
 	draw:rounded_rect(14, 10, w - 28, h - 20, 8, alpha(s.lift, strength))
 	draw:border(14, 10, w - 28, h - 20, 8, 1, alpha(s.b, 0.5))
 	local tw, th = draw:text_size("7", { size = 20, weight = 500 })
@@ -2371,7 +2428,7 @@ local theme: Theme = {
 	sounds = sounds,
 	sound = sound,
 	layers = {
-		background = { draw = background, events = { press = STIR_LIFE, result = 2.5, error = STIR_LIFE, mode = STIR_LIFE, option = STIR_LIFE } },
+		background = { draw = background, fade = false, events = { press = STIR_LIFE, result = 2.5, error = STIR_LIFE, mode = STIR_LIFE, option = STIR_LIFE } },
 		keypad = { draw = keypad, place = place, events = { show = 1.6 } },
 		display = { draw = display },
 	},

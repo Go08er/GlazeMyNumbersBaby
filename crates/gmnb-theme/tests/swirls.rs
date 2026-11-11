@@ -597,6 +597,89 @@ fn own_colours_paint_in_their_own_ramp() {
     assert!(notes.is_empty(), "{notes:?}");
 }
 
+/// On a see-through window the paint thins itself: the layer is drawn at
+/// full strength (`fade = false`), in no group, through a ramp whose dark
+/// band clears first (gone from 0.5 down) while the bright ones keep two
+/// fifths of their colour at 0.1; every pixel it draws is of that ramp.
+/// At full opacity it is the bands' own ramp. The figures stay solid, in
+/// the bands' own first band. And each twentieth is a little further on
+/// than the one before: the slider moves through the looks smoothly.
+#[test]
+fn the_paint_thins_itself_on_a_see_through_window() {
+    let theme = swirls();
+    assert!(theme.def.layers["background"].unfaded);
+    let mut c = ctx(&theme, &[]);
+    let solid = table(&mut swirls(), &c);
+    let first: HashSet<[u8; 4]> = solid[..256].iter().copied().collect();
+    let mut last: Option<(f32, f32)> = None;
+    for step in (2..=20).rev() {
+        c.opacity = step as f32 / 20.0;
+        let k = 20 - step;
+        let f = Frame {
+            time: k as f64,
+            ..Frame::sized(360.0, 600.0)
+        };
+        let d = draw_at(&theme, LayerKind::Background, &c, &f);
+        assert!(!d.list.ops.iter().any(|op| matches!(op, Op::PushOpacity(_))));
+        let (picture, _) = field(&d);
+        let ramp = &picture.ramp;
+        let table: HashSet<[u8; 4]> = (0..3 * 256)
+            .map(|k| ramp.at((k as f32 + 0.5) / 256.0))
+            .collect();
+        let strays: Vec<_> = picture
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| !table.contains(*p))
+            .take(5)
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "{}: not of its ramp: {strays:?}",
+            c.opacity
+        );
+        // The bands' own opacity: the first's, and the dark one's, each where
+        // it is alone.
+        let bright = ramp.at(0.5 / 256.0)[3] as f32 / 255.0;
+        let dark = ramp.at(2.0 + 0.5 / 256.0)[3] as f32 / 255.0;
+        if c.opacity == 1.0 {
+            let own: Vec<[u8; 4]> = (0..3 * 256)
+                .map(|k| ramp.at((k as f32 + 0.5) / 256.0))
+                .collect();
+            assert_eq!(own, solid);
+        }
+        if c.opacity <= 0.5 {
+            assert_eq!(dark, 0.0, "{}", c.opacity);
+        }
+        assert!(bright >= 0.39, "{}: {bright}", c.opacity);
+        if let Some((was_bright, was_dark)) = last {
+            assert!(bright <= was_bright && dark <= was_dark, "{}", c.opacity);
+        }
+        last = Some((bright, dark));
+        // The figures: solid, of the bands' own first band.
+        let (now, old) = (glyphs(9, 80.0), glyphs(4, 250.0));
+        let f = Frame {
+            time: k as f64 + 0.5,
+            value: Some(value(&now, &old, Role::Calculator, false, None)),
+            ..Frame::sized(428.0, 116.0)
+        };
+        let d = draw_at(&theme, LayerKind::Display, &c, &f);
+        let figures: HashSet<[u8; 4]> = field(&d)
+            .0
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .copied()
+            .collect();
+        let strays: Vec<_> = figures.difference(&first).take(5).collect();
+        assert!(strays.is_empty(), "{}: figures {strays:?}", c.opacity);
+    }
+    let notes = theme.take_draw_notes();
+    assert!(notes.is_empty(), "{notes:?}");
+}
+
 /// The background at every size a window may have, from the least to a
 /// 4K screen: the grid stays within its caps, a frame within its time
 /// (first frame, a new snapshot, and a frame with the paint disturbed
