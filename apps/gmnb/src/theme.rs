@@ -714,10 +714,7 @@ impl Hub {
             (voice.listening(), voice.subtitle())
         };
         self.layers.set_heard(listening);
-        let subs = std::mem::take(&mut *self.sound_subscribers.borrow_mut());
-        let mut keep: Vec<SoundSubscriber> = subs.into_iter().filter(|f| f(&subtitle)).collect();
-        keep.append(&mut self.sound_subscribers.borrow_mut());
-        *self.sound_subscribers.borrow_mut() = keep;
+        tell_and_prune(&self.sound_subscribers, &subtitle);
     }
 
     /// Call `f` with what Settings says of sound, now and whenever it
@@ -727,7 +724,12 @@ impl Hub {
         widget: &W,
         f: impl Fn(&W, &str) + 'static,
     ) {
-        f(widget, &self.sound.borrow().subtitle());
+        let subtitle = self.sound.borrow().subtitle();
+        f(widget, &subtitle);
+        // Those whose widgets have gone are let go first (each live one
+        // told the text it already shows): Settings opened and closed again
+        // and again otherwise grew the list by one each time.
+        tell_and_prune(&self.sound_subscribers, &subtitle);
         let weak = widget.downgrade();
         self.sound_subscribers
             .borrow_mut()
@@ -1458,8 +1460,40 @@ pub fn options_from_env(value: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Tells every sound subscriber `text`, and lets go of those whose widget
+/// has gone (they answer false). A subscriber that subscribes another while
+/// being told is kept too.
+fn tell_and_prune(subscribers: &RefCell<Vec<SoundSubscriber>>, text: &str) {
+    let subs = std::mem::take(&mut *subscribers.borrow_mut());
+    let mut keep: Vec<SoundSubscriber> = subs.into_iter().filter(|f| f(text)).collect();
+    keep.append(&mut subscribers.borrow_mut());
+    *subscribers.borrow_mut() = keep;
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// Settings' sound row subscribes each time Settings opens; a closed
+    /// Settings' row is let go the next time one subscribes, not only when
+    /// sound changes (the list grew by one an opening).
+    #[test]
+    fn sound_subscribers_whose_widgets_are_gone_are_let_go() {
+        let subs: RefCell<Vec<SoundSubscriber>> = RefCell::default();
+        let told = Rc::new(Cell::new(0));
+        for i in 0..50 {
+            // Every row but the last has gone by the next opening.
+            let alive = i == 49;
+            let told = told.clone();
+            subs.borrow_mut().push(Box::new(move |_| {
+                told.set(told.get() + 1);
+                alive
+            }));
+            tell_and_prune(&subs, "Theme sounds");
+            assert!(subs.borrow().len() <= 1, "{} kept", subs.borrow().len());
+        }
+        assert_eq!(subs.borrow().len(), 1);
+        assert!(told.get() >= 50);
+    }
     use super::*;
 
     #[test]
