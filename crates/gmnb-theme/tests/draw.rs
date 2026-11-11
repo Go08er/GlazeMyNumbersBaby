@@ -2138,9 +2138,10 @@ fn auroras_layers_draw_within_their_limits() {
         ..Frame::sized(760.0, 640.0)
     };
     let pulsing = ok(theme.draw(LayerKind::Background, &living, &f));
-    // A number key's pulse is one ray, drawn into the aurora's mask.
+    // A number key's pulse is one ray, drawn into the aurora's mask; and
+    // while one plays, thirty pictures a second.
     assert_eq!(pulsing.list.ops.len(), standing + 13);
-    assert_eq!(pulsing.again, Some(0.0));
+    assert_eq!(pulsing.again, Some(0.032));
     let mut times = Vec::new();
     for _ in 0..200 {
         let t = Instant::now();

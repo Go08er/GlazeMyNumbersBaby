@@ -1650,8 +1650,12 @@ local SHOWN_RATE = 15
 local FIELD_RATE = 3
 local SHOWN_PER_FIELD = SHOWN_RATE / FIELD_RATE
 local DRIFT_FRAME = 0.066
--- How long a pulse lasts, in seconds.
+-- How long a pulse lasts, in seconds; and how long till its next picture:
+-- thirty a second. (A soft light needs no more, and every picture of the
+-- background is a picture of the whole window. A little under a thirtieth,
+-- so that the app draws it on the screen's own frames, every other one.)
 local PULSE_LIFE = 1.15
+local PULSE_FRAME = 0.032
 
 -- About as many points as a field may have, in cells half again as tall
 -- as wide (rays are thin and stand upright), none narrower than 3 px: a
@@ -1991,8 +1995,8 @@ end
 -- stands, and never anything brighter.
 local function pulse_at(draw: Draw, w: number, h: number, x: number, y: number, strength: number, reach: number, age: number)
 	local life = age / PULSE_LIFE
-	-- It comes up over three frames instead of popping in.
-	local rise = ease.out_quad(min(age / 0.05, 1))
+	-- It comes up over two frames instead of popping in.
+	local rise = ease.out_quad(min(age / 0.06, 1))
 	local grown = ease.out_cubic(life)
 	local a = min((1 - life) ^ 1.6 * 0.6 * strength * rise, 1)
 	-- An ellipse standing on the point.
@@ -2127,10 +2131,10 @@ local function background(draw: Draw, frame: Frame): Again
 		draw:pop()
 	end
 
-	-- Every frame while a pulse plays; fifteen a second while it only
+	-- Thirty times a second while a pulse plays; fifteen while it only
 	-- drifts; and not at all when it stands still.
 	if pulsing then
-		return 0
+		return PULSE_FRAME
 	elseif living then
 		return DRIFT_FRAME
 	end

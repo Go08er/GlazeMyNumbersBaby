@@ -1721,9 +1721,12 @@ itself, takes seconds a frame at the cap for blurs and shadows.)
 
 The built-in themes' busiest frames, at rest and mid-animation (their
 tests assert it, Swirls' at every size from 300 × 400 to 3840 × 2160):
-Swirls' cost 6% of what a frame may, Sprinkles' 12%, and Aurora's, made of
-radial gradients, 56% (a new palette's four blooms over the window; its
-background standing, a fifth).
+Swirls' cost 6% of what a frame may, Sprinkles' 12%, and Aurora's
+11% (thirteen keys' rays alive at once, or a result just after the
+equals key; its background standing, 5.5%: one field behind one
+mask and a gradient that runs straight down. 0.2's four blobs and two
+arcs, radial gradients all, were a fifth standing and 56% at their
+dearest).
 `Api::frame_cost` and `Api::busiest_frame` (in `gmnb-theme`) say what the
 last frame cost, and the dearest since the theme was loaded, as a share.
 
@@ -1764,7 +1767,7 @@ How each of Aurora's effects is made:
 | The aurora: three curtains hanging along hems that wander, bright at the hem and fading upward in rays, folds travelling along them | **Scripted field** (`background` layer, `draw:field`): how bright, as one number a point on a grid of some 16,000, three snapshots a second worked out a quarter a frame; the app glides between two of them fifteen times a second | The light is smooth, so a coarse grid holds it; its rays are 20 px wide, so the grid's cells are narrow and tall. Per pixel in Luau it would take the whole of a frame's 8 ms many times over. |
 | Its colours, by height: green at the hem, teal, violet and crimson at the crown | The field through **one ramp that is only white**, clear to opaque, drawn as a **mask** (`draw:push_mask`), and the palette's six lights showing through it, a gradient straight down the window | A theme may make eight ramps, and Freestyle makes a new palette at every step of a colour being dragged: the colours can't live in a ramp. A mask is filled with whatever colours there are. |
 | The sky and its stars | **Declared** (`window.background`: a gradient, top to bottom) and **scripted** (160 stars at most, small squares in one colour, a window's worth by its size) | The sky is the window's own background, so the app thins it on a see-through window and it stands if the layer ever fails. |
-| A pulse: a ray of light rising from a key, the sky lit round a result, four rays for a new palette | **Scripted**: soft ellipses drawn into the aurora's own mask | In the mask a pulse shows the palette's lights where it stands and can't be brighter than they are: what the text was proved over holds for every frame. Each key's ray is one of four heights, chosen as its note is. |
+| A pulse: a ray of light rising from a key, the sky lit round a result, four rays for a new palette | **Scripted**: soft ellipses drawn into the aurora's own mask | In the mask a pulse shows the palette's lights where it stands and can't be brighter than they are: what the text was proved over holds for every frame. Each key's ray is one of four heights, chosen as its note is. Thirty pictures a second while one plays: a soft light needs no more, and every picture of the background is one of the whole window. |
 | See-through: the sky clears, the lights stay | **Scripted**: the layer says `fade = false` and thins itself: its lights at seven tenths or more of their strength at any opacity, its stars and grain gone with the sky | Faded with the sky, an aurora over a desktop at opacity 0.15 is 15% of an aurora. |
 | Grain | **Scripted placement** of a **built-in** texture (`gmnb.noise`, `draw:tile`) | Filling 36 864 pixels per call is no job for a script; the recipe is specified so it never changes. It hides the banding of a dark sky's gradient. |
 | Ripples, the pointer's light on key borders | **Scripted** (`keypad` layer) | |
@@ -1802,7 +1805,7 @@ noise.
 
 What Sprinkles asks of the engine while it lives, measured as Aurora's was
 (release build, 760×640, the software renderer): the wall's loop at eight
-frames a second costs 5 to 6% of a core, where Aurora's drift takes 55%;
+frames a second costs 5 to 6% of a core, where Aurora's drift takes 15 to 17%;
 at rest, in a window not in use, under reduced motion and once the app
 has settled, nothing runs at all.
 
@@ -1846,23 +1849,35 @@ on the page too).
 Measured (release build, a 760×640 window on the private headless
 compositor, the machine under a processor cap and shared with other
 work; Aurora beside it in the same runs; ranges are over five runs, the
-last after the merge with Sprinkles):
+last after the merge with Sprinkles). Aurora's column is the aurora
+0.3 has (three runs, with Swirls and with the Aurora it replaces in the
+same session); the last column is that one, 0.2's four blobs and two
+arcs, as it measured beside it:
 
-| | Swirls | Aurora |
-|---|---|---|
-| The background's hook per frame, flowing (processor time; the app's colouring pass is inside it) | 0.9 to 1.2 ms: 0.55 the pass, 0.3 a fifth of a snapshot. 3.0 ms for the first frame at a window size (a whole snapshot) | 0.23 ms with thirteen pulses (its gradients are rasterised by the toolkit, after the hook) |
-| The same while somebody types (six stirs and a ripple alive at once) | 1.8 to 2.2 ms, 3.3 ms at worst; the limit is 8 | |
-| The readout's hook per frame | 0.15 ms | 0.06 ms mid-result |
-| The keypad's, its keys coming in | 0.04 to 0.09 ms | 0.12 ms with the pointer over it |
-| A core, living, software renderer | 22 to 27% at 30 pictures a second (11% at 300×400, 14% at 360×600, 34% at 1280×800) | 44 to 63% at 15 |
-| A core, living, GL on llvmpipe | 82 to 93% | 136 to 143% |
-| A core, typing all the while, software renderer | 33 to 41% | 82% |
-| At rest: reduced motion (the toolkit's animations off), the window not in use, held still, settled | 0 ticks of the clock in 10 s, each | 0 |
-| Resident memory (the base look: 69 MiB) | 78 to 82 MiB | 78 MiB |
+| | Swirls | Aurora | Aurora as it was |
+|---|---|---|---|
+| The background's hook per frame, flowing (processor time; the app's colouring pass is inside it) | 0.9 to 1.2 ms: 0.55 the pass, 0.3 a fifth of a snapshot. 3.0 ms for the first frame at a window size (a whole snapshot) | 1.0 to 1.5 ms drifting: 0.5 the pass, the rest a quarter of a snapshot's columns and 160 stars. 4.3 to 4.7 ms for the first frame at a window size (a whole snapshot) | 0.23 ms with thirteen pulses (its gradients were rasterised by the toolkit, after the hook) |
+| The same while somebody types (six stirs and a ripple alive at once) | 1.8 to 2.2 ms, 3.3 ms at worst; the limit is 8 | 1.1 ms with eight rays, a result and a new palette at once, 2.5 ms at worst | |
+| The readout's hook per frame | 0.15 ms | 0.06 ms mid-result | the same |
+| The keypad's, its keys coming in | 0.04 to 0.09 ms | 0.12 ms with the pointer over it | the same |
+| A core, living, software renderer | 22 to 27% at 30 pictures a second (11% at 300×400, 14% at 360×600, 34% at 1280×800) | 15 to 17% at 15 (10% at 300×400, 13% at 360×600, 20% at 1280×800; 15% in the light; 19 to 20% see-through at 0.5) | 45 to 49% at 15 (44 to 63% when it was first measured) |
+| A core, living, GL on llvmpipe | 82 to 93% | 80 to 82% | 140 to 143% |
+| A core, typing all the while, software renderer | 33 to 41% | 65 to 67% (a key every quarter of a second: its rays are drawn thirty times a second) | 85 to 86% (its blooms every frame) |
+| At rest: reduced motion (the toolkit's animations off), the window not in use, held still, settled | 0 ticks of the clock in 10 s, each | 0, each, on both renderers; and with Living background off | 0 |
+| Resident memory (the base look: 69 MiB) | 78 to 82 MiB | 83 to 84 MiB living, 79 held still (in these runs: the base look 71, Swirls 84) | 79 MiB living, 77 held still |
 
 `crates/gmnb-theme/tests/swirls.rs` prints the hook's figures
 (`what_a_frame_costs`) and holds the background inside its limits at
-window sizes from 300×400 to 3840×2160.
+window sizes from 300×400 to 3840×2160; `tests/aurora.rs` does the same
+for Aurora.
+
+Half of what a living Aurora cost the software renderer was neither its
+blobs nor its aurora but its keys: each had a soft drop shadow, 18 px of
+blur, and the sky moving behind the keys had every one of them blurred
+again for every frame. With the new aurora and those shadows it took
+31 to 33% of a core; without them (they could not be seen), 15 to 17%.
+A theme whose background moves pays for every blur in its style once a
+frame.
 
 ## Acceptance: the base look is DGMNB's
 

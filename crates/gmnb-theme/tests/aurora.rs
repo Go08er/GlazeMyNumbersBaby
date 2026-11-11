@@ -598,7 +598,7 @@ fn the_aurora_drifts_while_it_may_and_stands_when_it_may_not() {
     let later = draw_at(&theme, &standing, &f, 5.0);
     assert_eq!((later.again, later.retry), (None, None));
     assert_eq!(serial(&later), serial(&first));
-    // A pulse plays every frame, over the picture that stands.
+    // A pulse plays thirty times a second, over the picture that stands.
     let key = press(5, KeyKind::Number, 170.0, 380.0);
     let f = Frame {
         time: 5.1,
@@ -607,7 +607,22 @@ fn the_aurora_drifts_while_it_may_and_stands_when_it_may_not() {
         ..Frame::sized(w, h)
     };
     let pulsing = draw_at(&theme, &standing, &f, 5.1);
-    assert_eq!(pulsing.again, Some(0.0));
+    assert_eq!(pulsing.again, Some(0.032));
+    // (Under a thirtieth: the app waits for it on the screen's own
+    // frames, not on a timer that is out of step with them.)
+    assert_eq!(
+        gmnb_theme::sched::Clock::new().end(
+            0.0,
+            pulsing.again,
+            gmnb_theme::sched::Conditions {
+                mapped: true,
+                active: true,
+                motion: true,
+                settled: false,
+            }
+        ),
+        gmnb_theme::sched::Wait::Frame
+    );
     assert_eq!(serial(&pulsing), serial(&first));
 
     // Drifting, drawn sixty times a second for ten seconds (as while
