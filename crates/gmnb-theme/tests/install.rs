@@ -495,3 +495,43 @@ fn a_folder_of_many_hostile_themes_is_listed_in_bounded_time() {
     );
     assert!(listed.iter().all(|l| l.meta.is_err()));
 }
+
+/// The cap on theme folders (64 besides the built-in themes') leaves out
+/// none of 64 folders, keeps the first by id as documented, and keeps the
+/// chosen theme wherever it sorts.
+#[test]
+fn the_folder_cap_counts_only_the_users_and_keeps_the_chosen_theme() {
+    let f = Folder::new("cap-count");
+    let make = |id: &str| {
+        let dir = f.theme(id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("theme.luau"), "").unwrap();
+    };
+    for b in &BUILT_IN {
+        make(b.id);
+    }
+    for n in 0..64 {
+        make(&format!("m{n:02}"));
+    }
+    let all = theme::discover(Some(&f.themes()), &[], None);
+    assert_eq!(
+        all.len(),
+        64 + BUILT_IN.len(),
+        "64 user folders are all kept"
+    );
+    for n in 64..70 {
+        make(&format!("m{n:02}"));
+    }
+    let ids = |keep: &str| -> Vec<String> {
+        theme::discover_keeping(Some(&f.themes()), &[], None, keep)
+            .into_iter()
+            .map(|s| s.id)
+            .collect()
+    };
+    let none = ids("");
+    assert_eq!(none.len(), 64 + BUILT_IN.len());
+    assert!(none.contains(&"m00".to_string()) && !none.contains(&"m69".to_string()));
+    let chosen = ids("m69");
+    assert_eq!(chosen.len(), 65 + BUILT_IN.len());
+    assert!(chosen.contains(&"m69".to_string()) && chosen.contains(&"m00".to_string()));
+}
