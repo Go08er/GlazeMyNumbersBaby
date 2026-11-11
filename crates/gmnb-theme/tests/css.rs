@@ -1165,6 +1165,53 @@ fn sprinkles_own_flavours_read() {
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
 
+/// Rules 3, 4 and 5 for Sprinkles while its header becomes the awning and
+/// its window's own colour goes (from 1 to 0.95), in every flavour and in
+/// System and Freestyle in rule 2's colours, light and dark.
+#[test]
+fn sprinkles_reads_as_the_header_becomes_the_awning() {
+    let mut sprinkles = built_in("sprinkles");
+    let mut styles = Vec::new();
+    for dark in [false, true] {
+        for opacity in [0.995, 0.99, 0.98, 0.97, 0.96, 0.95] {
+            for flavour in FLAVOURS {
+                let ctx = with(&sprinkles, dark, opacity, &[("flavour", text(flavour))]);
+                let style = sprinkles.style(&ctx).unwrap().style.clone();
+                styles.push((format!("sprinkles {flavour} dark={dark} {opacity}"), style));
+            }
+            for (name, hex) in EXTREMES {
+                let colour = appcore::color::hex(hex);
+                let mut ctx = with(&sprinkles, dark, opacity, &[("flavour", text("system"))]);
+                ctx.accent = Some(colour);
+                let style = sprinkles.style(&ctx).unwrap().style.clone();
+                styles.push((
+                    format!("sprinkles system {name} dark={dark} {opacity}"),
+                    style,
+                ));
+                let as_text = |c: [f32; 3]| text(&appcore::color::to_hex(c));
+                let ctx = with(
+                    &sprinkles,
+                    dark,
+                    opacity,
+                    &[
+                        ("flavour", text("custom")),
+                        ("icing", as_text(colour)),
+                        ("second", as_text(appcore::color::complement(colour))),
+                    ],
+                );
+                let style = sprinkles.style(&ctx).unwrap().style.clone();
+                styles.push((
+                    format!("sprinkles freestyle {name} dark={dark} {opacity}"),
+                    style,
+                ));
+            }
+        }
+    }
+    let mut bad = unreadable(styles.clone());
+    bad.extend(rings_unreadable(styles));
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
 /// Every pair of the fixed table that reads too faintly, for each of
 /// `styles`.
 ///
@@ -1421,11 +1468,14 @@ struct Swirl {
     /// Every entry of the ramp the paint is coloured through (on a
     /// see-through window, the paint thinned: each with its opacity), the
     /// first band's first. Its layer is drawn at full strength
-    /// (`fade = false`), in no group of its own, and over nothing on a
-    /// see-through window (`window.background` is clear there), so this is
-    /// what lies over the desktop. `tests/swirls.rs` holds the layers to it:
-    /// every pixel they draw, stirred or still, is one of these.
+    /// (`fade = false`), in no group of its own, over `under`.
+    /// `tests/swirls.rs` holds the layers to it: every pixel they draw,
+    /// stirred or still, is one of these.
     field: Vec<Rgba>,
+    /// On a see-through window, what lies under the paint:
+    /// `window.background`, one colour there (the veil of the dark band,
+    /// gone from 0.95 down), which the app thins with the window.
+    under: Rgba,
     /// What the figures are painted in: the first band of the bands
     /// themselves, solid at any opacity.
     figures: Vec<Rgba>,
@@ -1487,12 +1537,14 @@ fn swirl(
     ctx: &Ctx,
 ) -> Swirl {
     let style = theme.style(ctx).unwrap().style.clone();
+    let mut under = [0.0; 4];
     if ctx.opacity < 1.0 {
-        let clear = style.fill("window.background").samples_over([0.0; 4]);
+        let veil = style.fill("window.background").samples_over([0.0; 4]);
         assert!(
-            clear.iter().all(|c| c[3] == 0.0),
-            "{name}: something under the paint"
+            veil.iter().all(|c| *c == veil[0]),
+            "{name}: under the paint, more than one colour"
         );
+        under = veil[0];
     }
     let field = entries(&paint_ramp(theme, ctx, clock));
     let whole = Ctx {
@@ -1508,6 +1560,7 @@ fn swirl(
         name,
         style,
         field,
+        under,
         figures,
     }
 }
@@ -1569,7 +1622,11 @@ fn swirls_texts_read_over_every_colour_of_the_field() {
 /// every colour of the field.
 #[test]
 fn swirls_reads_at_every_opacity() {
-    let opacities: Vec<f32> = (2..=20).map(|step| step as f32 / 20.0).collect();
+    let mut opacities: Vec<f32> = (2..=20).map(|step| step as f32 / 20.0).collect();
+    // And through the veil's going, from 1 to 0.7, by fiftieths.
+    opacities.extend([
+        0.98, 0.96, 0.94, 0.92, 0.88, 0.86, 0.84, 0.82, 0.78, 0.76, 0.74, 0.72,
+    ]);
     let cases = swirls_cases(&opacities, &["clear"]);
     let mut bad = swirls_unreadable_over_the_field(&cases);
     bad.extend(swirls_rings_unreadable_over_the_field(&cases));
@@ -1623,25 +1680,26 @@ fn swirls_under_any_accent_read_over_every_colour_of_the_field() {
 
 /// What a colour of the field shows as: itself on an opaque window, and
 /// on a see-through one laid over the desktop (nothing else is under it).
-fn shown(colour: Rgba, desktop: Option<Rgba>) -> Rgba {
+fn shown(case: &Swirl, colour: Rgba, desktop: Option<Rgba>) -> Rgba {
     match desktop {
         None => {
             assert_eq!(colour[3], 1.0, "the paint is solid on an opaque window");
             colour
         }
-        Some(d) => over(colour, d),
+        Some(d) => over(colour, over(alpha(case.under, case.style.opacity), d)),
     }
 }
 
 fn swirls_unreadable_over_the_field(cases: &[Swirl]) -> Vec<String> {
     let mut bad = Vec::new();
-    for Swirl {
-        name,
-        style,
-        field: colours,
-        figures,
-    } in cases
-    {
+    for case in cases {
+        let Swirl {
+            name,
+            style,
+            field: colours,
+            figures,
+            ..
+        } = case;
         let all = {
             let mut all = page_pairs(style, true);
             all.extend(chrome_pairs(style));
@@ -1685,7 +1743,7 @@ fn swirls_unreadable_over_the_field(cases: &[Swirl]) -> Vec<String> {
             let mut worst_of = vec![(f32::INFINITY, 0usize); all.len()];
             let mut worst_figure = vec![(f32::INFINITY, 0usize); under_figures.len()];
             for (k, colour) in colours.iter().enumerate() {
-                let behind = [shown(*colour, *desktop); 3];
+                let behind = [shown(case, *colour, *desktop); 3];
                 for (i, (_, text, _, fills)) in all.iter().enumerate() {
                     let fills: Vec<&Fill> = fills.iter().collect();
                     let got = worst(*text, &fills, &behind);
@@ -1925,17 +1983,17 @@ fn swirls_focus_ring_reads_over_every_colour_of_the_field() {
 /// or see-through over a black and a white desktop: what fails.
 fn swirls_rings_unreadable_over_the_field(cases: &[Swirl]) -> Vec<String> {
     let mut bad = Vec::new();
-    for Swirl {
-        name, style, field, ..
-    } in cases
-    {
+    for case in cases {
+        let Swirl {
+            name, style, field, ..
+        } = case;
         let desktops: &[Option<Rgba>] = if style.opacity >= 1.0 {
             &[None]
         } else {
             &[Some(BLACK), Some(WHITE)]
         };
         for desktop in desktops {
-            let behind: Vec<Rgba> = field.iter().map(|c| shown(*c, *desktop)).collect();
+            let behind: Vec<Rgba> = field.iter().map(|c| shown(case, *c, *desktop)).collect();
             bad.extend(rings_read(&format!("{name} {desktop:?}"), style, &behind));
         }
     }

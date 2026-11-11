@@ -154,7 +154,11 @@ type Check = { ink: Rgba, target: number, on: { Rgba } }
 
 -- The least strength, in 64ths, at which glass of `tint` over each of
 -- `backs` lets every check hold.
-local function least_glass(tint: Rgba, backs: { Rgba }, checks: { Check }, margin: number): number
+-- With `halves`, by halves instead (six tries, not as many as there are
+-- steps it can come down): where every back is brighter than the glass,
+-- as on a see-through window over a white desktop, more glass only ever
+-- reads better, and what holds at one strength holds at every stronger.
+local function least_glass(tint: Rgba, backs: { Rgba }, checks: { Check }, margin: number, halves: boolean?): number
 	local function holds(strength: number): boolean
 		for _, back in backs do
 			local glass = over(alpha(tint, strength), back)
@@ -169,6 +173,19 @@ local function least_glass(tint: Rgba, backs: { Rgba }, checks: { Check }, margi
 			end
 		end
 		return true
+	end
+	if halves then
+		-- (`high` always holds: solid glass is the design's own pane.)
+		local low, high = -1, 64
+		while high - low > 1 do
+			local middle = (low + high) // 2
+			if holds(middle / 64) then
+				high = middle
+			else
+				low = middle
+			end
+		end
+		return high / 64
 	end
 	-- Down from solid to the last step that holds.
 	local step = 64
@@ -275,13 +292,18 @@ end
 -- their colour to the end (two fifths at 0.1). The glass keys and panels stay,
 -- as strong as the text on them needs over whatever shows through. Both
 -- move smoothly with the slider, and are the paint as it was at 1.
--- Returns how opaque the bright bands are, and the dark one.
-local function thinned(opacity: number): (number, number)
-	local function smooth(t: number): number
-		t = clamp(t, 0, 1)
-		return t * t * (3 - 2 * t)
-	end
-	return 0.4 + 0.6 * smooth((opacity - 0.1) / 0.9), smooth((opacity - 0.5) / 0.5)
+-- Returns how opaque the bright bands are, and the dark one; and the veil:
+-- how much of the dark band still lies under the paint as the window's
+-- own background (all of it at 1, none from 0.7 down), so that the glass
+-- and what the faint text needs go from an opaque window's to a see-through
+-- one's over that range rather than at once (a scheme is made for each
+-- 64th: some dozen steps).
+local function smooth(t: number): number
+	t = clamp(t, 0, 1)
+	return t * t * (3 - 2 * t)
+end
+local function thinned(opacity: number): (number, number, number)
+	return 0.4 + 0.6 * smooth((opacity - 0.1) / 0.9), smooth((opacity - 0.5) / 0.5), smooth((opacity - 0.7) / 0.3)
 end
 
 -- A set of bands, and everything worked out from it.
@@ -294,6 +316,8 @@ type Scheme = {
 	figure_ramp: Ramp,
 	-- How far the dark band has cleared: 0 on an opaque window.
 	cleared: number,
+	-- How much of the dark band lies under the paint (see `thinned`).
+	veil: number,
 	a: Rgba,
 	b: Rgba,
 	ground: Rgba,
@@ -331,10 +355,12 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 	-- What the field shows as: itself, or on a see-through window the paint
 	-- as it thins (`thinned`), each band at its own opacity and the blends
 	-- between two as the ramp makes them (colour and opacity blended
-	-- together), over a black desktop and over a white one. (Glass is dark
-	-- and the inks light: the brightest of these is what matters, and a
-	-- blend is between its ends.)
-	local bright, dark = thinned(opacity)
+	-- together), over a white desktop. (Glass is dark and every ink here
+	-- light: the brightest of these is what matters, so a black desktop,
+	-- under which all of them are darker, never does; and a blend is
+	-- between its ends. A scheme is made for each 64th of an opacity drag,
+	-- inside the style's time: no more is worked out than tells.)
+	local bright, dark, veil = thinned(opacity)
 	local backs: { Rgba } = {}
 	if opacity >= 1 then
 		backs = colours
@@ -344,17 +370,19 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 			{ color = b, opacity = bright },
 			{ color = ground, opacity = dark },
 		}
-		for _, desktop in { black, white } do
+		do
+			-- Under the paint: the veil, which the app thins with the window.
+			local under = over(alpha(ground, veil * opacity), white)
 			for i, from in ends do
 				local to = ends[i % 3 + 1]
 				for _, t in { 0, 0.25, 0.5, 0.75 } do
 					local c = mix(from.color, to.color, t)
-					table.insert(backs, over(alpha(c, from.opacity + (to.opacity - from.opacity) * t), desktop))
+					table.insert(backs, over(alpha(c, from.opacity + (to.opacity - from.opacity) * t), under))
 				end
 			end
-			-- And the desktop itself: what shows where the dark band has
-			-- cleared, and everywhere if the paint is ever not drawn.
-			table.insert(backs, desktop)
+			-- And that alone: what shows where the dark band has cleared,
+			-- and everywhere if the paint is ever not drawn.
+			table.insert(backs, under)
 		end
 	end
 
@@ -373,8 +401,9 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 
 	-- The glass: the strength chosen, or what the text needs if that is
 	-- more. On a see-through window the text colour keeps the 4.5 it has
-	-- on an opaque one, and everything fainter or coloured keeps at least 3.
-	local other = if opacity >= 1 then TEXT else UI
+	-- on an opaque one, and everything fainter or coloured keeps at least 3
+	-- (from 4.5 at 1 to 3 at 0.7, as the veil goes).
+	local other = UI + (TEXT - UI) * (if opacity >= 1 then 1 else veil)
 	local faint = alpha(fg, 0.42)
 	local checks: { Check } = {
 		{ ink = fg, target = TEXT, on = {} },
@@ -385,7 +414,8 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 		-- A field's placeholder: 2.45, as in the base look.
 		{ ink = faint, target = 2.45, on = { alpha(fg, 0.08) } },
 	}
-	local least = least_glass(lift, backs, checks, 1.02)
+	local see = opacity < 1
+	local least = least_glass(lift, backs, checks, 1.02, see)
 	local glass = max(strength, least)
 
 	-- The two bright colours as text, and a coral for errors (neither band
@@ -409,11 +439,11 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 	local danger = ink(coral, alpha(coral, 0.10))
 	-- (A colour that is as light as it can be and still doesn't read on
 	-- its own wash, white on white's, needs more glass instead.)
-	least = max(least, least_glass(lift, backs, checks, 1.02))
+	least = max(least, least_glass(lift, backs, checks, 1.02, see))
 	glass = max(strength, least)
 
 	-- A pressed key clears as far as its glyph (large: 3) allows.
-	local pressed = min(glass, least_glass(lift, backs, { { ink = fg, target = UI, on = {} } }, 1.05))
+	local pressed = min(glass, least_glass(lift, backs, { { ink = fg, target = UI, on = {} } }, 1.05, see))
 
 	-- Graph colours: the two bands and four more, each made to read as a
 	-- line on the graph's own glass, which is never thinner than a panel.
@@ -443,6 +473,7 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 		ramp = paint,
 		figure_ramp = whole,
 		cleared = 1 - dark,
+		veil = if opacity >= 1 then 1 else veil,
 		a = a,
 		b = b,
 		ground = ground,
@@ -548,9 +579,10 @@ local function style(ctx: Ctx): Style
 	-- The design's shadow under a panel: 0 8px 32px #01060955.
 	local drop: Shadow = { y = 8, blur = 32, color = alpha(ground, 0.33) }
 	-- A dark edge round text on a see-through window, for the wallpaper no
-	-- contrast figure knows about.
+	-- contrast figure knows about (coming in as the veil goes).
+	local edge = 1 - s.veil
 	local halo: { Shadow } = if see
-		then { { blur = 3, color = alpha(ground, 0.9) }, { blur = 10, color = alpha(ground, 0.75) } }
+		then { { blur = 3, color = alpha(ground, 0.9 * edge) }, { blur = 10, color = alpha(ground, 0.75 * edge) } }
 		else {}
 
 	-- Something lit: the warm band, solid, with the dark one written on it.
@@ -665,9 +697,13 @@ local function style(ctx: Ctx): Style
 
 		window = {
 			-- Under the field, which covers it: the design's own backdrop, its
-			-- three bands on a slant. On a see-through window nothing: the
-			-- thinned paint is all there is between the desktop and the glass.
-			background = if see then gmnb.transparent else gmnb.linear({ angle = 135, colors = { a, ground, b } }),
+			-- three bands on a slant. On a see-through window the veil of the
+			-- dark band, going from 1 to 0.7 (see `thinned`), and then
+			-- nothing: the thinned paint is all there is between the desktop
+			-- and the glass.
+			background = if see
+				then alpha(ground, s.veil)
+				else gmnb.linear({ angle = 135, colors = { a, ground, b } }),
 			color = fg,
 			font = sans(system.size),
 			text_halo = halo,

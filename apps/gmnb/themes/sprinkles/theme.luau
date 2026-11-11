@@ -415,6 +415,12 @@ local function awning_shown(opacity: number): number
 	return 1 - smooth((opacity - 0.95) / 0.05)
 end
 
+-- How much of the window's own colour is kept under the wall the layer
+-- paints: all of it from 0.95 up, none from 0.9 down.
+local function wall_kept(opacity: number): number
+	return smooth((opacity - 0.9) / 0.05)
+end
+
 -- How far the shop's glass has come in: none of it from 0.95 up, all of it
 -- from 0.6 down.
 local function glazing(opacity: number): number
@@ -585,9 +591,9 @@ local function style(ctx: Ctx): Style
 
 		-- The wall's own colour. On a see-through window the background
 		-- layer paints the wall at the window's opacity itself, and this
-		-- goes as the header becomes the awning (it is what the header's
-		-- title lies on until then).
-		window = { background = if awning > 0 then alpha(s.wall, 1 - awning) else s.wall, color = ink },
+		-- goes once the header is all awning (until then it is what the
+		-- header's title lies on): from 0.95 to 0.9.
+		window = { background = alpha(s.wall, wall_kept(ctx.opacity)), color = ink },
 		-- Whatever holds text straight on the page (the memory row, the
 		-- number bases, a converter's values, a date's fields) is a card
 		-- on the wall.

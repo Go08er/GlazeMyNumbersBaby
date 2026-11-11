@@ -1839,7 +1839,7 @@ picture the theme computes, and everything in it is built on that.
 | The tiles in Settings | **Scripted** (`preview`): a 17 × 11 field through each set's ramp (System's and Freestyle's as their colours are now) | A tile is drawn once and stands. |
 | The sounds | **Recipes** (`gmnb.synth`) and a **scripted** choice (`sound`): number keys fall on seven notes of one scale, and a result rings the last three that were typed | |
 | One look in light and in dark | **Scripted**: `style` doesn't read `ctx.dark` | The page it comes from has one look. |
-| A see-through window: ribbons of paint under the glass | **Scripted** (`background` layer with `fade = false`, and `style`): the paint's ramp is made with its bands' own opacities, the dark band's falling to nothing at 0.5 and the bright ones' to two fifths at 0.1 (a ramp for each 64th of opacity); `window.background` is clear; the glass is as strong as its text needs over that paint and over the bare desktop, its hairline a little brighter as the paint clears; the figures and tiles stay solid | Faded as a whole, the near-black band laid a grey smoke over the desktop and the colour went with it. With the dark band gone first, the desktop shows clear between ribbons that keep their colour, and the glass is the same glass. |
+| A see-through window: ribbons of paint under the glass | **Scripted** (`background` layer with `fade = false`, and `style`): the paint's ramp is made with its bands' own opacities, the dark band's falling to nothing at 0.5 and the bright ones' to two fifths at 0.1 (a ramp for each 64th of opacity); `window.background` is a veil of the dark band under the paint, going from 1 to 0.7, so that the glass and what the faint text needs go from an opaque window's to a see-through one's over that range (by under 0.05 of the glass's opacity a 64th) rather than at once; the glass is as strong as its text needs over that paint and over the desktop, its hairline a little brighter as the paint clears; the figures and tiles stay solid | Faded as a whole, the near-black band laid a grey smoke over the desktop and the colour went with it. With the dark band gone first, the desktop shows clear between ribbons that keep their colour, and the glass is the same glass. |
 
 Nothing in the app is specific to Swirls either. What it needed of the
 app was one line: the graph's analysis column is a `plain` container now,
@@ -2026,7 +2026,8 @@ names the picture's colours, and the table is run once more with every
 colour the layer can draw under the window in turn. For Swirls those are
 the 768 entries of its ramp (three bands and every blend between two),
 taken from the ramp its background layer draws through (on a see-through
-window each entry has its own opacity and lies over the desktop, and
+window each entry has its own opacity and lies over the veil and the
+desktop, and
 `swirls_reads_at_every_opacity` runs them at every twentieth from 0.1
 to 1):
 `swirls_texts_read_over_every_colour_of_the_field`, for each of its eight

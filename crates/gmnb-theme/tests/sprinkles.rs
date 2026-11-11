@@ -1317,16 +1317,21 @@ fn the_icing_follows_the_colours() {
 /// shine, from none at 0.95 to all of it at 0.6; the awning it paints
 /// stays solid until the header, which is the awning there, covers it
 /// (from 0.95 down); and `window.background`, what the header's title
-/// lies on until then, goes as the header comes. Each step is a little
-/// further than the one before: a drag of the slider moves smoothly.
+/// lies on until then, goes once the header is all awning (0.95 to 0.9).
+/// Each step is a little further than the one before: a drag of the
+/// slider moves smoothly. And it costs little to draw.
 #[test]
 fn the_shop_window_comes_in_as_the_wall_goes() {
     let mut theme = sprinkles();
     assert!(theme.def.layers["background"].unfaded);
     for dark in [false, true] {
-        let mut last: Option<(f32, f32, f32)> = None;
-        for step in (2..=20).rev() {
-            let opacity = step as f32 / 20.0;
+        let mut last: Option<(f32, f32, f32, f32)> = None;
+        // Every twentieth, and every hundredth from 1 to 0.95, where the
+        // header becomes the awning; highest first.
+        let mut opacities: Vec<f32> = (2..=20).map(|step| step as f32 / 20.0).collect();
+        opacities.extend([0.99, 0.98, 0.97, 0.96]);
+        opacities.sort_by(|a, b| b.total_cmp(a));
+        for opacity in opacities {
             let mut c = ctx(&theme, dark, "strawberry", &[]);
             c.opacity = opacity;
             let style = style_of(&mut theme, &c);
@@ -1355,23 +1360,34 @@ fn the_shop_window_comes_in_as_the_wall_goes() {
             let wall = style.fill("window.background").samples_over([0.0; 4])[0][3];
             assert_eq!(shine > 0.0, opacity < 0.95, "{opacity}: shine {shine}");
             assert_eq!(awning_drawn, opacity > 0.95, "{opacity}");
-            assert!(
-                (header + wall - 1.0).abs() < 1e-4,
-                "{opacity}: {header} + {wall}"
-            );
+            // The window's own colour stays until the header is all
+            // awning, and goes from 0.95 to 0.9.
+            assert_eq!(wall == 1.0, opacity >= 0.95, "{opacity}: {wall}");
+            assert_eq!(wall == 0.0, opacity <= 0.9, "{opacity}: {wall}");
             assert_eq!(header == 1.0, opacity <= 0.95, "{opacity}: {header}");
             if opacity <= 0.6 {
                 assert!(shine > 0.15, "{opacity}: shine {shine}");
             }
-            if let Some((was_shine, was_header, was_opacity)) = last {
+            if let Some((was_shine, was_header, was_wall, was_opacity)) = last {
                 assert!(
-                    shine >= was_shine && header >= was_header,
+                    shine >= was_shine && header >= was_header && wall <= was_wall,
                     "{opacity} after {was_opacity}"
                 );
             }
-            last = Some((shine, header, opacity));
+            last = Some((shine, header, wall, opacity));
         }
     }
+    // What the shop window costs to draw, in a new window and on a 4K
+    // screen: well within what a frame may.
+    for (w, h) in [(760.0, 640.0), (3840.0, 2160.0)] {
+        for opacity in [0.5, 0.15] {
+            let mut c = ctx(&theme, false, "strawberry", &[]);
+            c.opacity = opacity;
+            ok(theme.draw(LayerKind::Background, &c, &Frame::sized(w, h)));
+        }
+    }
+    let busiest = theme.api().busiest_frame();
+    assert!(busiest > 0.0 && busiest < 0.25, "{busiest}");
     assert!(theme.take_draw_notes().is_empty());
 }
 

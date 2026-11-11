@@ -5,6 +5,8 @@
 //! readability tests have been through (`tests/css.rs`,
 //! `swirls_texts_read_over_every_colour_of_the_field`).
 
+mod common;
+
 use std::collections::HashSet;
 
 use gmnb_theme::draw::{MaskMode, Op};
@@ -676,8 +678,59 @@ fn the_paint_thins_itself_on_a_see_through_window() {
         let strays: Vec<_> = figures.difference(&first).take(5).collect();
         assert!(strays.is_empty(), "{}: figures {strays:?}", c.opacity);
     }
+    // What the thinned paint costs to draw on a 4K screen: within what a
+    // frame may, as the paint at full opacity.
+    for (k, opacity) in [0.5, 0.15].into_iter().enumerate() {
+        c.opacity = opacity;
+        let f = Frame {
+            time: 40.0 + k as f64,
+            ..Frame::sized(3840.0, 2160.0)
+        };
+        draw_at(&theme, LayerKind::Background, &c, &f);
+    }
+    let busiest = theme.api().busiest_frame();
+    assert!(busiest > 0.0 && busiest < 0.25, "{busiest}");
     let notes = theme.take_draw_notes();
     assert!(notes.is_empty(), "{notes:?}");
+}
+
+/// The glass goes from an opaque window's to a see-through one's over a
+/// short range (the veil, from 1 to 0.7), not at once: in every set of
+/// bands under every glass, the panes' strength at each 64th of opacity
+/// (a scheme is made for each) is within a little of the one before.
+#[test]
+fn the_glass_moves_smoothly_with_the_slider() {
+    // (What a style costs is the app's budget, held in the running app
+    // and measured here; this test runs wherever the code is built, with
+    // four times the time.)
+    let mut theme = Theme::load(Source::built_in("swirls").unwrap(), common::limits()).unwrap();
+    let mut worst = (0.0f32, String::new());
+    let mut slowest = 0.0f64;
+    for bands in BANDS {
+        for glass in GLASS {
+            let mut c = ctx(&theme, &[("bands", text(bands)), ("glass", text(glass))]);
+            let mut last: Option<f32> = None;
+            for step in (7..=64).rev() {
+                c.opacity = step as f32 / 64.0;
+                let started = cpu_ms();
+                let style = theme.style(&c).unwrap().style.clone();
+                slowest = slowest.max(cpu_ms() - started);
+                let pane = style.fill("plain.background").samples_over([0.0; 4])[0][3];
+                if let Some(was) = last {
+                    let jump = (pane - was).abs();
+                    if jump > worst.0 {
+                        worst = (jump, format!("{bands} {glass} at {step}/64"));
+                    }
+                }
+                last = Some(pane);
+            }
+        }
+    }
+    println!(
+        "swirls: the glass's biggest step between 64ths: {:.3} ({}); the most processor time a style took {slowest:.1} ms",
+        worst.0, worst.1
+    );
+    assert!(worst.0 <= 0.05, "{} jumps {:.3}", worst.1, worst.0);
 }
 
 /// The background at every size a window may have, from the least to a
