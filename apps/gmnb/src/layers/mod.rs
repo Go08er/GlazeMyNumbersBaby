@@ -628,6 +628,9 @@ struct State {
     ring: Ring,
     /// The layer asked for the pointer.
     wants_pointer: bool,
+    /// The layer said `fade = false`: it thins itself on a see-through
+    /// window, and the app doesn't fade it (the background layer).
+    unfaded: bool,
     pointer: Option<(f32, f32)>,
     picture: Option<Picture>,
     /// The size the picture was drawn for.
@@ -805,6 +808,14 @@ impl Instance {
         }
     }
 
+    /// Whether the layer's picture is to be drawn at full strength on a
+    /// see-through window: the layer said `fade = false` and thins
+    /// itself. (As of the picture last made: a theme just loaded says so
+    /// with its first.)
+    pub fn unfaded(&self) -> bool {
+        self.state.borrow().unfaded
+    }
+
     /// The pointer moved over the layer's widget, or left it. Only a
     /// layer that asked for the pointer is drawn again.
     pub fn set_pointer(&self, pointer: Option<(f32, f32)>) {
@@ -875,12 +886,12 @@ impl Instance {
     /// pointer. From then on events are kept for it, also before its
     /// first frame.
     fn adopt(&self, layers: &Layers) {
-        let (events, pointer) = layers
+        let (events, pointer, unfaded) = layers
             .hub()
             .map(|hub| {
                 hub.with_theme(|t| {
                     t.and_then(|t| t.layer(self.kind))
-                        .map(|l| (l.events.clone(), l.pointer))
+                        .map(|l| (l.events.clone(), l.pointer, l.unfaded))
                         .unwrap_or_default()
                 })
             })
@@ -889,6 +900,7 @@ impl Instance {
         st.clock.reset();
         st.ring = Ring::new(&events);
         st.wants_pointer = pointer;
+        st.unfaded = unfaded;
         st.picture = None;
         st.generation = layers.generation.get();
         st.dirty = true;

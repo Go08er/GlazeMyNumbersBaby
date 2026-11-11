@@ -460,6 +460,10 @@ pub struct Layer {
     /// kept (at most 5).
     pub events: BTreeMap<String, f64>,
     pub pointer: bool,
+    /// Background only: the layer said `fade = false`. The app doesn't
+    /// fade it to the Background opacity with `window.background`; it is
+    /// drawn at full strength and thins itself (`ctx.opacity`).
+    pub unfaded: bool,
 }
 
 /// The longest an event is kept for, in seconds (the contract's 5).
@@ -737,7 +741,7 @@ fn parse_layer(v: &ThemeValue, path: &str, notes: &mut Notes) -> Layer {
     };
     let dot = format!("{path}.");
     for key in m.keys() {
-        if !["draw", "events", "pointer", "place"].contains(&key.as_str()) {
+        if !["draw", "events", "pointer", "place", "fade"].contains(&key.as_str()) {
             notes.push(&format!("{dot}{key}"), "unknown key");
         }
     }
@@ -748,6 +752,14 @@ fn parse_layer(v: &ThemeValue, path: &str, notes: &mut Notes) -> Layer {
         Some(ThemeValue::Bool(b)) => layer.pointer = *b,
         Some(other) => notes.push(
             &format!("{dot}pointer"),
+            format!("expected true or false, got {}", other.type_name()),
+        ),
+    }
+    match v.get("fade") {
+        None => {}
+        Some(ThemeValue::Bool(b)) => layer.unfaded = !*b,
+        Some(other) => notes.push(
+            &format!("{dot}fade"),
             format!("expected true or false, got {}", other.type_name()),
         ),
     }
@@ -900,6 +912,12 @@ pub fn parse(v: &ThemeValue, notes: &mut Notes) -> Result<ThemeDef, LoadError> {
                             notes.push(
                                 &format!("{path}.place"),
                                 "only the keypad layer has `place`; it is never called here",
+                            );
+                        }
+                        if parsed.unfaded && *known != "background" {
+                            notes.push(
+                                &format!("{path}.fade"),
+                                "only the background layer is faded; this one never is",
                             );
                         }
                         def.layers.insert(known, parsed);

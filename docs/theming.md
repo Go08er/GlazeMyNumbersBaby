@@ -658,6 +658,21 @@ The Background opacity setting (0.1 to 1) is the app's, not the theme's.
   blur what shows through.
 - Everything else is drawn at full strength. A theme decides what to
   put under its text: `style(ctx)` sees `ctx.opacity`.
+- **A background that thins itself.** Faded as a whole, a background is
+  never more there than the window is opaque: at 0.15 whatever it
+  paints is all but gone. A `background` layer whose table says
+  `fade = false` is left out of that group. `window.background` is
+  faded as always, and the layer is drawn over it at full strength;
+  what it does with `frame.ctx.opacity` is its own business. (A layer is
+  drawn again whenever `ctx` changes: once a frame while the slider is
+  dragged.) Aurora's sky is its `window.background`, which the app
+  thins to clear air; its layer keeps the aurora's lights, a little
+  clearer than they are in the night sky, hanging over the desktop, and
+  lets its stars and its grain go with the sky. The key is the
+  background layer's alone: the other layers are never faded, and it is
+  noted on them. The [readability rules](#readability-rules) hold over
+  whatever such a layer shows over a desktop: Aurora's tests take it
+  from the layer itself.
 
 The base look's treatment, all of it switched off at opacity 1:
 
@@ -1105,7 +1120,7 @@ A theme can draw in four places, its **layers**:
 
 | Layer | Where | Coordinates | Notes |
 |---|---|---|---|
-| `background` | The whole window, under every widget, over `window.background` | The window | Faded to `ctx.opacity` together with `window.background`. Draw it opaque. |
+| `background` | The whole window, under every widget, over `window.background` | The window | Faded to `ctx.opacity` together with `window.background`: draw it opaque. Or say `fade = false` and thin it yourself ([See-through windows](#see-through-windows)). |
 | `keypad` | Each keypad, over its keys | That keypad | Called once per visible keypad. Can also move its keys (`place`). |
 | `display` | Each readout | That readout | Paints the value **instead of** the app. |
 | `overlay` | The whole window, over every widget of the page | The window | Never takes clicks. The header, the sidebar and a page's own sheets are under it. Settings and About are over it, so that no theme can cover the place it is switched off in; popovers and menus are separate surfaces and are not covered either. |
@@ -1116,6 +1131,7 @@ layers = {
 		draw = function(draw, frame) … return nil end,
 		events = { press = 1.15, result = 1.15 },  -- which events, and how long each is kept
 		pointer = false,                           -- true: frame.pointer, and a redraw as it moves
+		fade = true,                               -- background only. false: not faded by the app on a see-through window
 	},
 }
 ```
@@ -2137,7 +2153,7 @@ readout). On the date page a day picked and add/subtract switched are
 | `…/sched.rs`, `…/events.rs` | "Asking for the next frame" as a state machine with no clock of its own; a layer's ring of events |
 | `apps/gmnb/src/layers/mod.rs` | The runtime: an `Instance` per place a layer is drawn, the one function that arms a timer or a frame callback, `emit` |
 | `…/layers/replay.rs` | A display list into a `GtkSnapshot`, as the draw API's table maps it; textures and layouts kept between frames; a theme's files decoded by the app's own decoders when first drawn, and its animations' player ([the media chapter](theming-media.md#for-implementers)) |
-| `widgets/backdrop.rs`, `keypad.rs`, `display.rs`, `layers/tile.rs` | Where the four layers and the previews are drawn |
+| `widgets/backdrop.rs`, `keypad.rs`, `display.rs`, `layers/tile.rs` | Where the four layers and the previews are drawn (the backdrop: `window.background` and a faded background layer in one group at the Background opacity, a layer that thins itself after it) |
 
 A layer's hook runs inside its widget's `snapshot`, and only if the
 layer needs a new picture; otherwise the picture it drew last is
@@ -2250,6 +2266,12 @@ tables, says `library:0:`.
     is much over its budget and one call, every call is made in the end
     with none failed, none is made once Settings has closed, and the
     opacity slider moved nine times in one frame calls `style` once.
+13. A background layer on a see-through window (`contract.rs`,
+    `a_background_layer_may_thin_itself`; in the running app
+    `tests/see_through.rs`): faded with `window.background` unless its
+    table says `fade = false`, then at full strength over it; the same
+    picture either way on an opaque window; the key noted on any other
+    layer.
 
 ### Open points
 
