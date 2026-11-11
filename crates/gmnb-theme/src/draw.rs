@@ -396,6 +396,12 @@ pub struct Recorder {
     /// Seconds until a picture this frame was refused (a field coloured,
     /// a picture changed, too soon after the last) can be made.
     retry: Option<f64>,
+    /// What the frame costs to draw, so far ([`crate::cost`]).
+    meter: crate::cost::Meter,
+    /// The last finished frame's cost, as a share of its allowance; and
+    /// the most any frame has cost since the theme was loaded.
+    cost: f64,
+    busiest: f64,
 }
 
 impl Recorder {
@@ -421,6 +427,9 @@ impl Recorder {
             fields: 0,
             due: None,
             retry: None,
+            meter: crate::cost::Meter::default(),
+            cost: 0.0,
+            busiest: 0.0,
         }
     }
 
@@ -480,6 +489,11 @@ impl Recorder {
                 "drawn more than 10^8 pixels from the layer's origin, with the scales in force",
             ));
         }
+        // What it costs to draw: past the frame's allowance, the frame
+        // is dropped (as past any cap).
+        if let Err(share) = self.meter.take(&op) {
+            return Err(self.over(what, too_dear(share)));
+        }
         self.ops.push(op);
         Ok(())
     }
@@ -515,6 +529,16 @@ fn bad(what: &str, problem: impl std::fmt::Display) -> mlua::Error {
 /// The largest coordinate taken: far beyond any window, small enough that
 /// the renderers' arithmetic stays exact.
 const FAR: f64 = 1.0e7;
+
+/// The cap on what a frame costs to draw, as the call that passed it is
+/// told.
+fn too_dear(share: f64) -> String {
+    format!(
+        "a frame that would cost {:.0}% of what one may to draw (each call is charged by what \
+         it covers and its kind: see \"Drawing per frame\")",
+        share * 100.0
+    )
+}
 
 /// How far from a layer's origin, in its pixels, anything may be drawn,
 /// at most: a call that, with the scales in force, would reach further is
@@ -1019,6 +1043,19 @@ pub struct Begin {
     /// that readout's): what a field's allowance and last picture are
     /// kept by.
     pub layer: u64,
+    /// The layer's size, in pixels: what its frame may cost to draw is
+    /// in proportion.
+    pub size: [f32; 2],
+    /// The layer covers its window (the background, the overlay, a
+    /// preview's tile); else (a keypad, a readout) it may draw beyond
+    /// itself, and is charged for what it covers there too.
+    pub whole: bool,
+    /// Where a readout's glyphs are, in the layer's coordinates (x, y,
+    /// w, h): what a `draw:glyph` covers, at most.
+    pub glyph_box: [f32; 4],
+    /// The window, in the layer's coordinates (x, y, w, h), if known:
+    /// what a keypad's or a readout's layer can be seen drawing on.
+    pub window: Option<[f32; 4]>,
 }
 
 impl Default for Begin {
@@ -1029,6 +1066,10 @@ impl Default for Begin {
             motion: true,
             still: false,
             layer: 0,
+            size: [0.0, 0.0],
+            whole: true,
+            glyph_box: [0.0; 4],
+            window: None,
         }
     }
 }
@@ -1108,6 +1149,10 @@ impl Api {
             motion,
             still,
             layer,
+            size,
+            whole,
+            glyph_box,
+            window,
         } = *frame;
         let mut rec = self.shared.recorder.borrow_mut();
         rec.time = time;
@@ -1128,6 +1173,7 @@ impl Api {
         rec.over = None;
         rec.glyphs = glyphs;
         rec.notes.clear();
+        rec.meter = crate::cost::Meter::new(size, whole, window, glyph_box, 1.0);
     }
 
     /// The hook has returned: what it drew, with whatever it left open
@@ -1141,6 +1187,14 @@ impl Api {
             rec.open.clear();
             return Err(cap);
         }
+        // What is still open costs what it covers.
+        if let Err(share) = rec.meter.finish() {
+            rec.ops.clear();
+            rec.open.clear();
+            return Err(format!("draw: {}", too_dear(share)));
+        }
+        rec.cost = rec.meter.share();
+        rec.busiest = rec.busiest.max(rec.cost);
         let left = rec.open.len();
         self.shared.unbalanced.set(left > 0);
         if left > 0 {
@@ -1184,6 +1238,18 @@ impl Api {
         rec.over = None;
         rec.ops.clear();
         rec.open.clear();
+    }
+
+    /// What the last finished frame costs to draw, as a share of what a
+    /// frame of its layer may ([`crate::cost`]): 1 is the cap.
+    pub fn frame_cost(&self) -> f64 {
+        self.shared.recorder.borrow().cost
+    }
+
+    /// The most a frame has cost since the theme was loaded, as a share of
+    /// what one of its layer may.
+    pub fn busiest_frame(&self) -> f64 {
+        self.shared.recorder.borrow().busiest
     }
 
     /// Whether the last finished frame had pushes or saves left open.
@@ -1535,6 +1601,9 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     }
                     let image = ImageId(id as u32 - 1);
                     let kind = pictures.get(image).map(|p| p.kind.clone());
+                    let pixels = pictures
+                        .get(image)
+                        .map_or(0.0, |p| f64::from(p.width) * f64::from(p.height));
                     let op = match kind {
                         // Of an animation a tile is its first frame.
                         _ if tile => Op::Tile {
@@ -1590,6 +1659,11 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                         },
                     };
                     drop(pictures);
+                    // What it costs: by what it covers, and (scaled) by its
+                    // own pixels. A tile is drawn at its own size.
+                    if let Op::Image { filter, .. } | Op::Animation { filter, .. } = &op {
+                        rec.meter.picture(pixels, *filter);
+                    }
                     rec.push(name, op)
                 },
             )?,

@@ -1324,12 +1324,32 @@ impl Theme {
             .or(frame.value.as_ref().map(|v| v.readout))
             .unwrap_or(0);
         let which = LayerKind::ALL.iter().position(|k| *k == kind).unwrap_or(0) as u64;
+        // Where a readout's glyphs are: what a `draw:glyph` covers.
+        let glyph_box = frame.value.as_ref().map_or([0.0; 4], |v| {
+            let r = v.glyphs.rect;
+            match v.previous {
+                Some(p) => {
+                    let q = p.rect;
+                    let (x0, y0) = (r[0].min(q[0]), r[1].min(q[1]));
+                    let (x1, y1) = (
+                        (r[0] + r[2]).max(q[0] + q[2]),
+                        (r[1] + r[3]).max(q[1] + q[3]),
+                    );
+                    [x0, y0, x1 - x0, y1 - y0]
+                }
+                None => r,
+            }
+        });
         self.api.begin(&draw::Begin {
             glyphs,
             time: frame.time,
             motion: frame.motion,
             still: false,
             layer: which << 60 | (place & ((1 << 60) - 1)),
+            size: [frame.width, frame.height],
+            whole: matches!(kind, LayerKind::Background | LayerKind::Overlay),
+            glyph_box,
+            window: frame.window,
         });
         let result = self
             .engine
@@ -1379,6 +1399,8 @@ impl Theme {
         self.api.begin(&draw::Begin {
             still: true,
             layer: u64::MAX,
+            size: [w, h],
+            whole: true,
             ..draw::Begin::default()
         });
         let result = self.engine.call(

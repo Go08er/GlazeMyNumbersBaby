@@ -1013,6 +1013,13 @@ fn glazeds_layers_draw_within_their_limits() {
     let notes = theme.take_draw_notes();
     assert!(notes.is_empty(), "{notes:?}");
     assert!(theme.take_log().is_empty());
+    // Its busiest frames cost well within what a frame may to draw.
+    let busiest = theme.api().busiest_frame();
+    println!(
+        "glazed: the busiest frame cost {:.1}% of what one may",
+        busiest * 100.0
+    );
+    assert!(busiest > 0.0 && busiest < 0.25, "{busiest}");
 }
 
 // ---- What its layers paint reads ---------------------------------------------------------

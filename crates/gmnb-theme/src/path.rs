@@ -355,12 +355,117 @@ pub const MAX_RADIUS: f32 = 1.0e6;
 /// What passes here is what the toolkit's parser is given; anything else
 /// is refused before it gets there.
 pub fn svg_segments(d: &str) -> Result<usize, String> {
-    svg_reach(d).map(|(count, _)| count)
+    svg_shape(d).map(|shape| shape.0)
 }
 
 /// [`svg_segments`], and how far from the origin a point of the path can
 /// be, at most.
 pub fn svg_reach(d: &str) -> Result<(usize, f64), String> {
+    svg_shape(d).map(|(count, reach, _)| (count, reach))
+}
+
+/// Where SVG path data's points go, followed command by command: the
+/// current point, where the subpath started, the control point a smooth
+/// curve reflects, and the box around every point and control point (a
+/// curve lies within its control points; an arc within twice its radius
+/// of its ends).
+#[derive(Default)]
+struct Pen {
+    at: [f64; 2],
+    start: [f64; 2],
+    /// The last cubic's second control point, and the last quadratic's.
+    cubic: Option<[f64; 2]>,
+    quad: Option<[f64; 2]>,
+    bounds: Option<[f64; 4]>,
+}
+
+impl Pen {
+    fn mark(&mut self, [x, y]: [f64; 2], grow: f64) {
+        let b = self.bounds.get_or_insert([x, y, x, y]);
+        *b = [
+            b[0].min(x - grow),
+            b[1].min(y - grow),
+            b[2].max(x + grow),
+            b[3].max(y + grow),
+        ];
+    }
+
+    /// One set of numbers of `command` (its arguments, flags as 0 or 1).
+    fn go(&mut self, command: u8, v: &[f64; 7], first_of_move: bool) {
+        let rel = command.is_ascii_lowercase();
+        let [x0, y0] = self.at;
+        let pt = |x: f64, y: f64| if rel { [x0 + x, y0 + y] } else { [x, y] };
+        let (mut cubic, mut quad) = (None, None);
+        let end = match command.to_ascii_lowercase() {
+            b'm' => {
+                let p = pt(v[0], v[1]);
+                if first_of_move {
+                    self.start = p;
+                }
+                p
+            }
+            b'l' => pt(v[0], v[1]),
+            b'h' => [if rel { x0 + v[0] } else { v[0] }, y0],
+            b'v' => [x0, if rel { y0 + v[0] } else { v[0] }],
+            b'c' => {
+                let (c1, c2) = (pt(v[0], v[1]), pt(v[2], v[3]));
+                self.mark(c1, 0.0);
+                self.mark(c2, 0.0);
+                cubic = Some(c2);
+                pt(v[4], v[5])
+            }
+            b's' => {
+                let c1 = self
+                    .cubic
+                    .map_or(self.at, |c| [2.0 * x0 - c[0], 2.0 * y0 - c[1]]);
+                let c2 = pt(v[0], v[1]);
+                self.mark(c1, 0.0);
+                self.mark(c2, 0.0);
+                cubic = Some(c2);
+                pt(v[2], v[3])
+            }
+            b'q' => {
+                let c = pt(v[0], v[1]);
+                self.mark(c, 0.0);
+                quad = Some(c);
+                pt(v[2], v[3])
+            }
+            b't' => {
+                let c = self
+                    .quad
+                    .map_or(self.at, |c| [2.0 * x0 - c[0], 2.0 * y0 - c[1]]);
+                self.mark(c, 0.0);
+                quad = Some(c);
+                pt(v[0], v[1])
+            }
+            _ => {
+                // An arc: its radii, grown to reach from one end to the
+                // other if they are too small.
+                let end = pt(v[5], v[6]);
+                let chord = ((end[0] - x0).powi(2) + (end[1] - y0).powi(2)).sqrt();
+                let r = v[0].abs().max(v[1].abs()).max(chord / 2.0);
+                self.mark(self.at, 2.0 * r);
+                self.mark(end, 2.0 * r);
+                end
+            }
+        };
+        self.mark(self.at, 0.0);
+        self.mark(end, 0.0);
+        self.at = end;
+        self.cubic = cubic;
+        self.quad = quad;
+    }
+
+    fn close(&mut self) {
+        self.at = self.start;
+        self.cubic = None;
+        self.quad = None;
+    }
+}
+
+/// [`svg_reach`], and the box around the path's points: `(x0, y0, x1, y1)`.
+pub fn svg_shape(d: &str) -> Result<(usize, f64, Option<[f64; 4]>), String> {
+    let mut pen = Pen::default();
     let b = d.as_bytes();
     let mut i = 0;
     let mut count = 0usize;
@@ -465,6 +570,7 @@ pub fn svg_reach(d: &str) -> Result<(usize, f64), String> {
         i += 1;
         if arity == 0 {
             count += 1;
+            pen.close();
             skip(&mut i, false);
             continue;
         }
@@ -476,7 +582,8 @@ pub fn svg_reach(d: &str) -> Result<(usize, f64), String> {
             if sets > 0 && (i >= b.len() || b[i].is_ascii_alphabetic()) {
                 break;
             }
-            for k in 0..arity {
+            let mut vals = [0.0f64; 7];
+            for (k, val) in vals.iter_mut().enumerate().take(arity) {
                 if k > 0 {
                     skip(&mut i, true);
                 }
@@ -494,7 +601,8 @@ pub fn svg_reach(d: &str) -> Result<(usize, f64), String> {
                     }
                     continue;
                 }
-                let n = num(&mut i).ok_or_else(needs)?.abs();
+                *val = num(&mut i).ok_or_else(needs)?;
+                let n = val.abs();
                 let relative = command.is_ascii_lowercase();
                 // What the number is: an arc's radius or its rotation, a
                 // control point's coordinate, or the end's.
@@ -525,6 +633,7 @@ pub fn svg_reach(d: &str) -> Result<(usize, f64), String> {
                     reach
                 });
             }
+            pen.go(command, &vals, sets == 0);
             sets += 1;
             count += 1;
         }
@@ -532,7 +641,42 @@ pub fn svg_reach(d: &str) -> Result<(usize, f64), String> {
     if count == 0 {
         return Err("empty path data".into());
     }
-    Ok((count, furthest))
+    Ok((count, furthest, pen.bounds))
+}
+
+/// The box around a path's points and control points, in its own units:
+/// `(x0, y0, x1, y1)`. `None`: it has none.
+pub fn bounds(path: &Path) -> Option<[f32; 4]> {
+    let mut b: Option<[f32; 4]> = None;
+    let mut add = |x0: f32, y0: f32, x1: f32, y1: f32| {
+        let n = b.get_or_insert([x0, y0, x1, y1]);
+        *n = [n[0].min(x0), n[1].min(y0), n[2].max(x1), n[3].max(y1)];
+    };
+    for s in &path.segments {
+        match s {
+            Segment::MoveTo(x, y) | Segment::LineTo(x, y) => add(*x, *y, *x, *y),
+            Segment::QuadTo(a, c, x, y) => {
+                add(*a, *c, *a, *c);
+                add(*x, *y, *x, *y);
+            }
+            Segment::CurveTo(a, c, e, f, x, y) => {
+                add(*a, *c, *a, *c);
+                add(*e, *f, *e, *f);
+                add(*x, *y, *x, *y);
+            }
+            Segment::Close => {}
+            Segment::Rect(x, y, w, h) | Segment::RoundedRect(x, y, w, h, _) => {
+                add(*x, *y, x + w, y + h);
+            }
+            Segment::Circle(x, y, r) => add(x - r, y - r, x + r, y + r),
+            Segment::Svg(d) => {
+                if let Ok((_, _, Some([x0, y0, x1, y1]))) = svg_shape(d) {
+                    add(x0 as f32, y0 as f32, x1 as f32, y1 as f32);
+                }
+            }
+        }
+    }
+    b
 }
 
 /// How far from the origin, in its own units, a point of the path can be,

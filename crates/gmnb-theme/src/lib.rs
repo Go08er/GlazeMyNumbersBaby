@@ -73,6 +73,7 @@
 
 pub mod check;
 mod convert;
+pub mod cost;
 pub mod css;
 pub mod draw;
 mod engine;

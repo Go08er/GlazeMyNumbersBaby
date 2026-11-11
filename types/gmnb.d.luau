@@ -793,6 +793,11 @@ export type FieldSpec = {
 -- the value before a change (frame.value.previous) carries previous = true.
 export type Glyph = { index: number, x: number, y: number, w: number, h: number, previous: boolean? }
 
+-- What a layer's frame may draw is capped by what it costs the app to
+-- draw: each call is charged by how much of the layer it covers and its
+-- kind (a blur over the whole of a 760 x 640 layer is 300 of the frame's
+-- 1000 points; a rectangle in a colour, 1.3). Past the cap the call is an
+-- error and the frame is dropped. docs/theming.md, "Drawing per frame".
 export type Draw = {
 	-- Shapes.
 	rect: (self: Draw, x: number, y: number, w: number, h: number, paint: Paint) -> (),

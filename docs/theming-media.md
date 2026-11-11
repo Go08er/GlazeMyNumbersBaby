@@ -742,7 +742,7 @@ These rows join [the contract's table](theming.md#limits-and-what-happens-when-a
 |---|---|
 | Images: formats | PNG, JPEG, WebP, GIF (the existing rows for size and count apply) |
 | Animations: file; frame size; frames; count | 8 MiB; 1024×1024; 2048; 4 |
-| Animations: counted against "Images: total decoded" | By what playing one holds: a GIF 4¼ of its frames, a WebP 5, an animated PNG 6 (a frame is width × height × 4 bytes); a file of one frame, that frame |
+| Animations: counted against "Images: total decoded" | By what playing one holds: a GIF 4¼ of its frames (4 and its largest frame at a byte a pixel, and an eighth more, if that is larger: a GIF's frames may be larger than its canvas), a WebP 5, an animated PNG 6 (a frame is width × height × 4 bytes); a file of one frame, that frame |
 | Animations: frames shown; decoding | 30 a second; a quarter of one core, all animations together |
 | Pixel pictures: size; count; changes | 512×512; 4; 30 a second each |
 | Fields: points; per `draw`; computed pixels per call; passes | 16 384, each side 2 to 256; 2; 262 144; 30 a second per layer |
