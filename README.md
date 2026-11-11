@@ -26,8 +26,8 @@ function-for-function and is checked against the real C++ engine.
 </p>
 <p align="center">
   <img src="docs/screenshots/programmer.png" width="24%" alt="GMNB Programmer in the default look, light">
-  <img src="docs/screenshots/currency.png" width="24%" alt="GMNB Currency, in the Glazed theme">
-  <img src="docs/screenshots/scientific.png" width="24%" alt="GMNB Scientific, in the Glazed theme, dark">
+  <img src="docs/screenshots/currency.png" width="24%" alt="GMNB Currency, in the Sprinkles theme">
+  <img src="docs/screenshots/scientific.png" width="24%" alt="GMNB Scientific, in the Sprinkles theme, dark">
   <img src="docs/screenshots/themes.png" width="24%" alt="GMNB's theme settings">
 </p>
 
@@ -37,14 +37,14 @@ other look is a **theme**: a small [Luau](https://luau.org) script in a
 folder of its own that restyles the calculator and can draw on it, with
 pictures, animations and sounds of its own, run in a sandbox with time and
 memory limits ([`docs/theming.md`](docs/theming.md)). GMNB comes with
-three, and Mono, the twenty-line example:
+three:
 
 - **Aurora**, the look GMNB was born with: an aurora behind glass keys,
   curtains of light drifting over a night sky, in seven palettes.
-- **Glazed**, an 8-bit doughnut shop: press = and your number comes out
+- **Sprinkles**, an 8-bit doughnut shop: press = and your number comes out
   glazed, with sprinkles and chip-tune sounds.
-- **Swirls**, the paint that flows behind s0y b0y,
-  under a calculator of dark glass; the keys stir it.
+- **Swirls**, flowing paint inspired by ly's ColorMix, under a
+  calculator of dark glass; the keys stir it.
 
 They are installed into your themes folder the first time GMNB starts,
 where they are folders like any you add: delete the ones you don't want
@@ -115,7 +115,7 @@ read 3–19% CPU and less memory while the GPU stack warms up; with
 `SETTLE=30` it reads the 0.2–0.3% idle and the range above. The other
 rows' RSS has held within a few percent; PSS moves more, since it depends
 on which other processes share the same libraries at the time. The theme
-row is Aurora, Glazed and Swirls, measured 70 seconds after start, once
+row is Aurora, Sprinkles and Swirls, measured 70 seconds after start, once
 their animations have settled; what each costs while it moves is in
 [`docs/theming.md`](docs/theming.md).
 
@@ -298,7 +298,7 @@ upstream sources with g++:
 | graphing (455 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, sliders (kept while their equation isn't drawn, remembered while no equation uses them), function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows, a monotone piece or extremum at a domain end only where the proof reaches it, nothing read across a gap beside a hole or a cut of the domain; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
 | appcore (71) | Keyboard map, key scripts, a text field's undo history (typed runs, its bound, redo cleared, the selection restored), converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus; the base palette pinned, readable for any accent, and the least scrim that keeps text readable on a see-through window |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
-| gmnb-theme (228 + 7 ignored) | The theme sandbox against hostile scripts: runaway loops at load and in calls (also inside `pcall`, coroutines, a sort comparator and a backtracking pattern), one library call past the deadline (a timeout, and four times past it switches the hook off at once), the contract's budgets and a span shared by several calls, recursion through Luau and C, memory bombs (fatal: the engine stops) and host work with the heap full, `require`/`loadstring`/`getfenv`/`debug` gone, the exact globals left, read-only libraries and host tables, bytecode refused, huge and odd error values; the value tree's caps (depth, values, 4 KiB strings), cycles, mixed and sparse tables, NaN and infinities, metamethods that never run; strikes disabling a hook; the frame-call cost (ignored: `--release -- --ignored`); the host's tables counted apart from the theme's heap; scales one inside another kept within what can be drawn, SVG data within reach, and circles and rounded corners far out drawn as curves; what a frame costs to draw capped (each call charged by what it covers and its kind), and the built-in themes' busiest frames within it. The style pipeline: `{}` resolves to exactly the base, the base pinned against DGMNB's constants, unknown keys and wrong types noted with the base kept, numbers clamped, the load and `style` limits, `ctx` as the contract has it, theme files kept inside their folder, discovery; the built-in themes written into the themes folder once (a deleted one not again, restored, an update only over a folder as GMNB wrote it, never over or through a folder or link of the user's, GMNB's own copy standing in when a folder can't be written) and loading from their folders as from GMNB's copies; the built-in themes run for every palette or flavour, light and dark, at three opacities with no notes, and Aurora's keys asking for no more room than the base's; every property the stylesheet reads emitted, a theme's values as CSS, no theme string reaching the stylesheet as text, the main and live providers, and the readability rules, the keyboard's focus ring among them (never hidden: a floor for any theme, and every built-in ring read on what it lies on, at every opacity from 0.1 to 1). Glazed, the theme made of pictures: its four layers at rest and mid-animation under the real limits, what they paint under and as text read out of the pictures themselves (the awning's stripes, every pixel of the icing on a glazed number), and its sounds in every flavour. Swirls, the theme made of one computed picture: what its layers ask for flowing, held still, stirred and under reduced motion, thirty pictures a second on the app's own clock on screens from 50 to 240 Hz, every pixel of its paint one of the 768 colours of its ramp that the readability tests put under every text, the background within its limits from 300×400 to 3840×2160 and within its memory while a window is resized, what a frame costs, every page fitting the least window and a shrunk readout fitting its width, and its sounds (the scale, a result's rings, the pours) |
+| gmnb-theme (228 + 7 ignored) | The theme sandbox against hostile scripts: runaway loops at load and in calls (also inside `pcall`, coroutines, a sort comparator and a backtracking pattern), one library call past the deadline (a timeout, and four times past it switches the hook off at once), the contract's budgets and a span shared by several calls, recursion through Luau and C, memory bombs (fatal: the engine stops) and host work with the heap full, `require`/`loadstring`/`getfenv`/`debug` gone, the exact globals left, read-only libraries and host tables, bytecode refused, huge and odd error values; the value tree's caps (depth, values, 4 KiB strings), cycles, mixed and sparse tables, NaN and infinities, metamethods that never run; strikes disabling a hook; the frame-call cost (ignored: `--release -- --ignored`); the host's tables counted apart from the theme's heap; scales one inside another kept within what can be drawn, SVG data within reach, and circles and rounded corners far out drawn as curves; what a frame costs to draw capped (each call charged by what it covers and its kind), and the built-in themes' busiest frames within it. The style pipeline: `{}` resolves to exactly the base, the base pinned against DGMNB's constants, unknown keys and wrong types noted with the base kept, numbers clamped, the load and `style` limits, `ctx` as the contract has it, theme files kept inside their folder, discovery; the built-in themes written into the themes folder once (a deleted one not again, restored, an update only over a folder as GMNB wrote it, never over or through a folder or link of the user's, GMNB's own copy standing in when a folder can't be written) and loading from their folders as from GMNB's copies; the built-in themes run for every palette or flavour, light and dark, at three opacities with no notes, and Aurora's keys asking for no more room than the base's; every property the stylesheet reads emitted, a theme's values as CSS, no theme string reaching the stylesheet as text, the main and live providers, and the readability rules, the keyboard's focus ring among them (never hidden: a floor for any theme, and every built-in ring read on what it lies on, at every opacity from 0.1 to 1). Sprinkles, the theme made of pictures: its four layers at rest and mid-animation under the real limits, what they paint under and as text read out of the pictures themselves (the awning's stripes, every pixel of the icing on a glazed number), and its sounds in every flavour. Swirls, the theme made of one computed picture: what its layers ask for flowing, held still, stirred and under reduced motion, thirty pictures a second on the app's own clock on screens from 50 to 240 Hz, every pixel of its paint one of the 768 colours of its ramp that the readability tests put under every text, the background within its limits from 300×400 to 3840×2160 and within its memory while a window is resized, what a frame costs, every page fitting the least window and a shrunk readout fitting its width, and its sounds (the scale, a result's rings, the pours) |
 | gmnb-media (60 + 1 ignored) | Each decoder with good and hostile files (cut short, the wrong first bytes, a header claiming 60 000×60 000, a GIF of more frames than allowed, a WebP whose bitstream claims another size than its header, a lossless WebP of one pixel declaring 65 536 groups of Huffman codes, a GIF whose frames are larger than its canvas, a decoder that panics); every frame of a GIF, an animated PNG and an animated WebP against pictures written out by hand, every disposal and blend; timing, loops and the next frame under a clock the test holds; the player's thread (not started for a first frame, a quarter core kept, also on the way to a frame far ahead, ending with its player mid-way, 0 wake-ups at rest, one that fails or panics); what playing and decoding hold, under a counting allocator; the field pass byte for byte against its steps written out plainly, and a stored hash |
 | gmnb-sound (87 + 1 ignored) | The synthesiser against its own recipes (rendering twice gives the same samples, the ten example sounds and their digests, every layer and effect at and past its caps, any numbers at all, no sound over four seconds); WAV and Ogg Vorbis files read as recorded, and refused when they are too long, too big, of too many channels or rates outside 8 to 96 kHz, cut short or damaged, or Vorbis headers that ask for more memory than a sound needs; the mixer's twelve voices, a full queue dropped and never played late; the engine against a stand-in sound server: nothing exists until a theme with sounds is loaded or while sound is off, the stream corked at rest and the thread idle, a server that is slow, goes away and comes back, hangs up, never answers or greets a byte at a time, the thread joined when the engine goes |
 | gmnb (53, and 28 on the test display), gmnb-launcher (5), dgmnb (68) | GDK key translation, a field's undo keys, the 0.2 settings brought forward (old keys kept, each theme entry loading by itself, the sound settings too), the theme hooks of the environment, theming installing no timers, licence text that parses as markup, the theme engine (linked, a hook called); Settings asking a theme in passes of one budget (a slow theme never holding the window, one pass for one change, nothing asked once it has closed), the Background opacity followed once a frame, and Settings fitting a new window; the focus ring's edge round a key, read in the pixels; theme sounds from event to play (each event its designed sound, a typed key as a clicked one, the running total silent, an assistive press and what follows it silent, the theme's `sound` first), no thread and no connection to a (stand-in) sound server in the base look, with the switch off or the desktop's event sounds off, nothing waking at rest, and a press timed to its play and to the server, in `cargo test` and in the running app; the least window, 300×400, kept on every page in the base look and in each built-in theme; a theme's name, errors and option groups shown as text, never markup; Settings drawing each preview tile once, and its sound switch and volume slider there; the built-in themes installed once and restored from Settings, themes dragged in or deleted shown while Settings is open (the chosen one deleted: the base look, told), nothing watching the themes folder once Settings is closed, and *Open themes folder* opening it in the app `mimeapps.list` names (not through the portal GTK would have used), or saying where it is; a theme whose style fails shown in the base look, and one that fails at start told; every bundled typeface and built-in credit in About and in every package; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it), where it finds GMNB, and a notification that hangs given up on; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown and pipe deadlines |
@@ -661,7 +661,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   cache them, and fall back to a bundled snapshot when offline.
 - **Graphing uses a new numeric engine.** The original graphing engine is
   proprietary (open-source builds contain only a mock). This engine was
-  written against the original's interfaces and reproduces its features:
+  written against the design's interfaces and reproduces its features:
   explicit, implicit and inequality plots, variables with sliders,
   tracing, and key-graph-feature analysis. The analysis panel shows only
   what is proven: every row comes from a certified analysis (interval
@@ -756,7 +756,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   On steep curves x is rounded finer, from f′, so tracing still moves
   pixel by pixel. Points traced on implicit curves and inequality
   boundaries are floating-point approximations, marked "≈".
-- **Keep on top** switches to the original's compact overlay, but Wayland
+- **Keep on top** switches to the design's compact overlay, but Wayland
   has no client-side "always on top": pin it with your compositor (e.g. a
   niri window rule for the app ID).
 - **The graphing keypad can be used from the keyboard.** The original
@@ -785,7 +785,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   same way, and does nothing where the window manager has no use for it.
   **Page Up and Page Down** also move a slider, whatever is held: a graph
   variable's by ten steps (GTK's binding for a scale, which DGMNB
-  follows), Settings' number precision by five digits. The original's
+  follows), Settings' number precision by five digits. The design's
   slider has no page keys.
   **GTK's own popups** in GMNB (a drop-down's list of units, the colour
   chooser) keep GTK's bindings: there only the bare Enter and Space
@@ -796,15 +796,15 @@ CI also runs checks that need more than `cargo test --workspace`:
   in its place (or the last one), and emptying the memory puts it on M+,
   the Memory sheet closed first in a narrow window. Two differences: when
   the History is emptied the focus goes to the History tab in both
-  layouts (the original's narrow layout puts it on the header's History
+  layouts (the design's narrow layout puts it on the header's History
   button), and clearing a whole list with the focus in it is treated the
   same way (the original handles a deleted item only).
 - **Ctrl+H in a wide window.** In a narrow window the key does what the
-  original's does with its History flyout (`ToggleHistoryFlyout`): it
+  design's does with its History flyout (`ToggleHistoryFlyout`): it
   opens the sheet on History, shows History over an open Memory sheet,
   closes the sheet that is showing History, and does nothing in
   Programmer, which has no History. In a wide window, where the lists
-  are docked, it chooses the History list; the original's key does
+  are docked, it chooses the History list; the design's key does
   nothing there.
 - **A slider keeps its settings while no equation uses it.** The
   original reads an equation only when it is submitted (Enter, or the
@@ -819,7 +819,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   ([docs/ti-conventions.md](docs/ti-conventions.md)). Sliders are not
   saved with the session, in use or not.
 - **Undo in a text field** (Ctrl+Z; Ctrl+Shift+Z or Ctrl+Y to redo). The
-  original's equation box is a rich edit box with its own undo. Both
+  design's equation box is a rich edit box with its own undo. Both
   twins keep one model of it (`appcore::history`) in every field typed
   into: the equations, the graph range fields, a variable's value, Date's
   offsets and the converter's unit search (GMNB instead of GtkText's own
@@ -846,13 +846,13 @@ CI also runs checks that need more than `cargo test --workspace`:
   digits alone, refusing a whole insertion with anything else in it, as
   GTK's numeric spin buttons do (which also let a sign in at the start,
   and take a negative offset as 0). GMNB's fields' context menu has the
-  original's Undo (its equation box's menu has one, enabled when there
+  design's Undo (its equation box's menu has one, enabled when there
   is something to undo), after GTK's own entries; GtkText's menu has no
   Undo, and DGMNB's fields have no context menu. GTK leaves that menu,
   its own entries too, out of the accessibility tree (Shift+F10 or the
   Menu key opens it).
 - **What a screen reader is told** about the display and the parentheses
-  follows the original's view model (`SetPrimaryDisplay`,
+  follows the design's view model (`SetPrimaryDisplay`,
   `OnBinaryOperatorReceived`, `SetParenthesisCount`,
   `OnNoRightParenAdded`): the display each time the value shown changes
   and after a binary operator ("Display is 7 plus"), the open-parenthesis
@@ -862,12 +862,12 @@ CI also runs checks that need more than `cargo test --workspace`:
   point", and it spells out a hexadecimal, octal or binary value digit by
   digit (`CalculateNarratorDisplayValue`,
   `GetNarratorStringReadRawNumbers`); the twins read the value as shown.
-  The original's other announcements aren't made: "Max digits reached",
+  The design's other announcements aren't made: "Max digits reached",
   a memory slot changed or cleared, the history cleared, always on top,
   the Settings page opened, currency rates updating. (A copy shows a
   toast, "Copied to clipboard", in both twins.)
 - Dates use the Gregorian calendar; strings are en-US.
-- **A restored session continues where it left off.** The original's
+- **A restored session continues where it left off.** The design's
   saved session shows the operand before a recalled value instead of the
   value, "0" instead of a result stored with MS, and reopens a finished
   calculation, so the next = evaluates it again rather than repeating its
@@ -947,12 +947,12 @@ CI also runs checks that need more than `cargo test --workspace`:
 The code is MIT; see [LICENSE](LICENSE), which carries Microsoft's original
 notice. Both embed *Inter* and subsets of *Noto Sans*
 (`apps/dgmnb/assets/fonts/`); GMNB's Aurora theme brings the *Outfit*
-typeface (`apps/gmnb/themes/aurora/fonts/`) and its Glazed theme
-*Jersey 10* (`apps/gmnb/themes/glazed/fonts/`). All are under the SIL Open
-Font License. Glazed's pictures are drawn by a script of its own
-(`apps/gmnb/themes/glazed/make_assets.py`) and its sounds are recipes in
-its `theme.luau`: MIT, like the code. GMNB's Swirls theme draws the field
-behind s0y b0y, which is adapted from the ColorMix animation of
+typeface (`apps/gmnb/themes/aurora/fonts/`) and its Sprinkles theme
+*Jersey 10* (`apps/gmnb/themes/sprinkles/fonts/`). All are under the SIL Open
+Font License. Sprinkles' pictures are drawn by a script of its own
+(`apps/gmnb/themes/sprinkles/make_assets.py`) and its sounds are recipes in
+its `theme.luau`: MIT, like the code. GMNB's Swirls theme draws a field
+inspired by and adapted from the ColorMix animation of
 [ly](https://github.com/fairyglade/ly) (WTFPL; the theme's credits are in
 `apps/gmnb/themes/swirls/credits/`). Exchange-rate data comes from
 Frankfurter (central bank reference rates).

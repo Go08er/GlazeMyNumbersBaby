@@ -32,7 +32,7 @@ pub struct BuiltIn {
 
 /// The themes GMNB comes with, from `apps/gmnb/themes/`, in the order
 /// Settings lists them.
-pub static BUILT_IN: [BuiltIn; 4] = [
+pub static BUILT_IN: [BuiltIn; 3] = [
     BuiltIn {
         id: "aurora",
         source: include_str!("../../../apps/gmnb/themes/aurora/theme.luau"),
@@ -48,45 +48,40 @@ pub static BUILT_IN: [BuiltIn; 4] = [
         ],
     },
     BuiltIn {
-        id: "mono",
-        source: include_str!("../../../apps/gmnb/themes/mono/theme.luau"),
-        files: &[],
-    },
-    BuiltIn {
-        id: "glazed",
-        source: include_str!("../../../apps/gmnb/themes/glazed/theme.luau"),
+        id: "sprinkles",
+        source: include_str!("../../../apps/gmnb/themes/sprinkles/theme.luau"),
         files: &[
             (
                 "fonts/Jersey10-Regular.ttf",
-                include_bytes!("../../../apps/gmnb/themes/glazed/fonts/Jersey10-Regular.ttf"),
+                include_bytes!("../../../apps/gmnb/themes/sprinkles/fonts/Jersey10-Regular.ttf"),
             ),
             (
                 "fonts/OFL-Jersey10.txt",
-                include_bytes!("../../../apps/gmnb/themes/glazed/fonts/OFL-Jersey10.txt"),
+                include_bytes!("../../../apps/gmnb/themes/sprinkles/fonts/OFL-Jersey10.txt"),
             ),
             (
                 "images/wall-light.png",
-                include_bytes!("../../../apps/gmnb/themes/glazed/images/wall-light.png"),
+                include_bytes!("../../../apps/gmnb/themes/sprinkles/images/wall-light.png"),
             ),
             (
                 "images/wall-dark.png",
-                include_bytes!("../../../apps/gmnb/themes/glazed/images/wall-dark.png"),
+                include_bytes!("../../../apps/gmnb/themes/sprinkles/images/wall-dark.png"),
             ),
             (
                 "images/scallop-odd.png",
-                include_bytes!("../../../apps/gmnb/themes/glazed/images/scallop-odd.png"),
+                include_bytes!("../../../apps/gmnb/themes/sprinkles/images/scallop-odd.png"),
             ),
             (
                 "images/scallop-even.png",
-                include_bytes!("../../../apps/gmnb/themes/glazed/images/scallop-even.png"),
+                include_bytes!("../../../apps/gmnb/themes/sprinkles/images/scallop-even.png"),
             ),
             (
                 "images/scallop-line.png",
-                include_bytes!("../../../apps/gmnb/themes/glazed/images/scallop-line.png"),
+                include_bytes!("../../../apps/gmnb/themes/sprinkles/images/scallop-line.png"),
             ),
             (
                 "images/sprinkles.gif",
-                include_bytes!("../../../apps/gmnb/themes/glazed/images/sprinkles.gif"),
+                include_bytes!("../../../apps/gmnb/themes/sprinkles/images/sprinkles.gif"),
             ),
         ],
     },

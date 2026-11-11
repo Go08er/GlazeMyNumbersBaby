@@ -1,4 +1,4 @@
-//! Glazed (apps/gmnb/themes/glazed/theme.luau) in the real engine, without
+//! Sprinkles (apps/gmnb/themes/sprinkles/theme.luau) in the real engine, without
 //! a toolkit: it loads and returns only what the schema knows, its four
 //! layers draw what they should within their limits and stand still when
 //! nothing happens, and everything its layers paint under or as text
@@ -31,9 +31,9 @@ const FLAVOURS: [&str; 5] = ["strawberry", "blueberry", "matcha", "lemon", "cara
 const HEADER: f32 = 52.0;
 const AWNING: f32 = 36.0;
 
-fn glazed() -> Theme {
-    let theme = Theme::load(Source::built_in("glazed").unwrap(), common::limits())
-        .unwrap_or_else(|e| panic!("Glazed didn't load: {e}"));
+fn sprinkles() -> Theme {
+    let theme = Theme::load(Source::built_in("sprinkles").unwrap(), common::limits())
+        .unwrap_or_else(|e| panic!("Sprinkles didn't load: {e}"));
     assert!(theme.notes.is_empty(), "{:#?}", theme.notes);
     theme
 }
@@ -245,13 +245,13 @@ fn rgba(p: [u8; 4]) -> Rgba {
 
 // ---- It loads -------------------------------------------------------------------------
 
-/// Glazed loads in the real engine, its `style` runs for every flavour,
+/// Sprinkles loads in the real engine, its `style` runs for every flavour,
 /// light and dark, at three opacities, and every key it returns is one
 /// the schema knows, of the right type: no notes at all.
 #[test]
-fn glazed_loads_and_returns_only_known_keys() {
-    let mut theme = glazed();
-    assert_eq!(theme.def.meta.name, "Glazed");
+fn sprinkles_loads_and_returns_only_known_keys() {
+    let mut theme = sprinkles();
+    assert_eq!(theme.def.meta.name, "Sprinkles");
     assert_eq!(theme.def.fonts, ["fonts/Jersey10-Regular.ttf"]);
     assert_eq!(theme.credits()[0].0, "Jersey 10 typeface");
     assert!(theme.credits()[0].1.contains("SIL Open Font License"));
@@ -315,8 +315,8 @@ fn glazed_loads_and_returns_only_known_keys() {
 /// costs. (The limits are of processor time, so a shared machine taking
 /// the processor away for a while fails nothing here.)
 #[test]
-fn glazeds_layers_draw_within_their_limits() {
-    let theme = glazed();
+fn sprinkles_layers_draw_within_their_limits() {
+    let theme = sprinkles();
     assert_eq!(
         theme
             .hooks()
@@ -995,7 +995,7 @@ fn glazeds_layers_draw_within_their_limits() {
     }
 
     println!(
-        "glazed, Luau per frame (median of 200): background with the loop {background_ms:.3} ms, \
+        "sprinkles, Luau per frame (median of 200): background with the loop {background_ms:.3} ms, \
          fountain {overlay_ms:.3} ms, keypad stacking with a hop and crumbs {keypad_ms:.3} ms, \
          display mid-result {display_ms:.3} ms, and {icing_ms:.3} ms for a frame that makes the icing anew"
     );
@@ -1016,7 +1016,7 @@ fn glazeds_layers_draw_within_their_limits() {
     // Its busiest frames cost well within what a frame may to draw.
     let busiest = theme.api().busiest_frame();
     println!(
-        "glazed: the busiest frame cost {:.1}% of what one may",
+        "sprinkles: the busiest frame cost {:.1}% of what one may",
         busiest * 100.0
     );
     assert!(busiest > 0.0 && busiest < 0.25, "{busiest}");
@@ -1041,7 +1041,7 @@ fn style_of(theme: &mut Theme, c: &Ctx) -> Style {
 /// - the equals key's icing leaves the key's own colour under its sign.
 #[test]
 fn what_glazed_paints_reads() {
-    let mut theme = glazed();
+    let mut theme = sprinkles();
     let tick = clock(&theme);
     let pics = pictures(&theme);
     let mut worst_awning = f32::INFINITY;
@@ -1180,7 +1180,7 @@ fn what_glazed_paints_reads() {
         }
     }
     println!(
-        "glazed: the least contrast on the awning {worst_awning:.2}, of a glazed number {worst_glaze:.2}"
+        "sprinkles: the least contrast on the awning {worst_awning:.2}, of a glazed number {worst_glaze:.2}"
     );
 }
 
@@ -1190,7 +1190,7 @@ fn what_glazed_paints_reads() {
 /// for the picture. And the loop's sprinkles are six colours on nothing.
 #[test]
 fn the_wall_is_what_the_style_says() {
-    let mut theme = glazed();
+    let mut theme = sprinkles();
     let pics = pictures(&theme);
     for dark in [false, true] {
         let c = ctx(&theme, dark, "strawberry", &[]);

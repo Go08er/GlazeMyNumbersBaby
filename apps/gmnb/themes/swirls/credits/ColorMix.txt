@@ -1,8 +1,6 @@
 The swirl behind the Swirls theme
 
-The field this theme draws is the background of s0y b0y, the homepage of GMNB's owner, used here at the owner's wish. Its three colours (#ffcf29, #0ed6f0, #010609), its panels, its hover and its focus ring are that page's too.
-
-The page's swirl is in turn adapted from the ColorMix animation of ly, a display manager for the console:
+The field this theme draws is inspired by, and adapted from, the ColorMix animation of ly, a display manager for the console:
 
     ly, src/animations/ColorMix.zig
     https://github.com/fairyglade/ly

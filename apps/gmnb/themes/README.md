@@ -11,17 +11,16 @@ The contract they are written against is
 | Folder | What it is |
 |---|---|
 | `aurora/` | The look GMNB had up to 0.2, grown since: an aurora behind glass keys, in seven palettes. Its aurora is curtains of light over a night sky: a field of brightness (`draw:field`) drawn as a mask, with the palette's colours showing through it by height. On a see-through window the sky clears and the lights stay, hanging over the desktop. It uses nearly every part of the API (style, three draw layers, options with drawn previews, its own font, sounds), and works its colours out from each palette, the aurora's own among them, so that all of them stay readable over it. Its sounds are glass and breath, synthesised from two recipes, with a chord for each palette. |
-| `mono/` | The base look with a different accent, corners and typeface, in twenty lines. Start here. |
-| `glazed/` | An 8-bit doughnut shop that takes the app's name at its word: press = and the number comes out glazed, with sprinkles. Where Aurora is computed light, this one is pictures and matter: stills drawn by a script (`make_assets.py`: a tiled wall, the hem of an awning cut out of masks and filled with the flavour's colours), a GIF loop that repeats in space as well as in time (sprinkles falling), two pictures the theme works out pixel by pixel (`gmnb.pixels`: the icing shown through the digits' own shapes, and the doughnut that lives on the readout's shelf), keys moved by `place` (they sink, hop and stack themselves), an overlay (a fountain of sprinkles from the = key), a pixel typeface (Jersey 10) and chip-tune sounds in which every flavour has its own scale. Nothing eases: things step and land, thirty times a second at most. Five flavours. |
-| `swirls/` | The paint that flows behind s0y b0y, the homepage of GMNB's owner, with a calculator of dark glass standing in it. The worked example of `draw:field`: see below. |
+| `sprinkles/` | An 8-bit doughnut shop that takes the app's name at its word: press = and the number comes out glazed, with sprinkles. Where Aurora is computed light, this one is pictures and matter: stills drawn by a script (`make_assets.py`: a tiled wall, the hem of an awning cut out of masks and filled with the flavour's colours), a GIF loop that repeats in space as well as in time (sprinkles falling), two pictures the theme works out pixel by pixel (`gmnb.pixels`: the icing shown through the digits' own shapes, and the doughnut that lives on the readout's shelf), keys moved by `place` (they sink, hop and stack themselves), an overlay (a fountain of sprinkles from the = key), a pixel typeface (Jersey 10) and chip-tune sounds in which every flavour has its own scale. Nothing eases: things step and land, thirty times a second at most. Five flavours. |
+| `swirls/` | Flowing paint inspired by ly's ColorMix, with a calculator of dark glass standing in it. The worked example of `draw:field`: see below. |
 
-Glazed's typeface, Jersey 10, is `fonts/ttf/Jersey10-Regular.ttf` of its
+Sprinkles' typeface, Jersey 10, is `fonts/ttf/Jersey10-Regular.ttf` of its
 upstream, <https://github.com/scfried/soft-type-jersey>, at commit
 `d8446c4c9c2ba14cf408c295be35213c006e19ff`, unchanged (SHA-256
 `db9cbd091617048a145d249daa2b815fe7083be6ab66ac26626e21a4e01c3e82`), with
 that repository's `OFL.txt` beside it.
 
-Every file in `glazed/images/` is written by `glazed/make_assets.py`, which
+Every file in `sprinkles/images/` is written by `sprinkles/make_assets.py`, which
 needs nothing but Python (`python3 -I make_assets.py --check` says whether
 the files are what it would write). A picture added there is added to the
 theme's list in `crates/gmnb-theme/src/theme.rs` too: a built-in theme's
@@ -33,11 +32,11 @@ like: the same as DGMNB.
 
 ## Swirls
 
-The homepage's background is the ColorMix field of
+The design's background is the ColorMix field of
 [ly](https://github.com/fairyglade/ly) (WTFPL): a coordinate bent three
 times by sines and cosines of itself, its length pushed through three
 bands of colour, gold `#ffcf29`, cyan `#0ed6f0` and near-black `#010609`.
-The page works it out in a fragment shader. The theme works out the bent
+ColorMix works it out in a fragment shader. The theme works out the bent
 coordinate in Luau on a grid of about 3,600 points, five times a second,
 and the app colours every pixel of it thirty times a second through a
 `gmnb.ramp` ([Fields](../../../docs/theming-media.md#fields-swirls-plasma-contours)).
@@ -45,19 +44,19 @@ Everything else in the theme is built on that one picture.
 
 | | |
 |---|---|
-| The keys and panes | Dark glass over the paint, with the page's own cues: its panels (`rgba(1, 6, 9, .91)`, a cyan hairline, radius 12), its hover (`#13252b`, a gold border), its gold focus ring, its text colour at weight 500. A pressed key clears and the paint shows through it, then fogs over again. |
-| The paint | Flows at the page's pace. A press stirs it where it lands (a twist that swings back), typing hurries it along, a result sends a ripple out from the readout, an error shudders. All of it by moving where the field is looked up, on the grid the theme already has. |
+| The keys and panes | Dark glass over the paint, with the design's own cues: its panels (`rgba(1, 6, 9, .91)`, a cyan hairline, radius 12), its hover (`#13252b`, a gold border), its gold focus ring, its text colour at weight 500. A pressed key clears and the paint shows through it, then fogs over again. |
+| The paint | Flows at the design's pace. A press stirs it where it lands (a twist that swings back), typing hurries it along, a result sends a ripple out from the readout, an error shudders. All of it by moving where the field is looked up, on the grid the theme already has. |
 | The figures | The readout's value, the converter's two and the date page's results are cut out of the same paint: a slice of the swirl through the first band of the same ramp only, from the warm colour to the cool one, so that no figure is ever written in the dark one. |
 | The keypad | Its keys come round into their places whenever it comes into view (`place`). Nothing is drawn over the keys. |
 | The sounds | Drops. Number keys fall on seven notes of one five-note scale, each key always its own, and a result rings the last three notes that were typed, lowest first. An error goes down the drain. |
 
-Its options: six sets of bands (the page's own first), three strengths of
-glass, the pace from 0 (still) to 4 times the page's, and switches for
+Its options: six sets of bands (the design's own first), three strengths of
+glass, the pace from 0 (still) to 4 times the design's, and switches for
 the stirring and for the painted figures. The two choices show tiles the
 theme draws with small fields. It is one look in light and in dark, as
 the page it comes from has one.
 
-**Readable over paint that moves.** White text on the page's gold is 1.4
+**Readable over paint that moves.** White text on the design's gold is 1.4
 to 1, so the glass is never chosen by eye: for each set of bands, at each
 window opacity, the theme works out the least strength of glass at which
 every ink still reads over every band, and is never thinner than that
@@ -88,7 +87,7 @@ engine's tests.
 1. Settings → Theme → *Open themes folder* opens the themes folder,
    `~/.local/share/gmnb/themes/` (in the Flatpak:
    `~/.var/app/io.github.Go08er.GlazeMyNumbersBaby/data/gmnb/themes/`).
-   Mono is there: copy its folder to `mine/` (any id of lower-case
+   The built-in themes are there: copy a folder to `mine/` (any id of lower-case
    letters, digits, `-` and `_`). While Settings is open, a folder dragged
    in shows in its list.
 2. Edit `theme.luau`. Settings → Theme → Reload picks up what you saved.
@@ -107,7 +106,7 @@ draws), and its `background`, `keypad`, `display` and `overlay` layers
 draw from the theme's Luau on the app's frame clock and events.
 
 Pictures from files (`gmnb.image`, `gmnb.animation`) and pictures a theme
-computes (`gmnb.pixels`, `draw:field` and `gmnb.ramp`) are drawn: Glazed
+computes (`gmnb.pixels`, `draw:field` and `gmnb.ramp`) are drawn: Sprinkles
 is made of the first, Swirls of the second.
 
 Sounds (`sounds`, `sound`, `gmnb.synth`, `gmnb.sound`) are played by the

@@ -1,5 +1,5 @@
 --!strict
--- Glazed: an 8-bit doughnut shop that glazes your numbers.
+-- Sprinkles: an 8-bit doughnut shop that glazes your numbers.
 --
 -- The concept. GMNB is "Glaze My Numbers, Baby", and this theme takes the
 -- name at its word. The window is a small pixel-art doughnut shop: a tiled
@@ -10,7 +10,7 @@
 -- flavour's own scale, while the doughnut that lives on the shelf jumps
 -- for joy. (Its mouth is its hole: it is always impressed.) Five flavours.
 --
--- Where Aurora is light behind glass and all of it computed, Glazed is
+-- Where Aurora is light behind glass and all of it computed, Sprinkles is
 -- made of pictures and of matter: stills drawn by a script (the wall, the
 -- awning's hem), a GIF loop (sprinkles falling), pictures worked out pixel
 -- by pixel here (the icing on the digits, the doughnut), keys moved by
@@ -1896,7 +1896,7 @@ end
 
 local theme: Theme = {
 	api = 1,
-	name = "Glazed",
+	name = "Sprinkles",
 	description = "An 8-bit doughnut shop. Press = and your number comes out glazed, with sprinkles.",
 	author = "GMNB contributors",
 	license = "MIT",

@@ -1,4 +1,4 @@
-//! Glazed's sounds (apps/gmnb/themes/glazed/theme.luau, "9. Sound"): they
+//! Sprinkles' sounds (apps/gmnb/themes/sprinkles/theme.luau, "9. Sound"): they
 //! load, every event plays what the theme means it to (number keys the
 //! notes of the flavour's scale, a result after = the flavour's jingle),
 //! nothing is longer than the sound chapter allows in any flavour, its
@@ -87,9 +87,9 @@ const FLAVOURS: [Flavour; 5] = [
     },
 ];
 
-fn glazed() -> Theme {
-    Theme::load(Source::built_in("glazed").unwrap(), common::limits())
-        .unwrap_or_else(|e| panic!("Glazed didn't load: {e}"))
+fn sprinkles() -> Theme {
+    Theme::load(Source::built_in("sprinkles").unwrap(), common::limits())
+        .unwrap_or_else(|e| panic!("Sprinkles didn't load: {e}"))
 }
 
 fn recipes(theme: &Theme) -> Vec<Recipe> {
@@ -158,8 +158,8 @@ fn choose(app: &mut StandIn, flavour: &str) -> (Vec<Play>, By) {
 // ---- They load -----------------------------------------------------------------
 
 #[test]
-fn glazeds_sounds_load() {
-    let theme = glazed();
+fn sprinkles_sounds_load() {
+    let theme = sprinkles();
     assert!(theme.notes.is_empty(), "{:?}", theme.notes);
     let sounds = theme.sounds();
     assert!(sounds.hook && sounds.any());
@@ -203,13 +203,13 @@ fn glazeds_sounds_load() {
 
 #[test]
 fn the_bank_is_small_and_quick_to_make() {
-    let theme = glazed();
+    let theme = sprinkles();
     let sounds = theme.sounds();
     let recipes = recipes(&theme);
 
     // What bounds the work of making it, whatever the machine is doing.
     // An echo is rendered for the sound's whole `length`, or for 4 s if
-    // it has none: each of Glazed's two has one.
+    // it has none: each of Sprinkles' two has one.
     let mut layer_seconds = 0.0;
     let mut rooms = 0;
     for (i, recipe) in recipes.iter().enumerate() {
@@ -239,7 +239,7 @@ fn the_bank_is_small_and_quick_to_make() {
         "{bytes} bytes: over a tenth of what a theme may hold"
     );
     println!(
-        "Glazed's bank: {SOUNDS} sounds, {layer_seconds:.2} layer-seconds, {bytes} bytes, made in {:.1} ms of processor time",
+        "Sprinkles' bank: {SOUNDS} sounds, {layer_seconds:.2} layer-seconds, {bytes} bytes, made in {:.1} ms of processor time",
         took.as_secs_f64() * 1000.0
     );
     // Processor time, so a busy machine doesn't fail this; a build
@@ -252,7 +252,7 @@ fn the_bank_is_small_and_quick_to_make() {
 
 #[test]
 fn keys_and_buttons_play_what_the_table_says() {
-    let theme = glazed();
+    let theme = sprinkles();
     let mut app = StandIn::new(&theme);
     let mut one = |event: &Event| {
         let (plays, by) = app.decide(event);
@@ -328,7 +328,7 @@ fn keys_and_buttons_play_what_the_table_says() {
 
 #[test]
 fn number_keys_play_the_flavours_scale() {
-    let theme = glazed();
+    let theme = sprinkles();
     let mut app = StandIn::new(&theme);
     for flavour in &FLAVOURS {
         choose(&mut app, flavour.id);
@@ -391,7 +391,7 @@ fn number_keys_play_the_flavours_scale() {
 
 #[test]
 fn a_result_jingles_only_after_equals() {
-    let theme = glazed();
+    let theme = sprinkles();
     let mut app = StandIn::new(&theme);
     for flavour in &FLAVOURS {
         choose(&mut app, flavour.id);
@@ -475,7 +475,7 @@ fn a_result_jingles_only_after_equals() {
 
 #[test]
 fn a_new_flavour_plays_its_jingle() {
-    let theme = glazed();
+    let theme = sprinkles();
     let mut app = StandIn::new(&theme);
     for flavour in &FLAVOURS {
         let (plays, by) = choose(&mut app, flavour.id);
@@ -520,7 +520,7 @@ fn a_new_flavour_plays_its_jingle() {
 /// sounds as rendered (which end 60 dB down, as the script measures).
 #[test]
 fn nothing_is_too_long_in_any_flavour() {
-    let theme = glazed();
+    let theme = sprinkles();
     let made = prepare_all(&theme.sounds().sounds);
     let frames: Vec<usize> = made.iter().map(|m| m.as_ref().unwrap().len() / 2).collect();
     // How long after its event a play ends, in seconds.
@@ -572,7 +572,7 @@ fn nothing_is_too_long_in_any_flavour() {
         }
     }
     println!(
-        "Glazed's longest number key, in any flavour: {:.0} ms",
+        "Sprinkles' longest number key, in any flavour: {:.0} ms",
         longest_key * 1000.0
     );
     assert!(app.notes.is_empty(), "{:?}", app.notes);
@@ -583,12 +583,12 @@ fn nothing_is_too_long_in_any_flavour() {
 #[test]
 fn the_sound_function_stays_inside_its_time() {
     assert_eq!(HOOK_TIME, Duration::from_millis(2));
-    let theme = glazed();
+    let theme = sprinkles();
     let hook = theme
         .def
         .sound
         .clone()
-        .expect("Glazed has a sound function");
+        .expect("Sprinkles has a sound function");
     let mut app = StandIn::new(&theme);
     // `ask` gives the function the 2 ms the app does, of processor time: a
     // call that ran out of it comes back as an error, and three of those
@@ -644,7 +644,7 @@ fn the_sound_function_stays_inside_its_time() {
         }
     }
     println!(
-        "Glazed's sound function: {calls} calls, {:.1} us each, {:.1} us at worst (it has 2000)",
+        "Sprinkles' sound function: {calls} calls, {:.1} us each, {:.1} us at worst (it has 2000)",
         total.as_secs_f64() * 1e6 / f64::from(calls),
         worst.as_secs_f64() * 1e6
     );

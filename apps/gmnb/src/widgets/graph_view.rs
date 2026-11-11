@@ -460,7 +460,7 @@ impl GraphView {
         });
         self.add_controller(zoom);
 
-        // Keyboard tracing, as the original's Grapher: with the graph
+        // Keyboard tracing, as the design's Grapher: with the graph
         // focused, the arrows move the trace cursor (5 px, 1 px with Shift).
         let keys = gtk::EventControllerKey::new();
         let weak = self.downgrade();

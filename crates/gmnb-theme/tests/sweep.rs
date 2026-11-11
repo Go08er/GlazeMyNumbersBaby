@@ -1,4 +1,4 @@
-//! The four built-in themes' own scripts as code, swept: every option at
+//! The built-in themes' own scripts as code, swept: every option at
 //! every value and the combinations that interact, light and dark, at
 //! opacities 0 to 1, with and without a desktop accent and with motion
 //! off; each layer at odd sizes on every page with odd events and odd
@@ -15,7 +15,7 @@ use gmnb_theme::theme::{self, OptionDef, OptionKind, Source, Theme};
 use gmnb_theme::types::*;
 use gmnb_theme::{Ctx, Limits, OptionValue, Style, css};
 
-const THEMES: [&str; 4] = ["aurora", "glazed", "swirls", "mono"];
+const THEMES: [&str; 3] = ["aurora", "sprinkles", "swirls"];
 
 /// The limits a theme really has when `GMNB_REAL_LIMITS` is set; otherwise
 /// four times each hook's time. The sweeps check what the themes do, not
@@ -41,6 +41,43 @@ fn limits() -> Limits {
 
 fn built_in(id: &str) -> Theme {
     Theme::load(Source::built_in(id).unwrap(), limits()).unwrap()
+}
+
+/// A small theme of the test's own (docs/theming.md's "A theme in twenty
+/// lines"): the base colours worked out from an accent option, and corners.
+/// It is what stands for any theme that takes its colours from
+/// `gmnb.base`.
+const ACCENT_THEME: &str = r##"return {
+	api = 1,
+	name = "Typewriter",
+	options = {
+		{ id = "accent", type = "color", label = "Accent", default = "#e5484d" },
+		{ id = "square", type = "toggle", label = "Square corners", default = true },
+	},
+	style = function(ctx)
+		local corner = if ctx.options.square then 2 else 8
+		return {
+			colors = gmnb.base(ctx.dark, ctx.options.accent),
+			fonts = { ui = "monospace", display = "monospace" },
+			shape = { radius = corner, row_radius = corner, card_radius = corner * 2 },
+			keys = { gap = 2 },
+		}
+	end,
+}"##;
+
+fn accent_theme() -> Theme {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "gmnb-sweep-accent-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("theme.luau"), ACCENT_THEME).unwrap();
+    let theme = Theme::load(Source::folder("typewriter", &dir), limits()).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    theme
 }
 
 fn text(s: &str) -> OptionValue {
@@ -663,7 +700,7 @@ fn unreadable(styles: Vec<(String, Style)>) -> Vec<String> {
             let plain_text = desktop.is_none()
                 || base_look
                 || name.starts_with("aurora")
-                || name.starts_with("glazed")
+                || name.starts_with("sprinkles")
                 || name.starts_with("swirls");
             let mut all = page_pairs(&style, plain_text);
             all.extend(chrome_pairs(&style));
@@ -797,7 +834,14 @@ fn unreadable_over_the_aurora(aurora: &Theme, ctx: &Ctx, name: &str, style: &Sty
 /// `style` runs without an error, a note or a log line, every number it
 /// writes is finite, and every text reads on what is under it.
 fn sweep_styles(id: &str, sets: Vec<BTreeMap<String, OptionValue>>) -> Vec<String> {
-    let mut theme = built_in(id);
+    sweep_styles_of(id, built_in(id), sets)
+}
+
+fn sweep_styles_of(
+    id: &str,
+    mut theme: Theme,
+    sets: Vec<BTreeMap<String, OptionValue>>,
+) -> Vec<String> {
     let mut bad = Vec::new();
     let accents: [Option<[f32; 3]>; 2] = [None, Some([1.0, 1.0, 0.0])];
     for set in &sets {
@@ -890,9 +934,9 @@ fn aurora_styles_sweep() {
 }
 
 #[test]
-fn glazed_styles_sweep() {
-    let theme = built_in("glazed");
-    report(sweep_styles("glazed", option_sets(&theme)));
+fn sprinkles_styles_sweep() {
+    let theme = built_in("sprinkles");
+    report(sweep_styles("sprinkles", option_sets(&theme)));
 }
 
 #[test]
@@ -903,8 +947,8 @@ fn swirls_styles_sweep() {
 }
 
 #[test]
-fn mono_styles_sweep() {
-    let theme = built_in("mono");
+fn accent_theme_styles_sweep() {
+    let theme = accent_theme();
     let mut sets = option_sets(&theme);
     let mut rng = Lcg(7);
     for _ in 0..40 {
@@ -915,7 +959,7 @@ fn mono_styles_sweep() {
             ]));
         }
     }
-    report(sweep_styles("mono", sets));
+    report(sweep_styles_of("typewriter", theme, sets));
 }
 
 /// Aurora's Freestyle from random colours: rules 2, 3 and 4.
@@ -1320,8 +1364,8 @@ fn aurora_layers_sweep() {
 }
 
 #[test]
-fn glazed_layers_sweep() {
-    report(sweep_layers("glazed"));
+fn sprinkles_layers_sweep() {
+    report(sweep_layers("sprinkles"));
 }
 
 #[test]
@@ -1366,8 +1410,8 @@ fn aurora_sound_sweep() {
 }
 
 #[test]
-fn glazed_sound_sweep() {
-    report(sweep_sound("glazed"));
+fn sprinkles_sound_sweep() {
+    report(sweep_sound("sprinkles"));
 }
 
 #[test]
@@ -1480,20 +1524,20 @@ fn the_base_look_under_any_accent_reads() {
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
 
-/// Mono under any accent reads.
+/// A theme that takes its colours from `gmnb.base` reads under any accent.
 #[test]
-fn mono_under_any_accent_reads() {
-    let mut mono = built_in("mono");
+fn a_base_theme_under_any_accent_reads() {
+    let mut typewriter = accent_theme();
     let mut styles = Vec::new();
     for accent in wheel() {
         for dark in [false, true] {
             for opacity in [1.0, 0.1] {
                 let hex = appcore::color::to_hex(accent);
                 let saved = BTreeMap::from([("accent".to_string(), text(&hex))]);
-                let ctx = ctx_of(&mono, dark, opacity, None, true, &saved);
+                let ctx = ctx_of(&typewriter, dark, opacity, None, true, &saved);
                 styles.push((
-                    format!("mono {hex} dark={dark} {opacity}"),
-                    mono.style(&ctx).unwrap().style.clone(),
+                    format!("typewriter {hex} dark={dark} {opacity}"),
+                    typewriter.style(&ctx).unwrap().style.clone(),
                 ));
             }
         }
@@ -1559,7 +1603,7 @@ fn aurora_under_any_accent_reads() {
 #[test]
 fn displays_draw_the_longest_values() {
     let mut bad = Vec::new();
-    for id in ["aurora", "glazed", "swirls"] {
+    for id in ["aurora", "sprinkles", "swirls"] {
         for n in [32usize, 79, 100, 128] {
             for dark in [false, true] {
                 let theme = built_in(id);

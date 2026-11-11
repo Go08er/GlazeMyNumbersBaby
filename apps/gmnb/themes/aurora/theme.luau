@@ -395,7 +395,7 @@ type Scheme = {
 	-- What has to hold on a see-through window: for text straight on the
 	-- frost, for text on glass over it, and on the graph's canvas.
 	bare: { Check },
-	glazed: { Check },
+	under_glass: { Check },
 	plotted: { Check },
 	-- The frost worked out so far, by the window's opacity.
 	frosts: { [number]: { number } },
@@ -568,7 +568,7 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 		check(dim, UI, { wash }),
 	}
 	-- Under glass: keys, the panels, and the small buttons on them.
-	local glazed: { Check } = {
+	local under_glass: { Check } = {
 		check(fg, TEXT, { glass.top }),
 		check(fg, TEXT, { glass.number }),
 		check(fg, TEXT, { glass.panel_top }),
@@ -617,7 +617,7 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 		lit_a = lit_a,
 		lit_b = lit_b,
 		bare = bare,
-		glazed = glazed,
+		under_glass = under_glass,
 		plotted = plotted,
 		frosts = {},
 		frosts_count = 0,
@@ -785,7 +785,7 @@ local function frost_for(s: Scheme, opacity: number): (number, number, number)
 	local clear = 1 - math.max(opacity, 0)
 	local found = {
 		frost_needed(base, backs, s.bare, veil + (1 - veil) * FROSTS_OVER * clear),
-		frost_needed(base, backs, s.glazed, FROSTS_OVER * clear),
+		frost_needed(base, backs, s.under_glass, FROSTS_OVER * clear),
 		frost_needed(base, backs, s.plotted, 0),
 	}
 	-- (Dragging the opacity slider asks for a new one each step.)

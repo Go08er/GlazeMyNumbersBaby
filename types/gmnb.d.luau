@@ -821,6 +821,8 @@ export type Draw = {
 	image: (self: Draw, image: Picture, x: number, y: number, w: number, h: number, options: ImageOptions?) -> (),
 	-- Of `options` only `filter` is read.
 	tile: (self: Draw, image: Picture, x: number, y: number, w: number, h: number, options: ImageOptions?) -> (),
+	-- Provisional: moves into a theme-shipped WebAssembly module in 0.4
+	-- (docs/theming-media.md, "Fields").
 	field: (self: Draw, x: number, y: number, w: number, h: number, spec: FieldSpec) -> (),
 	-- Groups: everything drawn until the matching pop() is affected.
 	push_clip: (self: Draw, x: number, y: number, w: number, h: number, radius: Radius?) -> (),
@@ -1291,9 +1293,11 @@ export type Gmnb = {
 	path: () -> Path,
 	svg_path: (d: string) -> Path,
 	image: (file: string) -> Image,
+	-- Provisional: moves into a theme-shipped WebAssembly module in 0.4.
 	noise: (spec: { size: number?, seed: number?, color: Color?, opacity: number? }) -> Image,
 	animation: (file: string) -> Animation,
 	pixels: (width: number, height: number) -> Pixels,
+	-- Provisional: moves into a theme-shipped WebAssembly module in 0.4.
 	ramp: (spec: RampSpec) -> Ramp,
 
 	-- Sound.

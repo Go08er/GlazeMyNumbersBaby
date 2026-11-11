@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draws Glazed's pictures: every file in images/ is this script's output.
+"""Draws Sprinkles' pictures: every file in images/ is this script's output.
 
     python3 -I make_assets.py            writes images/ beside this file
     python3 -I make_assets.py --check    fails if a file differs from what it would write
@@ -10,7 +10,7 @@ come from a fixed seed). It needs only Python's standard library. The
 check compares a PNG's pixels, not its bytes: how small zlib packs them
 is that zlib's own business, and differs from one build of it to another.
 
-Glazed is drawn on a grid of *art pixels*, each 2 x 2 real ones, like the
+Sprinkles is drawn on a grid of *art pixels*, each 2 x 2 real ones, like the
 theme's own drawing (theme.luau, `PX`). Stills are written at their real
 size, because the app tiles a picture at its own size. The loop is written
 at art size, and the theme draws it twice as large with hard pixels.

@@ -31,7 +31,7 @@ Files: apps/gmnb/themes/aurora/fonts/*
 Copyright: 2021 The Outfit Project Authors (https://github.com/Outfitio/Outfit-Fonts)
 License: OFL-1.1
 
-Files: apps/gmnb/themes/glazed/fonts/*
+Files: apps/gmnb/themes/sprinkles/fonts/*
 Copyright: 2023 The Soft Type Project Authors (https://github.com/scfried/soft-type-jersey)
 License: OFL-1.1
 Comment: Jersey 10, as its upstream ships it (commit d8446c4c, fonts/ttf/Jersey10-Regular.ttf).

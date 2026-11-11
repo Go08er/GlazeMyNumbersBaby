@@ -431,8 +431,8 @@ mod tests {
             (args(&["gmnb", "x"]), Some("base".to_string()))
         );
         assert_eq!(
-            super::take_theme_arg(args(&["gmnb", "--theme=mono"])),
-            (args(&["gmnb"]), Some("mono".to_string()))
+            super::take_theme_arg(args(&["gmnb", "--theme=swirls"])),
+            (args(&["gmnb"]), Some("swirls".to_string()))
         );
         assert_eq!(
             super::take_theme_arg(args(&["gmnb", "--theme"])),

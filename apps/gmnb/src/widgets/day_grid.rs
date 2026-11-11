@@ -4,7 +4,7 @@
 //! GTK's calendar draws its days itself: assistive technology gets one
 //! unnamed widget and never hears which day the keys are on. Here each day
 //! is a button named by its date ("Tuesday, October 6, 2026", the
-//! original's long date, as DGMNB's), the chosen one selected and today
+//! design's long date, as DGMNB's), the chosen one selected and today
 //! described so, under a heading that names the month ("October 2026")
 //! between "Previous month"/"Next month" (and year) buttons. Sunday comes
 //! first, as in upstream's en-US picker and DGMNB's.

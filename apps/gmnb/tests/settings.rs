@@ -114,7 +114,7 @@ fn run(display: &Path, theme: &str, env: &[(&str, &str)], ms: u64) -> String {
 /// shows ("the last style that worked, or the base look"). Chosen after
 /// another, the style of the one before stood under the new theme's name;
 /// at start, no style was ever written, and the window was bare (no keys,
-/// no header: the stylesheet's properties unset). GMNB in Glazed, then
+/// no header: the stylesheet's properties unset). GMNB in Sprinkles, then
 /// the theme chosen (`GMNB_STEPS`' `theme:`), is pixel for pixel GMNB
 /// started in that theme (both pictured once the toast that says so is
 /// gone), and that is the base look's picture.
@@ -141,7 +141,7 @@ return { api = 1, name = "Broken", style = function(ctx) error("no style", 0) en
     assert!(err.contains("has a problem"), "{err}");
     let err = shot(
         &switched,
-        &[("GMNB_THEME", "glazed"), ("GMNB_STEPS", "theme:dev")],
+        &[("GMNB_THEME", "sprinkles"), ("GMNB_STEPS", "theme:dev")],
         "7500",
     );
     assert!(err.contains("has a problem"), "{err}");
@@ -156,7 +156,7 @@ return { api = 1, name = "Broken", style = function(ctx) error("no style", 0) en
     );
     assert!(
         b == c,
-        "chosen after Glazed, the broken theme isn't the base look"
+        "chosen after Sprinkles, the broken theme isn't the base look"
     );
 }
 
@@ -472,7 +472,7 @@ fn settings_fits_the_least_window() {
 fn fits(display: &Path, size: &str) {
     const THEME: &str = r#"return { api = 1, name = "Plain" }"#;
     let mut bad = Vec::new();
-    for theme in ["base", "aurora", "mono", "glazed", "swirls"] {
+    for theme in ["base", "aurora", "sprinkles", "swirls"] {
         let env = [
             ("GMNB_THEME", theme),
             ("GMNB_PREFS", "1"),
@@ -541,7 +541,7 @@ fn settings_has_a_sound_switch_and_a_volume_slider() {
         missing("base", "wc-no-such-row"),
         "GMNB_FOCUS didn't say it found nothing for a class no widget has"
     );
-    for theme in ["base", "glazed"] {
+    for theme in ["base", "sprinkles"] {
         for class in ["wc-sound-switch", "wc-sound-volume-slider"] {
             assert!(
                 !missing(theme, class),
@@ -565,7 +565,7 @@ fn choosing_a_theme_leaves_no_stray_note_from_the_old_tiles() {
         ("GMNB_THEME", "aurora"),
         ("GMNB_PREFS", "1"),
         ("GMNB_STEPS_AFTER_MS", "2500"),
-        ("GMNB_STEPS", "wait:500;theme:glazed;wait:500;quit"),
+        ("GMNB_STEPS", "wait:500;theme:sprinkles;wait:500;quit"),
     ];
     let err = run(&display, "return { api = 1, name = \"Dev\" }", &env, 15_000);
     assert!(err.contains("sound:"), "the steps did not run: {err}");

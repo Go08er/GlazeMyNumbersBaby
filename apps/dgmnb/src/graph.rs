@@ -700,7 +700,7 @@ impl GraphPage {
         true
     }
 
-    /// Keyboard tracing, as the original's Grapher does: with the graph
+    /// Keyboard tracing, as the design's Grapher does: with the graph
     /// focused, the arrows move the trace cursor (5 px, or 1 px with Shift)
     /// and the traced point follows. The cursor keeps every step along the
     /// arrow's axis, even one too small to move the traced point, and

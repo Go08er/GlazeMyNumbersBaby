@@ -1504,7 +1504,7 @@ mod tests {
         std::fs::remove_dir_all(dir.join("swirls")).unwrap();
         for (id, source) in [
             ("aurora", "return { api = 1, name = \"Mine\" }"),
-            ("glazed", "this is not Luau"),
+            ("sprinkles", "this is not Luau"),
             (
                 "mine",
                 "return { api = 1, name = \"Mine\", credits = { { title = \"Me\", file = \"me.txt\" } } }",

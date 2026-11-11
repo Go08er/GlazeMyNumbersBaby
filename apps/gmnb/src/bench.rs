@@ -2,7 +2,7 @@
 //! (`GMNB_BENCH`). Like `GMNB_SCREENSHOT`, it is for the project's own
 //! scripts.
 //!
-//! `GMNB_BENCH="themes=base,aurora,mono,base;opacity"` runs, a moment
+//! `GMNB_BENCH="themes=base,aurora,swirls,base;opacity"` runs, a moment
 //! after the window is up:
 //!
 //! - `themes=…`: each theme in turn, timing the switch (loading the file,
