@@ -361,6 +361,58 @@ end }"#;
     assert!(after.contains("sound:"), "the steps did not finish: {err}");
 }
 
+/// R3-E-3: an action that changes every option of a theme costs one pass
+/// of `style`, not one for each option (an action may change 23 options,
+/// and each `style` call may take its 50 ms: 1.2 s of the main thread in
+/// one click, which Settings' pacing is there to prevent).
+#[test]
+fn an_action_that_changes_every_option_costs_one_style_pass() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    const THEME: &str = r#"
+local options = {}
+for i = 1, 23 do
+	options[#options + 1] = { id = "t" .. i, type = "toggle", label = "T" .. i, default = true }
+end
+options[#options + 1] = { id = "go", type = "toggle", label = "Go", default = true,
+	actions = { { label = "All off", run = function(o)
+		local out = {}
+		for i = 1, 23 do out["t" .. i] = false end
+		return out
+	end } } }
+return { api = 1, name = "Actions", options = options, style = function(ctx)
+	local n = 0
+	for i = 1, 23 do if ctx.options["t" .. i] then n = n + 1 end end
+	return { shape = { radius = n } }
+end }"#;
+    let err = run(
+        &display,
+        THEME,
+        &[
+            ("GMNB_THEME_STATS", "4000"),
+            ("GMNB_STEPS_AFTER_MS", "500"),
+            (
+                "GMNB_STEPS",
+                "settings;wait:800;press:wc-option-action;wait:3500;quit",
+            ),
+        ],
+        30_000,
+    );
+    assert!(!err.contains("no button with class"), "{err}");
+    let stats = err
+        .lines()
+        .find(|l| l.starts_with("theme: Stats"))
+        .unwrap_or_else(|| panic!("no stats: {err}"));
+    let calls: u32 = stats
+        .split_once("style_calls: ")
+        .and_then(|(_, rest)| rest.split(',').next())
+        .and_then(|n| n.trim().parse().ok())
+        .unwrap_or_else(|| panic!("{stats}"));
+    // The load, the opening of Settings, the action: a few, not 24 more.
+    assert!(calls <= 6, "{calls} style calls: {stats}");
+}
 /// Settings closed while it still has calls to make: none of them is
 /// made once it has closed (nothing of Settings runs while it is closed).
 #[test]

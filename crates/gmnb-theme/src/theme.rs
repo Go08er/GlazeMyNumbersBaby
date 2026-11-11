@@ -107,6 +107,14 @@ pub const MAX_FONT_BYTES: u64 = 16 << 20;
 pub const MAX_FONTS_BYTES: u64 = 32 << 20;
 pub const MAX_CREDIT_BYTES: u64 = 64 << 10;
 
+/// Whether `bytes` are one of the files GMNB carries for a built-in theme
+/// (the same, byte for byte, in whichever folder it is found).
+pub fn is_built_in_file(bytes: &[u8]) -> bool {
+    BUILT_IN
+        .iter()
+        .any(|b| b.files.iter().any(|(_, own)| *own == bytes))
+}
+
 /// Where a theme comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {

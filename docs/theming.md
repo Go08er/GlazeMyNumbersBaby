@@ -237,7 +237,7 @@ What `theme.luau` returns:
 | `api` | number, required | The API version the theme is written for: `1`. |
 | `name` | string, required | Shown in Settings. |
 | `description`, `author`, `version`, `license` | string | Shown in Settings. |
-| `fonts` | list of file paths | Font files (TrueType or OpenType) in the theme's folder. They become available to this app only, under the family names inside them. |
+| `fonts` | list of file paths | Font files (TrueType or OpenType) in the theme's folder. They become available to this app only, under the family names inside them. A font whose family name the app already has (the base look's, the desktop's, an earlier theme's) is left out with a note, for a font stays in the app until it quits and would take the place of the one it is named after, whichever theme is chosen next; so is a file that is not a TrueType or OpenType font. |
 | `credits` | list of `{ title, file }` | Shown in About → Legal while the theme is installed: a heading, and a text file from the theme's folder. For font licences. |
 | `options` | list | What Settings offers. See [Options](#options). |
 | `style` | function | `style(ctx)` → the style table. See the [reference](#reference-tokens). |
@@ -1489,7 +1489,7 @@ Common fields: `id` (letters, digits, `_`; unique in the theme), `label`,
                 run = function(o) return { secondary = gmnb.to_hex(gmnb.complement(o.primary)) } end } }
   ```
 
-  The returned values are checked like any other and saved.
+  The returned values are checked like any other and saved, all together: `style` runs once for them all, not once for each.
 
 Changing an option saves it, calls `style` again, and sends an `option`
 event to layers that listen for it.
@@ -2139,7 +2139,9 @@ there is kept [9:1 from its edge](#text-surface-control-state).
 
 The same floor holds for every theme, not only the built-in ones, at the
 window's own colours (`crates/gmnb-theme/src/focus.rs`): a ring under
-1 px, or under 3:1 on what it lies on (with its edge around a key), is
+1 px, or under 3:1 on what it lies on (with its edge around a key; and, for
+`focus` outside its control, the header, the sidebar, a panel and `plain`,
+the ring alone), is
 the base look's ring instead (2 px just outside the control, in the
 theme's `accent_text`, else its `fg`, else black or white, whichever
 reads), and Settings notes why. A `native` ring that doesn't reach 3:1

@@ -2285,3 +2285,57 @@ fn a_ring_that_would_hide_the_focus_is_the_base_looks() {
         native.notes.list
     );
 }
+
+/// R3-E-1b: the floor judged the `focus` ring on the window's background
+/// and the keys only, so a theme whose ring reads there but not on the
+/// header, the sidebar or a panel (black on black) hid the keyboard's focus
+/// round every header button: the ring is the base look's ring, with a
+/// note, when it reads on none of the page's surfaces, as rule 5 says.
+#[test]
+fn a_ring_that_hides_on_a_surface_of_the_page_is_the_base_looks() {
+    use gmnb_theme::focus::{self, LEAST_CONTRAST};
+    let ctx = Ctx::default();
+    let engine = Engine::with_globals(Limits::default(), |lua| {
+        gmnb_theme::library::register(lua, gmnb_theme::library::without_drawing)
+    })
+    .unwrap();
+    for surface in ["header", "nav", "panel"] {
+        let value = if surface == "panel" {
+            "panel = { background = '#000000' }".to_string()
+        } else {
+            format!("{surface} = {{ background = '#000000' }}")
+        };
+        let src = format!(
+            "return {{ focus = {{ color = '#000000', width = 2, offset = 2 }}, \
+             window = {{ background = '#ffffff' }}, {value} }}"
+        );
+        let resolved = resolve(&ctx, &engine.load("=style", &src).unwrap());
+        let noted = resolved
+            .notes
+            .list
+            .iter()
+            .any(|n| n.message.contains("would hide the keyboard's focus"));
+        assert!(noted, "{surface}: no note: {:?}", resolved.notes.list);
+        let get = |p: &str| resolved.style.get(p).cloned();
+        let behind = focus::backdrop(get, resolved.style.tokens.colors.bg, None);
+        let ring = focus::ring_at(get, "focus").unwrap();
+        let grounds = focus::grounds(get, &resolved.style.tokens, "focus", &behind);
+        let got = focus::worst(&ring, &grounds.surfaces, false);
+        assert!(got >= LEAST_CONTRAST, "{surface}: {got:.2}");
+    }
+    // (R3-E-2) With the theme's own `accent_text` and `fg` black as well,
+    // none of the base look's candidates reads on a white page and a black
+    // header at once: the ring is a grey that reads on both.
+    let src = "return { colors = { accent_text = '#000000', fg = '#000000' }, \
+               focus = { color = '#000000', width = 2, offset = 2 }, \
+               window = { background = '#ffffff' }, header = { background = '#000000' } }";
+    let resolved = resolve(&ctx, &engine.load("=style", src).unwrap());
+    let get = |p: &str| resolved.style.get(p).cloned();
+    let behind = focus::backdrop(get, resolved.style.tokens.colors.bg, None);
+    let ring = focus::ring_at(get, "focus").unwrap();
+    let grounds = focus::grounds(get, &resolved.style.tokens, "focus", &behind);
+    for (what, on) in [("surfaces", &grounds.surfaces), ("page", &grounds.outside)] {
+        let got = focus::worst(&ring, on, false);
+        assert!(got >= LEAST_CONTRAST, "{what}: {got:.2} ({ring:?})");
+    }
+}
