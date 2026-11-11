@@ -21,7 +21,8 @@ use crate::{Budget, Engine, FunctionHandle, HostTable, Limits, ThemeError, Theme
 
 // ---- Where themes are ------------------------------------------------------
 
-/// A theme compiled into the app.
+/// A theme GMNB comes with: its files, which GMNB carries and writes into
+/// the themes folder ([`crate::install`]).
 pub struct BuiltIn {
     pub id: &'static str,
     pub source: &'static str,
@@ -29,7 +30,8 @@ pub struct BuiltIn {
     pub files: &'static [(&'static str, &'static [u8])],
 }
 
-/// The themes built in, from `apps/gmnb/themes/`.
+/// The themes GMNB comes with, from `apps/gmnb/themes/`, in the order
+/// Settings lists them.
 pub static BUILT_IN: [BuiltIn; 4] = [
     BuiltIn {
         id: "aurora",
@@ -113,12 +115,12 @@ pub const MAX_CREDIT_BYTES: u64 = 64 << 10;
 /// Where a theme comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
+    /// GMNB's own copy of a built-in theme: for a run in which its folder
+    /// couldn't be written, and for tests ([`Source::built_in`]).
     BuiltIn,
-    /// A folder of the user's.
-    User,
-    /// A folder of the user's with a built-in theme's id: it replaces it
-    /// ("your copy").
-    UserCopy,
+    /// A folder in the themes folder: the built-in themes GMNB wrote there
+    /// and every other.
+    Folder,
     /// `GMNB_THEME_DIR`.
     Dev,
 }
@@ -155,13 +157,15 @@ pub fn safe_relative(path: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
-/// The themes installed: the built-in ones first (each replaced by the
-/// user's folder of the same id, if there is one), then the user's by id,
-/// then `dev_dir`'s (`GMNB_THEME_DIR`). `user_dir` is
-/// `$XDG_DATA_HOME/gmnb/themes`.
-pub fn discover(user_dir: Option<&Path>, dev_dir: Option<&Path>) -> Vec<Source> {
-    let mut user: Vec<(String, PathBuf)> = Vec::new();
-    if let Some(entries) = user_dir.and_then(|d| std::fs::read_dir(d).ok()) {
+/// The themes installed: every theme folder in `themes` (the themes
+/// folder, `$XDG_DATA_HOME/gmnb/themes`), the built-in themes' ids first
+/// in [`BUILT_IN`]'s order and then the rest by id; then `dev_dir`'s
+/// (`GMNB_THEME_DIR`). `embedded`: the built-in themes whose folder
+/// couldn't be written this run, served from GMNB's own copy where they
+/// have no folder. (Settings puts the base look before them all.)
+pub fn discover(themes: Option<&Path>, embedded: &[String], dev_dir: Option<&Path>) -> Vec<Source> {
+    let mut folders: Vec<(String, PathBuf)> = Vec::new();
+    if let Some(entries) = themes.and_then(|d| std::fs::read_dir(d).ok()) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let Some(id) = name.to_str().filter(|n| valid_id(n) && *n != DEV_ID) else {
@@ -169,30 +173,30 @@ pub fn discover(user_dir: Option<&Path>, dev_dir: Option<&Path>) -> Vec<Source> 
             };
             let dir = entry.path();
             if dir.join(THEME_FILE).is_file() {
-                user.push((id.to_string(), dir));
+                folders.push((id.to_string(), dir));
             }
         }
     }
-    user.sort();
+    folders.sort();
     let mut out = Vec::new();
     for b in &BUILT_IN {
-        let copy = user.iter().position(|(id, _)| id == b.id);
-        out.push(match copy {
-            Some(at) => Source {
+        match folders.iter().position(|(id, _)| id == b.id) {
+            Some(at) => out.push(Source {
                 id: b.id.to_string(),
-                origin: Origin::UserCopy,
-                dir: Some(user.remove(at).1),
-            },
-            None => Source {
+                origin: Origin::Folder,
+                dir: Some(folders.remove(at).1),
+            }),
+            None if embedded.iter().any(|e| e == b.id) => out.push(Source {
                 id: b.id.to_string(),
                 origin: Origin::BuiltIn,
                 dir: None,
-            },
-        });
+            }),
+            None => {}
+        }
     }
-    out.extend(user.into_iter().map(|(id, dir)| Source {
+    out.extend(folders.into_iter().map(|(id, dir)| Source {
         id,
-        origin: Origin::User,
+        origin: Origin::Folder,
         dir: Some(dir),
     }));
     if let Some(dir) = dev_dir {
@@ -206,7 +210,9 @@ pub fn discover(user_dir: Option<&Path>, dev_dir: Option<&Path>) -> Vec<Source> 
 }
 
 impl Source {
-    /// A built-in theme, whatever the user has installed (for tests).
+    /// A built-in theme from GMNB's own copy, whatever the themes folder
+    /// holds (for tests, and for a run in which its folder couldn't be
+    /// written).
     pub fn built_in(id: &str) -> Option<Source> {
         BUILT_IN.iter().find(|b| b.id == id).map(|b| Source {
             id: b.id.to_string(),

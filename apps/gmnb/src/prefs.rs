@@ -94,11 +94,31 @@ pub fn show(win: &Rc<Window>) {
     page.add(&group);
 
     // Theme, and the chosen theme's options.
-    let themes = ThemeSettings::new(&ctx, &win.widget());
+    let themes = ThemeSettings::new(&ctx, &win.widget(), &dialog);
     page.add(&themes.group);
     page.add(&themes.options);
+    // What the hub tells while Settings is open is told in Settings: the
+    // window's toasts are under it (and hidden by it, narrow).
+    {
+        let dialog = dialog.downgrade();
+        ctx.hub.set_front_tell(Some(Box::new(move |message: &str| {
+            if let Some(dialog) = dialog.upgrade() {
+                let toast = adw::Toast::new(message);
+                // A theme's name is its own words: text, not markup.
+                toast.set_use_markup(false);
+                toast.set_timeout(4);
+                dialog.add_toast(toast);
+            }
+        })));
+    }
+    // What became of the themes folder while Settings was closed (nothing
+    // watches it then): a chosen theme whose folder went gives way to the
+    // base look now, and one that came back is loaded.
+    ctx.hub.sync_installed();
     themes.rebuild_list();
     themes.rebuild_options();
+    // Themes dragged into the folder show up while Settings is open.
+    themes.watch();
     // Sound, under the theme they belong to.
     page.add(&sound_group(&ctx));
 
@@ -206,9 +226,12 @@ pub fn show(win: &Rc<Window>) {
     page.add(&group);
 
     dialog.add(&page);
-    // The theme rows' handlers live as long as the dialog does.
+    // The theme rows' handlers live as long as the dialog does; the watch
+    // on the themes folder ends as it closes, and the hub tells the window
+    // again.
     dialog.connect_closed(move |_| {
-        let _ = &themes;
+        themes.unwatch();
+        themes.ctx.hub.set_front_tell(None);
     });
     // A dialog's keys never reach the window's controllers.
     crate::window::own_keys(&dialog);
@@ -219,8 +242,15 @@ pub fn show(win: &Rc<Window>) {
 struct ThemeSettings {
     ctx: Rc<Ctx>,
     window: gtk::glib::WeakRef<adw::ApplicationWindow>,
+    /// Settings itself: what its own toasts are shown in.
+    dialog: gtk::glib::WeakRef<adw::PreferencesDialog>,
     group: adw::PreferencesGroup,
     list: gtk::ListBox,
+    /// *Restore built-in themes*: shown while a built-in theme has no
+    /// folder.
+    restore: gtk::Button,
+    /// The watch on the themes folder, while Settings is open.
+    watch: RefCell<Option<Rc<crate::watch::Watch>>>,
     /// What the theme's author should know: its error and its notes.
     report: gtk::Label,
     /// Holds one group per `group` of the theme's options.
@@ -244,14 +274,19 @@ struct ThemeSettings {
 }
 
 impl ThemeSettings {
-    fn new(ctx: &Rc<Ctx>, window: &adw::ApplicationWindow) -> Rc<Self> {
+    fn new(
+        ctx: &Rc<Ctx>,
+        window: &adw::ApplicationWindow,
+        dialog: &adw::PreferencesDialog,
+    ) -> Rc<Self> {
         let group = adw::PreferencesGroup::builder()
             .title("Theme")
             .description(THEMES_ARE_CODE)
             .build();
+        // (GMNB_STEPS' `themes` reads the list by its class.)
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::None)
-            .css_classes(["boxed-list"])
+            .css_classes(["boxed-list", "wc-theme-list"])
             .build();
         group.add(&list);
         let report = gtk::Label::builder()
@@ -263,18 +298,35 @@ impl ThemeSettings {
             .css_classes(["caption", "dim-label"])
             .build();
         group.add(&report);
-        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        buttons.set_margin_top(12);
+        // The buttons wrap to a second line rather than widen Settings (three
+        // while Restore shows).
+        let buttons = adw::WrapBox::builder()
+            .child_spacing(8)
+            .line_spacing(8)
+            .margin_top(12)
+            .build();
         let reload = gtk::Button::builder()
             .label("Reload theme")
             .tooltip_text("Run the theme's file again, after you have edited it")
             .build();
+        // (GMNB_STEPS' `press` finds the buttons by their classes.)
         let open = gtk::Button::builder()
             .label("Open themes folder")
-            .tooltip_text("Where your own themes go, one folder each")
+            .tooltip_text(format!(
+                "Every theme is a folder here: drag new ones in. {}",
+                crate::theme::user_dir().display()
+            ))
+            .css_classes(["wc-open-themes"])
+            .build();
+        let restore = gtk::Button::builder()
+            .label("Restore built-in themes")
+            .tooltip_text("Put back the themes GMNB comes with whose folders were deleted")
+            .css_classes(["wc-restore-themes"])
+            .visible(false)
             .build();
         buttons.append(&reload);
         buttons.append(&open);
+        buttons.append(&restore);
         group.add(&buttons);
 
         let options = adw::PreferencesGroup::new();
@@ -284,8 +336,11 @@ impl ThemeSettings {
         let this = Rc::new(ThemeSettings {
             ctx: ctx.clone(),
             window: window.downgrade(),
+            dialog: dialog.downgrade(),
             group,
             list,
+            restore: restore.clone(),
+            watch: RefCell::default(),
             report,
             options,
             options_box,
@@ -328,25 +383,139 @@ impl ThemeSettings {
                 if t.ctx.layers.covers(b) {
                     return;
                 }
-                let dir = crate::theme::user_dir();
-                if let Err(e) = std::fs::create_dir_all(&dir) {
-                    t.ctx
-                        .toast(&format!("Couldn't make {}: {e}", dir.display()));
+                t.open_folder();
+            });
+        }
+        {
+            let weak = Rc::downgrade(&this);
+            restore.connect_clicked(move |b| {
+                let Some(t) = weak.upgrade() else { return };
+                if t.ctx.layers.covers(b) {
                     return;
                 }
-                let file = gtk::gio::File::for_path(&dir);
-                gtk::FileLauncher::new(Some(&file)).launch(
-                    t.window.upgrade().as_ref(),
-                    gtk::gio::Cancellable::NONE,
-                    |_| {},
-                );
+                let failed = crate::theme::restore_built_ins(&t.ctx.store, &t.ctx.hub);
+                if let Some(first) = failed.first() {
+                    t.toast(&format!("A built-in theme couldn't be restored: {first}"));
+                }
+                t.refresh();
             });
         }
         this
     }
 
+    /// A toast in Settings (text, not markup: a path may hold `&`), and
+    /// the same on stderr.
+    fn toast(&self, text: &str) {
+        eprintln!("gmnb: {text}");
+        if let Some(dialog) = self.dialog.upgrade() {
+            let toast = adw::Toast::new(text);
+            toast.set_use_markup(false);
+            toast.set_timeout(10);
+            dialog.add_toast(toast);
+        }
+    }
+
+    /// *Open themes folder*: the folder in the app the desktop opens
+    /// folders with, so that themes can be dragged into it.
+    ///
+    /// - Outside a sandbox: the default handler for folders
+    ///   (`inode/directory`) that the user's `mimeapps.list` names, asked
+    ///   of GIO itself. (GTK's own launcher, as of 4.22, hands the folder to
+    ///   the desktop portal whenever the session bus has one, sandboxed or
+    ///   not, and the portal looks the handler up in its own environment,
+    ///   or asks.)
+    /// - In the Flatpak (`/.flatpak-info`, as GTK tells): through GTK's
+    ///   launcher, which hands the portal's OpenURI.OpenFile the folder; the
+    ///   portal opens a folder with the host's default handler for folders
+    ///   without asking. (Its OpenDirectory would show the folder inside the
+    ///   one that holds it, through FileManager1, whichever file manager
+    ///   owns that.)
+    ///
+    /// If nothing opens it, a toast says why and where the folder is.
+    fn open_folder(self: &Rc<Self>) {
+        use gtk::gio;
+        let dir = crate::theme::user_dir();
+        let failed = {
+            let (weak, dir) = (Rc::downgrade(self), dir.display().to_string());
+            move |why: &str| {
+                if let Some(t) = weak.upgrade() {
+                    t.toast(&format!(
+                        "Couldn't open the themes folder: {why}. It is {dir}"
+                    ));
+                }
+            }
+        };
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            failed(&e.to_string());
+            return;
+        }
+        let file = gio::File::for_path(&dir);
+        let window = self.window.upgrade();
+        if std::path::Path::new("/.flatpak-info").exists() {
+            gtk::FileLauncher::new(Some(&file)).launch(
+                window.as_ref(),
+                gio::Cancellable::NONE,
+                move |opened| match opened {
+                    Err(e) if !e.matches(gtk::DialogError::Dismissed) => failed(e.message()),
+                    _ => {}
+                },
+            );
+            return;
+        }
+        let Some(app) = gio::AppInfo::default_for_type("inode/directory", false) else {
+            failed("no app is set to open folders");
+            return;
+        };
+        let launch = window
+            .map(|w| WidgetExt::display(&w))
+            .or_else(gtk::gdk::Display::default)
+            .map(|display| display.app_launch_context());
+        let name = app.display_name().to_string();
+        app.launch_uris_async(
+            &[file.uri().as_str()],
+            launch.as_ref(),
+            gio::Cancellable::NONE,
+            move |opened| {
+                if let Err(e) = opened {
+                    failed(&format!("{name} didn't start ({})", e.message()));
+                }
+            },
+        );
+    }
+
+    /// Watches the themes folder while Settings is open: what is dragged
+    /// in, deleted or changed there shows in the list.
+    fn watch(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        let watch = crate::watch::Watch::start(&crate::theme::user_dir(), move || {
+            if let Some(t) = weak.upgrade() {
+                t.refresh();
+            }
+        });
+        self.watch.replace(Some(watch));
+    }
+
+    /// Settings closed: nothing watches the themes folder any more.
+    fn unwatch(&self) {
+        if let Some(watch) = self.watch.take() {
+            watch.stop();
+        }
+    }
+
+    /// The themes folder changed: the list as it is now; and a chosen
+    /// theme whose folder went gives way to the base look (with a toast),
+    /// one that came back is loaded, and the options follow.
+    fn refresh(self: &Rc<Self>) {
+        let changed = self.ctx.hub.sync_installed();
+        self.rebuild_list();
+        if changed {
+            self.rebuild_options();
+        }
+    }
+
     /// The installed themes, the base look first: one row each, the
-    /// chosen one marked.
+    /// chosen one marked, and those GMNB comes with marked so; and
+    /// *Restore built-in themes* while one of those has no folder.
     fn rebuild_list(self: &Rc<Self>) {
         self.building.set(true);
         while let Some(row) = self.list.first_child() {
@@ -361,7 +530,7 @@ impl ThemeSettings {
                 id: active.clone(),
                 name: active.clone(),
                 description: String::new(),
-                your_copy: false,
+                comes_with: false,
                 error: Some("Not installed".into()),
             });
         }
@@ -385,12 +554,20 @@ impl ThemeSettings {
                 .activatable_widget(&check)
                 .build();
             row.add_prefix(&check);
-            if l.your_copy {
-                let mark = gtk::Label::new(Some("your copy"));
+            // (GMNB_STEPS' `themes` reads each row's theme by its name.)
+            row.set_widget_name(if l.id.is_empty() { "base" } else { &l.id });
+            if l.comes_with {
+                // On two lines: narrow, it would take the description's
+                // room. (GMNB_STEPS' `themes` finds it by its class.)
+                let mark = gtk::Label::new(Some("Comes with\nGMNB"));
                 mark.add_css_class("caption");
                 mark.add_css_class("dim-label");
+                mark.add_css_class("wc-comes-with");
+                mark.set_justify(gtk::Justification::Right);
+                mark.set_xalign(1.0);
                 mark.set_tooltip_text(Some(
-                    "A folder of yours with this name replaces the built-in theme",
+                    "GMNB put this theme's folder in the themes folder. Delete the folder to \
+                     remove it; Restore built-in themes brings it back",
                 ));
                 row.add_suffix(&mark);
             }
@@ -416,6 +593,7 @@ impl ThemeSettings {
             });
             self.list.append(&row);
         }
+        self.restore.set_visible(self.ctx.hub.built_ins_missing());
         self.building.set(false);
         self.sync_report();
     }

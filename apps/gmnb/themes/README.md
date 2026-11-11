@@ -1,7 +1,12 @@
 # GMNB's built-in themes
 
-Each folder here is one theme, built into the app. The contract they are
-written against is [docs/theming.md](../../../docs/theming.md).
+Each folder here is one theme GMNB comes with. GMNB carries their files
+and writes each folder into the user's themes folder the first time it
+starts; from then on it is a folder like any other there, to edit or
+delete, and Settings → Theme → *Restore built-in themes* brings back one
+that was deleted ([The themes folder](../../../docs/theming.md#the-themes-folder)).
+The contract they are written against is
+[docs/theming.md](../../../docs/theming.md).
 
 | Folder | What it is |
 |---|---|
@@ -20,7 +25,8 @@ Every file in `glazed/images/` is written by `glazed/make_assets.py`, which
 needs nothing but Python (`python3 -I make_assets.py --check` says whether
 the files are what it would write). A picture added there is added to the
 theme's list in `crates/gmnb-theme/src/theme.rs` too: a built-in theme's
-files are compiled into the app one by one.
+files are compiled into the app one by one, and what is listed there is
+what GMNB writes into the themes folder (`make_assets.py` isn't).
 
 GMNB's base look is not a theme. It is what a theme that returns `{}` looks
 like: the same as DGMNB.
@@ -79,10 +85,15 @@ engine's tests.
 
 ## Making your own
 
-1. Copy `mono/` to `~/.local/share/gmnb/themes/mine/` (in the Flatpak:
-   `~/.var/app/io.github.Go08er.GlazeMyNumbersBaby/data/gmnb/themes/mine/`).
-   Settings has a button that opens this folder.
+1. Settings → Theme → *Open themes folder* opens the themes folder,
+   `~/.local/share/gmnb/themes/` (in the Flatpak:
+   `~/.var/app/io.github.Go08er.GlazeMyNumbersBaby/data/gmnb/themes/`).
+   Mono is there: copy its folder to `mine/` (any id of lower-case
+   letters, digits, `-` and `_`). While Settings is open, a folder dragged
+   in shows in its list.
 2. Edit `theme.luau`. Settings → Theme → Reload picks up what you saved.
+   (You can edit the built-in themes' folders in place too: a newer GMNB
+   doesn't write over a folder you changed.)
 3. For autocomplete, point luau-lsp at `types/gmnb.d.luau` (the file's
    first lines say how).
 

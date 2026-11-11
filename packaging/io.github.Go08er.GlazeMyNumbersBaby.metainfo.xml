@@ -87,6 +87,7 @@
           <li>The default look matches DGMNB's, and the background opacity slider makes it see-through with its text kept readable</li>
           <li>Themes are Luau scripts in a folder of their own: colours, shapes and fonts, and layers they draw themselves, run in a sandbox with time and memory limits</li>
           <li>Three themes are built in: Aurora (the previous look, polished), Glazed (an 8-bit doughnut shop) and Swirls (the flowing paint behind s0y b0y)</li>
+          <li>The built-in themes are installed into the themes folder, where they can be deleted and restored</li>
           <li>Themes can show pictures and animations (PNG, JPEG, GIF and WebP) and paint computed backgrounds</li>
           <li>Themes can give keys and results sounds of their own: Settings → Sound turns them off or sets their volume, and the desktop's event sounds setting is followed</li>
           <li>Settings → Theme lists the built-in themes and your own, with each theme's options</li>

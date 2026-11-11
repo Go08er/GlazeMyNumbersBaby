@@ -31,6 +31,12 @@ pub struct Settings {
     /// (or isn't a table of options at all) is ignored, and options a
     /// theme no longer has are kept.
     pub theme_options: serde_json::Map<String, Value>,
+    /// The built-in themes GMNB has written into the themes folder: each
+    /// id and the digest of the folder it wrote (`gmnb_theme::install`).
+    /// One recorded and gone was deleted, and is not written again until
+    /// *Restore built-in themes*. Read entry by entry: one that isn't text
+    /// is ignored.
+    pub built_in_themes: serde_json::Map<String, Value>,
     /// "Use the desktop's accent colour": off, themes are told of none.
     pub system_accent: bool,
     /// Settings → Sound → Theme sounds (docs/theming-media.md,
@@ -65,6 +71,7 @@ impl Default for Settings {
             animated_background: true,
             active_theme: String::new(),
             theme_options: Default::default(),
+            built_in_themes: Default::default(),
             system_accent: true,
             sound: true,
             sound_volume: DEFAULT_SOUND_VOLUME,
@@ -146,6 +153,26 @@ impl Settings {
                 Some((id.clone(), value))
             })
             .collect()
+    }
+
+    /// What GMNB has written of its built-in themes (`built_in_themes`).
+    pub fn built_in_record(&self) -> gmnb_theme::install::Record {
+        self.built_in_themes
+            .iter()
+            .filter_map(|(id, digest)| Some((id.clone(), digest.as_str()?.to_string())))
+            .collect()
+    }
+
+    /// Keeps `record` as what GMNB has written of its built-in themes:
+    /// whether that changed what is saved.
+    pub fn set_built_in_record(&mut self, record: &gmnb_theme::install::Record) -> bool {
+        let new: serde_json::Map<String, Value> = record
+            .iter()
+            .map(|(id, digest)| (id.clone(), Value::from(digest.as_str())))
+            .collect();
+        let changed = new != self.built_in_themes;
+        self.built_in_themes = new;
+        changed
     }
 
     /// Saves one option of `theme`.
@@ -502,6 +529,47 @@ mod tests {
         assert_eq!(sound_volume(-1.0), 0.0);
         assert_eq!(sound_volume(7.0), 1.0);
         assert_eq!(sound_volume(f64::NAN), 0.5);
+    }
+
+    /// What GMNB wrote of its built-in themes (`built_in_themes`) loads
+    /// entry by entry: one that isn't text costs only itself (a lost entry
+    /// would have a deleted theme written again), a file from before it has
+    /// none, and it is written back as it was given.
+    #[test]
+    fn the_built_in_record_loads_entry_by_entry() {
+        let s = loaded("record-old", r#"{"theme":"dark"}"#);
+        assert!(s.built_in_record().is_empty());
+        let s = loaded(
+            "record",
+            r#"{"built_in_themes":{"aurora":"sha256:aa","mono":7,"glazed":"sha256:gg"},"theme":"light"}"#,
+        );
+        assert_eq!(s.theme, "light");
+        assert_eq!(
+            s.built_in_record(),
+            BTreeMap::from([
+                ("aurora".to_string(), "sha256:aa".to_string()),
+                ("glazed".to_string(), "sha256:gg".to_string()),
+            ])
+        );
+        let mut s = s;
+        let mut record = s.built_in_record();
+        // Kept again, the mistyped entry goes; kept as it is, nothing does.
+        assert!(s.set_built_in_record(&record));
+        assert_eq!(s.built_in_themes.len(), 2);
+        assert!(
+            !s.set_built_in_record(&record),
+            "unchanged: nothing to save"
+        );
+        record.insert("mono".into(), "sha256:mm".into());
+        assert!(s.set_built_in_record(&record));
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["built_in_themes"]["mono"], "sha256:mm");
+        let s = loaded(
+            "record-mistyped",
+            r#"{"built_in_themes":[1],"theme":"dark"}"#,
+        );
+        assert!(s.built_in_record().is_empty());
+        assert_eq!(s.theme, "dark");
     }
 
     #[test]

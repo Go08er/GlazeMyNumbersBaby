@@ -14,16 +14,25 @@
 //! - `wait:<ms>`: a longer pause;
 //! - `theme:<id>`: that theme chosen, as Settings' list chooses it (`base`:
 //!   the base look), without saving the choice;
+//! - `settings`: Settings opened, as the menu opens it; `close`: the dialog
+//!   on top (Settings) closed;
+//! - `press:<css class>`: the first button with that class in the window
+//!   or its dialog pressed (activated, as a key on it would: Settings'
+//!   `wc-open-themes`, `wc-restore-themes`);
+//! - `themes`: what Settings lists, a line on stderr: `themes: ` and each
+//!   row's theme (`base` for the base look), `*` after one marked "Comes
+//!   with GMNB"; then `restore shown` or `restore hidden`;
 //! - `quit`: what sound has done, a line on stderr (as `GMNB_THEME_STATS`
 //!   writes it), then a line `note: ...` for each of the theme's notes
-//!   (what Settings lists under the themes), and the window closed.
+//!   (what Settings lists under the themes), and the window closed (its
+//!   dialogs first: a window closes its dialog rather than itself).
 
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
+use adw::prelude::*;
 use gtk::glib;
-use gtk::prelude::*;
 
 use crate::widgets::keypad::Keypad;
 use crate::window::Window;
@@ -34,14 +43,22 @@ enum Step {
     Activate(u32),
     Wait(u64),
     Theme(String),
+    Settings,
+    Close,
+    Press(String),
+    Themes,
     Quit,
 }
 
 fn parse(spec: &str) -> VecDeque<Step> {
     spec.split(';')
         .filter_map(|part| {
-            if part.trim() == "quit" {
-                return Some(Step::Quit);
+            match part.trim() {
+                "quit" => return Some(Step::Quit),
+                "settings" => return Some(Step::Settings),
+                "close" => return Some(Step::Close),
+                "themes" => return Some(Step::Themes),
+                _ => {}
             }
             let (what, arg) = part.trim().split_once(':')?;
             Some(match what {
@@ -50,6 +67,7 @@ fn parse(spec: &str) -> VecDeque<Step> {
                 "activate" => Step::Activate(arg.trim().parse().ok()?),
                 "wait" => Step::Wait(arg.trim().parse().ok()?),
                 "theme" => Step::Theme(arg.trim().to_string()),
+                "press" => Step::Press(arg.trim().to_string()),
                 _ => {
                     eprintln!("GMNB_STEPS: what is {part:?}?");
                     return None;
@@ -110,16 +128,79 @@ fn next(win: Rc<Window>, steps: std::cell::RefCell<VecDeque<Step>>, gap: u64) {
         }
         Step::Wait(ms) => pause = ms,
         Step::Theme(id) => win.ctx().hub.set_theme(&id),
+        Step::Settings => crate::prefs::show(&win),
+        Step::Close => {
+            if let Some(dialog) = win.widget().visible_dialog() {
+                dialog.close();
+            }
+        }
+        Step::Press(class) => {
+            let found = widgets(&win.widget().upcast())
+                .into_iter()
+                .find(|w| w.is::<gtk::Button>() && w.has_css_class(&class));
+            match found {
+                Some(button) => {
+                    button.activate();
+                }
+                None => eprintln!("GMNB_STEPS: no button with class {class}"),
+            }
+        }
+        Step::Themes => {
+            let all = widgets(&win.widget().upcast());
+            let list = all.iter().find(|w| w.has_css_class("wc-theme-list"));
+            let rows: Vec<String> = list
+                .map(|list| {
+                    widgets(list)
+                        .into_iter()
+                        .filter(|w| w.is::<adw::ActionRow>())
+                        .map(|row| {
+                            let marked = widgets(&row)
+                                .iter()
+                                .any(|w| w.has_css_class("wc-comes-with"));
+                            format!("{}{}", row.widget_name(), if marked { "*" } else { "" })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let restore = all
+                .iter()
+                .find(|w| w.has_css_class("wc-restore-themes"))
+                .is_some_and(|b| b.is_visible());
+            eprintln!(
+                "themes: {}; restore {}",
+                rows.join(" "),
+                if restore { "shown" } else { "hidden" }
+            );
+        }
         Step::Quit => {
             eprintln!("sound: {}", win.ctx().hub.sound_report());
             for note in win.ctx().hub.notes() {
                 eprintln!("note: {note}");
+            }
+            // (A window with a dialog open closes the dialog instead.)
+            while let Some(dialog) = win.widget().visible_dialog() {
+                dialog.force_close();
             }
             win.widget().close();
             return;
         }
     }
     glib::timeout_add_local_once(Duration::from_millis(pause), move || next(win, steps, gap));
+}
+
+/// `root` and every widget in it, parents first.
+fn widgets(root: &gtk::Widget) -> Vec<gtk::Widget> {
+    let mut out = Vec::new();
+    let mut todo = vec![root.clone()];
+    while let Some(w) = todo.pop() {
+        let mut child = w.last_child();
+        while let Some(c) = child {
+            child = c.prev_sibling();
+            todo.push(c);
+        }
+        out.push(w);
+    }
+    out
 }
 
 /// The keypads drawn in `root`.

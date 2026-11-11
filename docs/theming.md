@@ -144,19 +144,84 @@ mytheme/
 
 - The folder's name is the theme's **id**: lower-case letters, digits, `-`
   and `_`, at most 32 characters, starting with a letter or digit.
-- Your themes live in `$XDG_DATA_HOME/gmnb/themes/<id>/`, usually
-  `~/.local/share/gmnb/themes/<id>/`.
+- Every theme lives in the **themes folder**, `$XDG_DATA_HOME/gmnb/themes/<id>/`,
+  usually `~/.local/share/gmnb/themes/<id>/`: yours, and the ones GMNB
+  comes with.
 - **Flatpak:** the sandbox sets `XDG_DATA_HOME` itself, so the same folder is
   `~/.var/app/io.github.Go08er.GlazeMyNumbersBaby/data/gmnb/themes/<id>/`.
   No extra permission is needed. Settings → Theme → *Open themes folder*
-  opens it either way.
-- Built-in themes (`aurora`, `mono`, `glazed`, `swirls`) are compiled into the app from
-  `apps/gmnb/themes/`. A folder of yours with the same id replaces the
-  built-in one; Settings marks it "your copy".
+  opens it either way (see [The themes folder](#the-themes-folder)).
 - `theme.luau` is Luau source text, at most 512 KiB. Compiled bytecode is
   refused.
 - A theme cannot `require` other files, and has no `loadstring`, `io`,
   `os.execute` or `debug`. The rest of Luau's standard library is there.
+
+### The themes folder
+
+GMNB comes with four themes, `aurora`, `mono`, `glazed` and `swirls`
+(from `apps/gmnb/themes/`). It carries their files, and writes each one's
+folder into the themes folder the first time it starts for you. From then
+on they are folders like any other. This replaces "your copy" (a folder
+of yours with a built-in theme's id, which stood in for the theme compiled
+into the app): there is no copy any more, only the folder, and it is
+yours to edit, delete or replace.
+
+- **Deleted, it stays deleted.** GMNB records what it wrote
+  (`built_in_themes` in `settings.json`: each id and a SHA-256 digest of
+  the folder), so it never writes a theme it wrote once again of its own
+  accord. Settings → Theme → *Restore built-in themes*, shown while one of
+  them has no folder, writes each missing one again; it never writes over
+  a folder that is there.
+- **Changed, it is kept.** A newer GMNB that carries a changed version
+  replaces a built-in theme's folder only if the folder is still exactly
+  what GMNB wrote (the digests match). A folder you changed is kept,
+  without a word. For the new version, delete your folder (or move it
+  aside) and restore.
+- **A folder of yours with a built-in theme's id**, one GMNB didn't write,
+  is yours: GMNB never writes to it. (One that is exactly what GMNB
+  carries counts as GMNB's: written by another GMNB, or by one that
+  stopped before it saved its settings.)
+- **Never over anything, never through a link.** A folder is written into
+  a new hidden folder in the themes folder (`.gmnb-…`, a name no theme can
+  have, so no list shows it) and renamed into place only if nothing is at
+  its name by then (`RENAME_NOREPLACE`: not even an empty folder is
+  replaced). Each file is created new, and nothing follows a link where a
+  theme's folder or one of its files goes. A hidden folder left behind by a
+  GMNB that stopped while writing is cleared away an hour later.
+- **If a folder can't be written** (a read-only home, a full disk), GMNB
+  uses its own copy of the theme for that run, says so on stderr, and
+  tries again the next time it starts. A run that touches no saved state
+  (`GMNB_SCREENSHOT` without `GMNB_REAL_STORE`) writes nothing: GMNB's own
+  copies stand in for the built-in themes that have no folder.
+- **The list.** Settings lists the base look ("GMNB", which is GMNB itself:
+  it has no folder, can't be deleted and is always first), then the
+  built-in themes' ids in the order above where there is a folder, then
+  every other theme folder by id, then `GMNB_THEME_DIR`'s. A theme GMNB
+  put in the folder is marked "Comes with GMNB". About → Legal keeps
+  every built-in theme's credits whatever their folders hold: their fonts
+  and pictures are in GMNB itself.
+- **Dragged in, it shows.** While Settings is open it watches the themes
+  folder and each theme's folder in it: a theme dragged in, deleted, or
+  whose `theme.luau` changes shows in the list a moment later (once the
+  folder has been still for 300 ms). Nothing watches the folder while
+  Settings is closed: GMNB wakes for nothing at rest, and a theme deleted
+  then is noticed when Settings next opens or GMNB next starts.
+- **The chosen theme deleted** (seen at start, while Settings is open, or
+  as Settings opens): the base look, and a toast that says the theme isn't
+  installed, as for any theme that is missing or fails (while Settings is
+  open, every such toast is Settings' own: the window's would be under it,
+  and in a narrow window hidden by it). It stays the
+  choice, and is loaded again when its folder is back (restored, or
+  dragged in, seen the same way).
+- ***Open themes folder*** opens the folder in the app your desktop opens
+  folders with, to drag themes into. Outside a sandbox that is the default
+  handler for folders (`inode/directory`) your `mimeapps.list` names,
+  which GMNB asks GIO for (with none named, the first app installed that
+  says it opens folders). In the Flatpak it goes through the desktop
+  portal: GTK hands the folder to OpenURI's `OpenFile`, and the portal
+  opens a folder with the host's default handler for folders without
+  asking. If nothing opens it (no app for folders, the portal refuses), a
+  toast says why and where the folder is. Its tooltip gives the path too.
 
 ### The theme table
 
@@ -1391,10 +1456,12 @@ Settings → Appearance, top to bottom:
 
 1. **Mode**: Light / Dark / System (as now), and "Use the desktop's accent
    colour" (new; on by default; off makes `ctx.accent` `nil`).
-2. **Theme**: a list with "GMNB" (the base look) first, then built-in
-   themes, then yours; each with its `description`. Below it *Reload* and
-   *Open themes folder*. A theme that failed shows its error here; so do
-   its warnings (the latest 20).
+2. **Theme**: a list with "GMNB" (the base look) first, then the themes
+   folder's, the built-in themes' ids first (marked "Comes with GMNB"),
+   then the rest; each with its `description`. Below it *Reload*, *Open
+   themes folder*, and *Restore built-in themes* while a built-in theme has
+   no folder ([The themes folder](#the-themes-folder)). A theme that failed
+   shows its error here; so do its warnings (the latest 20).
 3. **The chosen theme's options**, one group per `group`.
 4. **Sound**: *Theme sounds* (a switch, on by default) and Volume (50% by
    default). See [Settings](theming-media.md#settings).
@@ -2014,10 +2081,11 @@ toolkit code knows Aurora.
 
 ### Fonts
 
-- Built-in themes' font files are written to the cache directory and
-  added to the app's own font map, as Outfit is in 0.2
-  (`pango_font_map_add_font_file`); a user theme's are added from its
-  folder. Pango has no call that takes a file out of a font map again, so
+- A theme's font files are added to the app's own font map from its
+  folder (`pango_font_map_add_font_file`); a built-in theme served from
+  GMNB's own copy (its folder couldn't be written) has them written to the
+  cache directory first, as Outfit was in 0.2. Pango has no call that
+  takes a file out of a font map again, so
   they stay known to the app until it exits; nothing uses them unless a
   style names their family.
 - A font is found by the family name inside the file. The bundled Inter's
@@ -2099,6 +2167,18 @@ tables, says `library:0:`.
     [the media chapter](theming-media.md#tests) (the synthesiser's test
     vectors, no sound system, the caps, nothing running at rest or in the
     base look, bad files, DGMNB linking none of it).
+11. The themes folder (`crates/gmnb-theme/tests/install.rs`,
+    `apps/gmnb/tests/themes_folder.rs`): the first start writes each
+    built-in theme once, exactly; one deleted isn't written again; restore
+    brings back only what is missing; an update replaces only a folder
+    still as GMNB wrote it, and keeps one the user changed; a folder GMNB
+    didn't write, or a link planted at a theme's folder or in it, is never
+    written to or through; a folder that can't be written leaves GMNB's
+    own copy standing in; the order of the list; the chosen theme deleted
+    at start and while Settings is open; themes dragged in shown; nothing
+    watching the folder once Settings is closed; and *Open themes folder*
+    opening the folder in the app `mimeapps.list` names, on a private bus
+    whose stand-in portal GTK would have used and isn't asked.
 
 ### Open points
 
@@ -2147,3 +2227,22 @@ Decided here, and worth a second look by the owner:
 12. **GMNB draws text unhinted, as DGMNB**, whatever the desktop's font
     settings say ([Text in its place](#text-in-its-place)). It applies to
     every theme and to the dialogs, and to the toolkit's own labels.
+13. **The built-in themes are folders in the themes folder**
+    ([The themes folder](#the-themes-folder)). *Restore built-in themes*
+    shows only while one of them has no folder. A theme deleted while
+    Settings is closed keeps showing until Settings opens or GMNB starts
+    again: nothing watches the folder at rest.
+14. ***Open themes folder* in the Flatpak uses the portal's `OpenFile`,
+    not `OpenDirectory`.** As of xdg-desktop-portal 1.22, `OpenDirectory`
+    opens the folder that *holds* the one it is given (through
+    `org.freedesktop.FileManager1.ShowItems`, the themes folder selected
+    in its parent, in whichever file manager owns that name; else that
+    parent with the default handler), not the folder itself. `OpenFile`
+    given the folder opens it with the host's default handler for folders
+    (`inode/directory`) and skips its app chooser for folders. Outside a
+    sandbox GMNB asks GIO for that handler itself rather than through
+    GTK's `GtkFileLauncher`: GTK 4.22 hands the folder to the portal
+    whenever the session bus has one (`gdk_display_should_use_portal`:
+    the portal's name can be started and its OpenURI is version 3 or
+    later), sandboxed or not, and the portal then looks the handler up in
+    its own environment, or asks.

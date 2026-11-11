@@ -12,6 +12,7 @@ mod sound;
 mod steps;
 mod theme;
 mod undo;
+mod watch;
 mod widgets;
 mod window;
 

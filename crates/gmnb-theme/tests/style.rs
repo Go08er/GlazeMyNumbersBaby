@@ -850,9 +850,13 @@ fn auroras_keys_keep_no_least_size_beyond_the_bases() {
     }
 }
 
-/// The themes Settings lists, and "your copy".
+/// The themes Settings lists after the base look: every theme folder, the
+/// built-in themes' ids first in their order (where there is a folder, or
+/// GMNB's own copy stands in for one that couldn't be written), then the
+/// rest by id, then `GMNB_THEME_DIR`'s. A folder with a built-in theme's
+/// id is that theme, whoever wrote it.
 #[test]
-fn discovery_lists_built_ins_then_the_users() {
+fn discovery_lists_built_ins_then_the_rest() {
     let root = std::env::temp_dir().join(format!("gmnb-themes-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let write = |id: &str, text: &str| {
@@ -864,32 +868,39 @@ fn discovery_lists_built_ins_then_the_users() {
         "return { api = 1, name = 'Zebra', description = 'Stripes.' }",
     );
     write("mono", "return { api = 1, name = 'My Mono' }");
+    write("swirls", "return { api = 1, name = 'My Swirls' }");
     write("broken", "return {");
+    write("aardvark", "return { api = 1, name = 'Aardvark' }");
     write("Bad Name", "return { api = 1, name = 'x' }");
     write("base", "return { api = 1, name = 'x' }");
+    write(".gmnb-new-aurora-1-2-3", "return { api = 1, name = 'x' }");
     std::fs::create_dir_all(root.join("empty")).unwrap();
     let dev = root.join("zebra");
-    let sources = theme::discover(Some(&root), Some(&dev));
+    // Glazed's folder couldn't be written this run; Aurora was deleted.
+    let embedded = ["glazed".to_string()];
+    let sources = theme::discover(Some(&root), &embedded, Some(&dev));
     let ids: Vec<(&str, theme::Origin)> =
         sources.iter().map(|s| (s.id.as_str(), s.origin)).collect();
     use theme::Origin::*;
     assert_eq!(
         ids,
         [
-            ("aurora", BuiltIn),
-            ("mono", UserCopy),
+            ("mono", Folder),
             ("glazed", BuiltIn),
-            ("swirls", BuiltIn),
-            ("broken", User),
-            ("zebra", User),
+            ("swirls", Folder),
+            ("aardvark", Folder),
+            ("broken", Folder),
+            ("zebra", Folder),
             ("dev", Dev)
         ]
     );
+    assert_eq!(sources[1].dir(), None);
+    assert_eq!(sources[2].dir(), Some(root.join("swirls").as_path()));
     let listed = theme::list(&sources, &common::limits());
-    assert_eq!(listed[0].meta.as_ref().unwrap().name, "Aurora");
-    assert_eq!(listed[1].meta.as_ref().unwrap().name, "My Mono");
-    assert_eq!(listed[2].meta.as_ref().unwrap().name, "Glazed");
-    assert_eq!(listed[3].meta.as_ref().unwrap().name, "Swirls");
+    assert_eq!(listed[0].meta.as_ref().unwrap().name, "My Mono");
+    assert_eq!(listed[1].meta.as_ref().unwrap().name, "Glazed");
+    assert_eq!(listed[2].meta.as_ref().unwrap().name, "My Swirls");
+    assert_eq!(listed[3].meta.as_ref().unwrap().name, "Aardvark");
     assert!(
         listed[4]
             .meta
@@ -902,7 +913,14 @@ fn discovery_lists_built_ins_then_the_users() {
         Some("Stripes.")
     );
     assert_eq!(listed[6].meta.as_ref().unwrap().name, "Zebra");
-    assert_eq!(theme::discover(None, None).len(), 4);
+    // No themes folder: only what GMNB's own copies stand in for.
+    assert!(theme::discover(None, &[], None).is_empty());
+    let all: Vec<String> = theme::BUILT_IN.iter().map(|b| b.id.to_string()).collect();
+    let ids: Vec<String> = theme::discover(None, &all, None)
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ids, ["aurora", "mono", "glazed", "swirls"]);
     let _ = std::fs::remove_dir_all(&root);
 }
 
