@@ -1527,3 +1527,62 @@ fn the_guard_is_not_fooled_by_a_moment_of_busy_and_lets_go_of_a_slow_one() {
     let again = field_width(&theme, 761.0, 640.0);
     assert!(again >= fine - 2, "{again} {fine}");
 }
+
+// ---- An event that is still moving the paint when it goes ------------------------
+
+/// How many pixels of the paint an event of `kind` moves, `age` seconds
+/// after it, in a `width` x `height` window standing still (speed 0, so
+/// the field itself is the same in every frame).
+fn event_pixels(width: f32, height: f32, kind: EventKind, age: f64) -> usize {
+    let theme = swirls();
+    let c = ctx(&theme, &[("speed", OptionValue::Number(0.0))]);
+    let at = |time: f64, events: Vec<(f64, &Event)>| {
+        let f = Frame {
+            time,
+            dt: 1.0 / 30.0,
+            events,
+            ..Frame::sized(width, height)
+        };
+        let d = draw_at(&theme, LayerKind::Background, &c, &f);
+        field(&d).0.pixels.clone()
+    };
+    let result = outcome(kind, width);
+    let _ = at(10.0, vec![]);
+    let with = at(10.5, vec![(age, &result)]);
+    let without = at(11.0, vec![]);
+    assert_eq!(with.len(), without.len());
+    with.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(without.as_chunks::<4>().0)
+        .filter(|(a, b)| a != b)
+        .count()
+}
+
+/// Every event is dropped when its time is up: a result's after 2.5
+/// seconds, the others' after 1.3. What it did to the paint must have worn
+/// out by then, or the picture jumps: a ripple in a big window (it takes
+/// longer than 2.5 s to cross a maximised one), the slow turn of a page
+/// change or a new colour (still some pixels of turn at 1.3 s).
+#[test]
+fn what_an_event_does_to_the_paint_has_worn_out_by_the_time_it_goes() {
+    for (kind, life) in [
+        (EventKind::Result, 2.5),
+        (EventKind::Error, 1.3),
+        (EventKind::Mode, 1.3),
+        (EventKind::Option, 1.3),
+    ] {
+        for (w, h) in [(760.0, 640.0), (1920.0, 1080.0), (3840.0, 2160.0)] {
+            // (It does move the paint while it lives.)
+            let alive = event_pixels(w, h, kind, 0.5);
+            assert!(alive > 100, "{kind:?} {w}x{h}: {alive} pixels at 0.5 s");
+            // And a frame before the event is dropped it has all but gone:
+            // a small share of what it moved.
+            let last = event_pixels(w, h, kind, life - 0.04);
+            assert!(
+                last * 100 <= alive,
+                "{kind:?} {w}x{h}: still moving {last} pixels when its event goes (at 0.5 s: {alive})"
+            );
+        }
+    }
+}

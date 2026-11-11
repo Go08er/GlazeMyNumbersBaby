@@ -1357,6 +1357,10 @@ end
 --   a stir    turns the paint round a point, there and back, like a spoon
 --   a ripple  pushes it outward in a ring that travels
 local STIR_LIFE = 1.3
+-- How long the layer keeps a result's event: a ripple is worn out by then
+-- (in a window it takes longer to cross it would vanish with the event,
+-- the paint jumping back).
+local RESULT_LIFE = 2.5
 local RIPPLE_SPEED = 620
 local RIPPLE_WIDTH = 100
 
@@ -1533,7 +1537,7 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 					add_stir(k, sx, sy, x, y, 260, exp(-4 * age) * sin(TAU * 4.5 * age) * 1.1)
 				end
 			elseif e.cause ~= "operator" and e.cause ~= "digit" then
-				local life = sqrt(width * width + height * height) / RIPPLE_SPEED
+				local life = min(sqrt(width * width + height * height) / RIPPLE_SPEED, RESULT_LIFE - 0.1)
 				if age < life then
 					alive = true
 					-- It swells in two frames and wears out on its way.
@@ -1548,7 +1552,11 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 				turned_once = true
 				alive = true
 				local reach = sqrt(width * width + height * height) * 0.6
-				add_stir(k, sx, sy, width / 2, height / 2, reach, stir_turn(age * 0.8) * 0.5)
+				-- (Taken in over its last fifth of a second: still turned a
+				-- twentieth of a radian when its event goes, the paint would
+				-- jump back by several pixels.)
+				local ending = clamp((STIR_LIFE - age) / 0.3, 0, 1)
+				add_stir(k, sx, sy, width / 2, height / 2, reach, stir_turn(age * 0.8) * 0.5 * ending)
 			end
 		end
 	end
@@ -2482,7 +2490,7 @@ local theme: Theme = {
 	sounds = sounds,
 	sound = sound,
 	layers = {
-		background = { draw = background, fade = false, events = { press = STIR_LIFE, result = 2.5, error = STIR_LIFE, mode = STIR_LIFE, option = STIR_LIFE } },
+		background = { draw = background, fade = false, events = { press = STIR_LIFE, result = RESULT_LIFE, error = STIR_LIFE, mode = STIR_LIFE, option = STIR_LIFE } },
 		keypad = { draw = keypad, place = place, events = { show = 1.6 } },
 		display = { draw = display },
 	},
