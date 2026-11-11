@@ -50,6 +50,10 @@ three:
   worked out from your desktop's accent colour (System) and one from
   three colours you pick (Freestyle).
 
+On a see-through window (Settings → Window → Background opacity)
+Sprinkles becomes a shop window under its awning, and Swirls' paint
+becomes ribbons under the glass keys.
+
 They are installed into your themes folder the first time GMNB starts,
 where they are folders like any you add: delete the ones you don't want
 (Settings → Theme → *Restore built-in themes* brings them back), and drag

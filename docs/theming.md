@@ -672,7 +672,13 @@ The Background opacity setting (0.1 to 1) is the app's, not the theme's.
   background layer's alone: the other layers are never faded, and it is
   noted on them. The [readability rules](#readability-rules) hold over
   whatever such a layer shows over a desktop: Aurora's tests take it
-  from the layer itself.
+  from the layer itself. Sprinkles' wall thins with the window and its
+  shop window comes in where it was (a frame and a shine on the glass),
+  under an awning that stays: from 0.95 down the header *is* the awning,
+  in style, so what its title lies on is the style's. Swirls' paint
+  clears its dark band first, and is ribbons of its two bright bands over
+  the desktop under the same glass keys; its tests take the paint from
+  the ramp its layer draws through, each entry with its own opacity.
 
 The base look's treatment, all of it switched off at opacity 1:
 
@@ -1794,6 +1800,7 @@ noise.
 | A scale to each flavour, a jingle timed to the icing | **Scripted** (`sound`, `gmnb.synth`): thirteen recipes; a key's note is one sound at another speed. System plays in G major's five notes; Freestyle in the key of the flavour whose icing is nearest its own round the wheel (a grey icing, in System's) | Sound that follows the look needs the same options the look has. |
 | Jersey 10 | A font file in the theme's folder, set at whole multiples of its own pixel where it has to be sharp (the readout, the number keys), and at one and a half for words | The app sets text unhinted, to a quarter of a pixel: a pixel face is only crisp where its pixels are whole ones. |
 | The flavours' tiles in Settings | **Scripted** (`preview`) | |
+| A see-through window: the shop's window | **Scripted** (`background` layer with `fade = false`, and `style`): the layer paints the wall at the window's opacity itself, and as it goes the shop front's glass comes in where it was, from none at 0.95 to all at 0.6 (a frame round the counter in the line's colour, two stepped streaks of shine); the awning it paints stays solid, and from 0.95 down the header is the awning itself (`header.background`: sixteen stripes in three gradients' runs), as `window.background` goes | Faded with the window, the wall, the awning and all of the shop were a fifth of themselves at 0.2, and the header a plain card that appeared at 0.99. The awning in style keeps what the title lies on where the tables see it, and holds if the layer is ever off. |
 
 What Sprinkles asks of the engine while it lives, measured as Aurora's was
 (release build, 760×640, the software renderer): the wall's loop at eight
@@ -1832,6 +1839,7 @@ picture the theme computes, and everything in it is built on that.
 | The tiles in Settings | **Scripted** (`preview`): a 17 × 11 field through each set's ramp (System's and Freestyle's as their colours are now) | A tile is drawn once and stands. |
 | The sounds | **Recipes** (`gmnb.synth`) and a **scripted** choice (`sound`): number keys fall on seven notes of one scale, and a result rings the last three that were typed | |
 | One look in light and in dark | **Scripted**: `style` doesn't read `ctx.dark` | The page it comes from has one look. |
+| A see-through window: ribbons of paint under the glass | **Scripted** (`background` layer with `fade = false`, and `style`): the paint's ramp is made with its bands' own opacities, the dark band's falling to nothing at 0.5 and the bright ones' to two fifths at 0.1 (a ramp for each 64th of opacity); `window.background` is clear; the glass is as strong as its text needs over that paint and over the bare desktop, its hairline a little brighter as the paint clears; the figures and tiles stay solid | Faded as a whole, the near-black band laid a grey smoke over the desktop and the colour went with it. With the dark band gone first, the desktop shows clear between ribbons that keep their colour, and the glass is the same glass. |
 
 Nothing in the app is specific to Swirls either. What it needed of the
 app was one line: the graph's analysis column is a `plain` container now,
@@ -2016,7 +2024,11 @@ bits' indexes need 2.45, as the placeholder does (open point 9):
 picture of its own must read over the picture: its `window.background`
 names the picture's colours, and the table is run once more with every
 colour the layer can draw under the window in turn. For Swirls those are
-the 768 entries of its ramp (three bands and every blend between two):
+the 768 entries of its ramp (three bands and every blend between two),
+taken from the ramp its background layer draws through (on a see-through
+window each entry has its own opacity and lies over the desktop, and
+`swirls_reads_at_every_opacity` runs them at every twentieth from 0.1
+to 1):
 `swirls_texts_read_over_every_colour_of_the_field`, for each of its eight
 sets of bands under each of its three strengths of glass;
 `swirls_own_colours_read_over_every_colour_of_the_field` for System and
