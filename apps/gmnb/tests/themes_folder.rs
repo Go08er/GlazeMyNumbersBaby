@@ -868,6 +868,46 @@ fn built_in_themes_are_installed_once_and_restored_from_settings() {
     );
 }
 
+/// The themes folder can't be written (its place is taken by a file; a
+/// read-only home or a full disk alike): GMNB says so on stderr, once for
+/// each built-in theme, and GMNB's own copies stand in for the run, listed
+/// and marked as ever, the chosen one loaded. Nothing is recorded, so the
+/// next start tries again.
+#[test]
+fn built_in_themes_that_cant_be_written_are_served_from_gmnbs_copies() {
+    let display = display_or_skip!();
+    let profile = Profile::new("unwritable");
+    std::fs::create_dir_all(profile.path("data/gmnb")).unwrap();
+    std::fs::write(profile.themes(), "not a folder").unwrap();
+    let app = Running::start(
+        &display,
+        &profile,
+        None,
+        &[
+            ("GMNB_THEME", "mono"),
+            ("GMNB_PREFS", "1"),
+            ("GMNB_STEPS", "wait:300;themes;quit"),
+        ],
+    );
+    let listed = themes_line(&app.line("themes: ", 1));
+    let err = app.finish();
+    assert_eq!(
+        listed.0,
+        ["base", "aurora*", "mono*", "glazed*", "swirls*"],
+        "{err}"
+    );
+    let said = err
+        .lines()
+        .filter(|l| l.contains("GMNB's own copy of the theme is used for this run"))
+        .count();
+    assert_eq!(said, 4, "{err}");
+    assert!(!err.contains("isn't installed"), "{err}");
+    assert!(!err.contains("couldn't be loaded"), "{err}");
+    let settings =
+        std::fs::read_to_string(profile.path("config/gmnb/settings.json")).unwrap_or_default();
+    assert!(!settings.contains("sha256:"), "{settings}");
+}
+
 /// While Settings is open, a theme copied into the themes folder (its
 /// folder first, its file a moment later, as a file manager copies) is
 /// listed, and a built-in theme deleted there leaves the list; the chosen
@@ -976,7 +1016,9 @@ fn switches(pid: u32) -> u64 {
 
 /// Settings watches the themes folder and each theme's folder while it is
 /// open, and once it is closed nothing does (no inotify watch on any of
-/// them is left in the process); at rest after that, GMNB doesn't wake.
+/// them is left in the process): the chosen theme (Mono, which draws
+/// nothing) deleted then wakes nothing, and at rest GMNB doesn't wake at
+/// all. Settings opened again notices it: the base look, and GMNB says so.
 #[test]
 fn nothing_watches_the_folder_once_settings_is_closed() {
     let display = display_or_skip!();
@@ -986,10 +1028,12 @@ fn nothing_watches_the_folder_once_settings_is_closed() {
         &profile,
         None,
         &[
+            ("GMNB_THEME", "mono"),
             ("GMNB_PREFS", "1"),
             (
                 "GMNB_STEPS",
-                "wait:300;themes;wait:1500;close;wait:1000;themes;wait:6000;quit",
+                "wait:300;themes;wait:1500;close;wait:1000;themes;wait:6000;settings;wait:800;\
+                 themes;quit",
             ),
         ],
     );
@@ -1022,16 +1066,32 @@ fn nothing_watches_the_folder_once_settings_is_closed() {
             "still watched with Settings closed: {closed:?}"
         );
     }
-    // At rest.
+    // The chosen theme deleted with Settings closed; then at rest.
+    std::fs::remove_dir_all(profile.themes().join("mono")).unwrap();
     std::thread::sleep(Duration::from_millis(1500));
     let (before, start) = (switches(pid), Instant::now());
     std::thread::sleep(Duration::from_secs(3));
     let woke = switches(pid) - before;
     let took = start.elapsed();
+    assert!(
+        !app.stderr().contains("isn't installed"),
+        "noticed with Settings closed"
+    );
+    let reopened = themes_line(&app.line("themes: ", 3));
     let err = app.finish();
     eprintln!(
         "at rest after Settings closed, over {:.1} s: {woke} context switches",
         took.as_secs_f64()
     );
     assert_eq!(woke, 0, "GMNB woke at rest after Settings closed: {err}");
+    assert_eq!(
+        reopened.0,
+        ["base", "aurora*", "glazed*", "swirls*", "mono"],
+        "{err}"
+    );
+    assert!(
+        err.lines()
+            .any(|l| l == "gmnb: Theme “mono” isn't installed"),
+        "{err}"
+    );
 }

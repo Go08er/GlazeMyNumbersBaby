@@ -97,6 +97,10 @@ pub fn show(win: &Rc<Window>) {
     let themes = ThemeSettings::new(&ctx, &win.widget(), &dialog);
     page.add(&themes.group);
     page.add(&themes.options);
+    // What became of the themes folder while Settings was closed (nothing
+    // watches it then): a chosen theme whose folder went gives way to the
+    // base look now, and one that came back is loaded.
+    ctx.hub.sync_installed();
     themes.rebuild_list();
     themes.rebuild_options();
     // Themes dragged into the folder show up while Settings is open.
@@ -278,8 +282,13 @@ impl ThemeSettings {
             .css_classes(["caption", "dim-label"])
             .build();
         group.add(&report);
-        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        buttons.set_margin_top(12);
+        // The buttons wrap to a second line rather than widen Settings (three
+        // while Restore shows).
+        let buttons = adw::WrapBox::builder()
+            .child_spacing(8)
+            .line_spacing(8)
+            .margin_top(12)
+            .build();
         let reload = gtk::Button::builder()
             .label("Reload theme")
             .tooltip_text("Run the theme's file again, after you have edited it")

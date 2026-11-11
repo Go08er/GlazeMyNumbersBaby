@@ -206,10 +206,11 @@ yours to edit, delete or replace.
   folder has been still for 300 ms). Nothing watches the folder while
   Settings is closed: GMNB wakes for nothing at rest, and a theme deleted
   then is noticed when Settings next opens or GMNB next starts.
-- **The chosen theme deleted** (at start, or while Settings is open): the
-  base look, and a toast that says the theme isn't installed, as for any
-  theme that is missing or fails. It stays the choice, and is loaded again
-  when its folder is back (restored, or dragged in while Settings is open).
+- **The chosen theme deleted** (seen at start, while Settings is open, or
+  as Settings opens): the base look, and a toast that says the theme isn't
+  installed, as for any theme that is missing or fails. It stays the
+  choice, and is loaded again when its folder is back (restored, or
+  dragged in, seen the same way).
 - ***Open themes folder*** opens the folder in the app your desktop opens
   folders with, to drag themes into. Outside a sandbox that is the default
   handler for folders (`inode/directory`) your `mimeapps.list` names,

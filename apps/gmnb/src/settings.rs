@@ -531,6 +531,47 @@ mod tests {
         assert_eq!(sound_volume(f64::NAN), 0.5);
     }
 
+    /// What GMNB wrote of its built-in themes (`built_in_themes`) loads
+    /// entry by entry: one that isn't text costs only itself (a lost entry
+    /// would have a deleted theme written again), a file from before it has
+    /// none, and it is written back as it was given.
+    #[test]
+    fn the_built_in_record_loads_entry_by_entry() {
+        let s = loaded("record-old", r#"{"theme":"dark"}"#);
+        assert!(s.built_in_record().is_empty());
+        let s = loaded(
+            "record",
+            r#"{"built_in_themes":{"aurora":"sha256:aa","mono":7,"glazed":"sha256:gg"},"theme":"light"}"#,
+        );
+        assert_eq!(s.theme, "light");
+        assert_eq!(
+            s.built_in_record(),
+            BTreeMap::from([
+                ("aurora".to_string(), "sha256:aa".to_string()),
+                ("glazed".to_string(), "sha256:gg".to_string()),
+            ])
+        );
+        let mut s = s;
+        let mut record = s.built_in_record();
+        // Kept again, the mistyped entry goes; kept as it is, nothing does.
+        assert!(s.set_built_in_record(&record));
+        assert_eq!(s.built_in_themes.len(), 2);
+        assert!(
+            !s.set_built_in_record(&record),
+            "unchanged: nothing to save"
+        );
+        record.insert("mono".into(), "sha256:mm".into());
+        assert!(s.set_built_in_record(&record));
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["built_in_themes"]["mono"], "sha256:mm");
+        let s = loaded(
+            "record-mistyped",
+            r#"{"built_in_themes":[1],"theme":"dark"}"#,
+        );
+        assert!(s.built_in_record().is_empty());
+        assert_eq!(s.theme, "dark");
+    }
+
     #[test]
     fn saved_opacity_is_kept_drawable() {
         assert_eq!(backdrop_alpha(0.4), 0.4);
