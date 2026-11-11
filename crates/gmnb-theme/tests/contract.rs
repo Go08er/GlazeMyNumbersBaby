@@ -194,6 +194,47 @@ return { api = 1, name = "T", options = {
     assert_eq!(shown, [false, true, true, true, true, true]);
 }
 
+/// A background layer may thin itself on a see-through window instead
+/// of being faded by the app: `fade = false` (docs/theming.md,
+/// "See-through windows"). The other layers are never faded, so on them
+/// the key says nothing, and that is noted. Aurora's says so; a theme
+/// that doesn't is faded as ever.
+#[test]
+fn a_background_layer_may_thin_itself() {
+    let (t, _d) = load(
+        "fade",
+        r#"
+return { api = 1, name = "T", layers = {
+  background = { draw = function() end, fade = false },
+  overlay = { draw = function() end, fade = false },
+  display = { draw = function() end, fade = true },
+  keypad = { draw = function() end, fade = "no" },
+} }
+"#,
+    );
+    let notes: Vec<String> = t.notes.list.iter().map(|n| n.to_string()).collect();
+    assert_eq!(notes.len(), 2, "{notes:#?}");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("layers.overlay.fade") && n.contains("only the background")),
+        "{notes:#?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("layers.keypad.fade") && n.contains("expected true or false")),
+        "{notes:#?}"
+    );
+    assert!(t.def.layers["background"].unfaded);
+    assert!(!t.def.layers["display"].unfaded);
+    assert!(!t.def.layers["keypad"].unfaded);
+    let built_in =
+        |id: &str| Theme::load(Source::built_in(id).unwrap(), Limits::default()).unwrap();
+    assert!(built_in("aurora").def.layers["background"].unfaded);
+    assert!(!built_in("swirls").def.layers["background"].unfaded);
+}
+
 /// A layer's keys are checked like every other key (docs/theming.md,
 /// "Limits, and what happens when a theme fails": a value of the wrong
 /// type, or a number out of range, is noted).

@@ -7,7 +7,9 @@
 //! setting; then its child at full strength; then the theme's `overlay`
 //! layer. The window itself is a transparent surface, so below full
 //! opacity the desktop shows through the background and nothing else
-//! (docs/theming.md, "See-through windows").
+//! (docs/theming.md, "See-through windows"). A background layer that
+//! said `fade = false` is drawn after that group, at full strength: it
+//! thins itself.
 //!
 //! The overlay is paint, not a widget: it never takes a click.
 //!
@@ -106,13 +108,30 @@ mod imp {
                 }
             };
             let alpha = self.alpha.get();
+            // (Asked after the picture is made: a theme's first picture
+            // is what tells.)
+            let background = self
+                .background
+                .borrow()
+                .as_ref()
+                .and_then(|i| i.picture(size, Extra::default()).map(|p| (p, i.unfaded())));
+            let paint = |picture: &layers::Picture| {
+                layers::paint(snapshot, &*obj, &picture.list, [&[], &[]]);
+            };
             if alpha < 1.0 {
                 snapshot.push_opacity(f64::from(alpha));
             }
             obj.snapshot_child(&self.fill, snapshot);
-            layer(&self.background);
+            if let Some((picture, false)) = &background {
+                paint(picture);
+            }
             if alpha < 1.0 {
                 snapshot.pop();
+            }
+            // A layer that thins itself: at full strength, over the
+            // window's own background.
+            if let Some((picture, true)) = &background {
+                paint(picture);
             }
             if let Some(child) = self.child.borrow().as_ref() {
                 obj.snapshot_child(child, snapshot);

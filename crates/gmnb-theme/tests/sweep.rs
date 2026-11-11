@@ -728,6 +728,105 @@ fn unreadable(styles: Vec<(String, Style)>) -> Vec<String> {
     bad
 }
 
+/// Every colour Aurora's window can show under what is in it, over
+/// `desktop` (css.rs's, copied): the sky is the window's own background,
+/// thinned by the app to the window's opacity; over it the background
+/// layer, which thins itself, draws stars, and through a mask the
+/// palette's lights (a gradient by height). Sampled at 17 heights: the
+/// sky, the light, and three blends of them; and a star at its brightest.
+fn auroras_sky_colours(
+    aurora: &Theme,
+    ctx: &Ctx,
+    style: &Style,
+    desktop: Option<Rgba>,
+) -> Vec<Rgba> {
+    use gmnb_theme::draw::Op;
+    let Some(Paint::Gradient(sky)) = style.fill("window.background").0.first().cloned() else {
+        panic!("Aurora's window.background is the sky's gradient");
+    };
+    let frame = Frame {
+        motion: false,
+        ..Frame::sized(760.0, 640.0)
+    };
+    let drawn = match aurora.draw(LayerKind::Background, ctx, &frame) {
+        Ok(d) => d,
+        Err(e) => panic!("Aurora's background: {e:?}"),
+    };
+    let mut lights = None;
+    let mut star: Option<Rgba> = None;
+    for op in &drawn.list.ops {
+        match op {
+            Op::Rect {
+                paint: Paint::Gradient(g),
+                ..
+            } => lights = Some(g.clone()),
+            Op::Rect {
+                paint: Paint::Color(c),
+                ..
+            } if star.is_none_or(|s| c[3] > s[3]) => star = Some(*c),
+            _ => {}
+        }
+    }
+    let lights = lights.expect("the lights");
+    let air = |sky: Rgba| match desktop {
+        None => sky,
+        Some(d) => over(alpha(sky, ctx.opacity), d),
+    };
+    let mut out = Vec::new();
+    for k in 0..=16 {
+        let t = k as f32 / 16.0;
+        let (s, l) = (air(sky.at_stop(t)), lights.at_stop(t));
+        for m in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            out.push(over(alpha(l, m), s));
+        }
+        if let Some(star) = star.filter(|_| k % 16 == 0) {
+            out.push(over(star, s));
+        }
+    }
+    out
+}
+
+/// Every pair of the fixed table that reads too faintly over Aurora's
+/// own aurora: with each colour its window can show under it in turn.
+fn unreadable_over_the_aurora(aurora: &Theme, ctx: &Ctx, name: &str, style: &Style) -> Vec<String> {
+    let mut bad = Vec::new();
+    let mut all = page_pairs(style, true);
+    all.extend(chrome_pairs(style));
+    all.extend(pairs(style, true));
+    let desktops: &[Option<Rgba>] = if style.opacity >= 1.0 {
+        &[None]
+    } else {
+        &[Some(BLACK), Some(WHITE)]
+    };
+    for desktop in desktops {
+        let mut worst_of = vec![f32::INFINITY; all.len()];
+        for shown in auroras_sky_colours(aurora, ctx, style, *desktop) {
+            let behind = [shown; 3];
+            for (i, (_, text, _, fills)) in all.iter().enumerate() {
+                let fills: Vec<&Fill> = fills.iter().collect();
+                worst_of[i] = worst_of[i].min(worst(*text, &fills, &behind));
+            }
+        }
+        for ((what, _, at_rest, _), got) in all.iter().zip(worst_of) {
+            let want = match desktop {
+                None => *at_rest,
+                Some(_) => at_rest.min(UI_CONTRAST),
+            };
+            if got < want {
+                let over = match desktop {
+                    None => "",
+                    Some(d) if *d == BLACK => " over black",
+                    Some(_) => " over white",
+                };
+                bad.push(format!(
+                    "{name}{over}: over the aurora, {what} {got:.4} < {want}"
+                ));
+            }
+        }
+    }
+    bad
+}
+
 // ---- Styles ------------------------------------------------------------------------
 
 /// Every theme under every set of options, light and dark, at opacity 0 to
@@ -780,6 +879,16 @@ fn sweep_styles_of(
                         if accent.is_none() && motion && (opacity == 1.0 || opacity == 0.1) {
                             let named = vec![(name.clone(), resolved.style.clone())];
                             bad.extend(unreadable(named));
+                            // Aurora's text lies over an aurora: over every
+                            // colour of it.
+                            if id == "aurora" {
+                                bad.extend(unreadable_over_the_aurora(
+                                    &theme,
+                                    &ctx,
+                                    &name,
+                                    &resolved.style,
+                                ));
+                            }
                         }
                     }
                 }
@@ -1446,10 +1555,12 @@ fn aurora_under_any_accent_reads() {
     let wheel = wheel();
     for (i, accent) in wheel.iter().enumerate() {
         for dark in [false, true] {
-            for opacity in [1.0, 0.1] {
+            // (Half clear too: what a see-through Aurora shows, and so the
+            // frost under its text, changes all the way down.)
+            for opacity in [1.0, 0.5, 0.1] {
                 let mut styles = Vec::new();
                 let hex = appcore::color::to_hex(*accent);
-                let mut ctx = ctx_of(
+                let ctx = ctx_of(
                     &aurora,
                     dark,
                     opacity,
@@ -1457,11 +1568,11 @@ fn aurora_under_any_accent_reads() {
                     true,
                     &BTreeMap::from([("palette".to_string(), text("system"))]),
                 );
-                styles.push((
-                    format!("aurora system {hex} dark={dark} {opacity}"),
-                    aurora.style(&ctx).unwrap().style.clone(),
-                ));
-                ctx.accent = None;
+                let name = format!("aurora system {hex} dark={dark} {opacity}");
+                let style = aurora.style(&ctx).unwrap().style.clone();
+                // (Over its own aurora too, as everywhere here.)
+                bad.extend(unreadable_over_the_aurora(&aurora, &ctx, &name, &style));
+                styles.push((name, style));
                 let other = wheel[(i * 7 + 11) % wheel.len()];
                 for second in [appcore::color::complement(*accent), other] {
                     let saved = BTreeMap::from([
@@ -1473,13 +1584,13 @@ fn aurora_under_any_accent_reads() {
                         ),
                     ]);
                     let ctx = ctx_of(&aurora, dark, opacity, None, true, &saved);
-                    styles.push((
-                        format!(
-                            "aurora freestyle {hex}+{} dark={dark} {opacity}",
-                            appcore::color::to_hex(second)
-                        ),
-                        aurora.style(&ctx).unwrap().style.clone(),
-                    ));
+                    let name = format!(
+                        "aurora freestyle {hex}+{} dark={dark} {opacity}",
+                        appcore::color::to_hex(second)
+                    );
+                    let style = aurora.style(&ctx).unwrap().style.clone();
+                    bad.extend(unreadable_over_the_aurora(&aurora, &ctx, &name, &style));
+                    styles.push((name, style));
                 }
                 bad.extend(unreadable(styles));
             }

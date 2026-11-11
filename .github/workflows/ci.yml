@@ -78,7 +78,7 @@ jobs:
           for _ in $(seq 150); do [ -S "$XDG_RUNTIME_DIR/ci-least" ] && break; sleep 0.2; done
           sleep 1
           GMNB_SOUND=null GMNB_TEST_WAYLAND_DISPLAY=ci-least nix develop -c \
-            cargo test -p gmnb --locked --test least --test markup --test settings --test focus -- --nocapture 2>&1 \
+            cargo test -p gmnb --locked --test least --test markup --test settings --test focus --test see_through -- --nocapture 2>&1 \
             | tee least-test.log
           kill "$weston"
           # It must have run, not skipped: the base look and every built-in
@@ -87,9 +87,11 @@ jobs:
           # the base look, one that fails at start told, Settings' sound
           # switch and volume slider there, a slow theme never holding the
           # window, the opacity once a frame, Settings in a new window
-          # (settings.rs); the focus ring's edge round a key (focus.rs).
+          # (settings.rs); the focus ring's edge round a key (focus.rs); a
+          # background layer faded with the window unless it thins itself
+          # (see_through.rs).
           # Each file's own result: passed, none failed, at least one run.
-          for t in least markup settings focus; do
+          for t in least markup settings focus see_through; do
             awk -v t="Running tests/$t.rs" 'index($0, t) {f = 1; next} f && /^test result:/ {print; exit}' \
               least-test.log | grep -Eq "^test result: ok\. [1-9][0-9]* passed; 0 failed;"
           done
