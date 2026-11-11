@@ -514,7 +514,11 @@ fn the_folder_cap_counts_only_the_users_and_keeps_the_chosen_theme() {
         make(&format!("m{n:02}"));
     }
     let all = theme::discover(Some(&f.themes()), &[], None);
-    assert_eq!(all.len(), 64 + BUILT_IN.len(), "64 user folders are all kept");
+    assert_eq!(
+        all.len(),
+        64 + BUILT_IN.len(),
+        "64 user folders are all kept"
+    );
     for n in 64..70 {
         make(&format!("m{n:02}"));
     }
