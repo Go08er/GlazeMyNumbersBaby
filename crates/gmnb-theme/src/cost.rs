@@ -16,8 +16,10 @@
 //! and on GL (memory held while the frame is drawn), as points of a
 //! frame's allowance: 1000 points are 100 ms of the first or 256 MB of the
 //! second, whichever a call costs more of. A layer has 1000 points for
-//! each 760 × 640 of its own area, so a frame of the whole window at that
-//! size costs at most about 100 ms or 256 MB; a larger window, more.
+//! each 760 × 640 of what it is charged over (its own area; a keypad's or a
+//! readout's, the window's too), and never fewer than 1000, so a frame
+//! of the whole window at that size costs at most about 100 ms or 256 MB;
+//! a larger window, more.
 
 use crate::draw::{Filter, Op, Rect};
 use crate::types::{GradientKind, Paint, Shadow};
@@ -265,7 +267,12 @@ impl Meter {
             levels: Vec::new(),
             visible,
             glyphs: rect_box(&glyphs),
-            allowance: POINTS * scale * w * h / REFERENCE_AREA,
+            // In proportion to what it is charged over (the layer; a
+            // keypad's or a readout's, the window too), and never less than
+            // a whole window's: a small layer (or one the toolkit hasn't
+            // sized yet) spends little anyway, its calls charged only for
+            // what it can show.
+            allowance: POINTS * scale * area(Some(visible)).max(REFERENCE_AREA) / REFERENCE_AREA,
             spent: 0.0,
             picture: 0.0,
         }

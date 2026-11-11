@@ -986,11 +986,17 @@ fn what_a_frame_costs_to_draw_is_capped() {
     };
     assert!(cost(&radial(18), &window).is_ok());
     assert!(cost(&radial(20), &window).is_err());
-    // A layer may cost in proportion to its area: over a quarter of the
-    // window, as many of them.
+    // A layer has as many points for each 760 × 640 of its area, and
+    // never fewer than a whole window's: over a quarter of the window,
+    // four times as many (a small layer spends little: its sweeps in
+    // sweep.rs, at 0 × 0 and 1 × 400, were refused when it had a quarter);
+    // over twice the window, as many.
     let quarter = Frame::sized(380.0, 320.0);
-    assert!(cost(&radial(18), &quarter).is_ok());
-    assert!(cost(&radial(20), &quarter).is_err());
+    assert!(cost(&radial(72), &quarter).is_ok());
+    assert!(cost(&radial(80), &quarter).is_err());
+    let double = Frame::sized(1520.0, 640.0);
+    assert!(cost(&radial(18), &double).is_ok());
+    assert!(cost(&radial(20), &double).is_err());
     // What lies just off the layer is charged when a blur or a shadow
     // brings it into view: blurred, or moved by its offset.
     let off_blur = |n: u32| {
@@ -1023,17 +1029,30 @@ fn what_a_frame_costs_to_draw_is_capped() {
     assert!((0.02..0.03).contains(&each), "{each}");
     assert!(cost(&small_pictures(1000), &window).is_err());
     // A keypad's or a readout's layer is charged where the window shows
-    // what it draws, beyond itself too.
+    // what it draws, beyond itself too, and has points for the window it
+    // can draw over (here 2320 x 1380, about six and a half windows of
+    // 760 x 640): blurs beyond the keypad but in the window cost each about
+    // a whole window's worth of points; five are drawn, eight are not; the
+    // same eight off the window cost nothing.
     let pad = Frame {
         window: Some([-400.0, -300.0, 1920.0, 1080.0]),
         ..Frame::sized(355.0, 355.0)
     };
-    let (theme, _d) = load(
-        "cost-pad",
-        "return { api = 1, name = 'T', layers = { keypad = { draw = function(draw, frame) for _ = 1, 3 do draw:push_blur(100) draw:rect(800, 0, 700, 700, '#fff') draw:pop() end end } } }",
-    );
-    let drawn = theme.draw(LayerKind::Keypad, &Ctx::default(), &pad);
-    assert!(drawn.is_err(), "{:?}", drawn.map(|d| d.list.ops.len()));
+    let keypad_blurs = |n: u32, x: u32| {
+        format!(
+            "return {{ api = 1, name = 'T', layers = {{ keypad = {{ draw = function(draw, frame) for _ = 1, {n} do draw:push_blur(100) draw:rect({x}, 0, 700, 700, '#fff') draw:pop() end end }} }} }}"
+        )
+    };
+    for (n, x, drawn) in [(5, 800, true), (8, 800, false), (8, 4000, true)] {
+        let (theme, _d) = load("cost-pad", &keypad_blurs(n, x));
+        let result = theme.draw(LayerKind::Keypad, &Ctx::default(), &pad);
+        assert_eq!(
+            result.is_ok(),
+            drawn,
+            "{n} blurs at {x}: {:?}",
+            result.map(|d| d.list.ops.len())
+        );
+    }
     // A frame that leaves an effect open is charged for it all the same.
     let e = cost(
         "for _ = 1, 3 do draw:push_blur(100) draw:rect(0, 0, frame.width, frame.height, '#fff') draw:pop() end draw:push_blur(100) draw:rect(0, 0, frame.width, frame.height, '#fff')",

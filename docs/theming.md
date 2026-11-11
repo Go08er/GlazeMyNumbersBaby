@@ -1506,7 +1506,7 @@ sounds.
 | Time: one `preview`, `visible` or action | 10 ms |
 | One library call's own work, which the time limit can't stop midway: a plain search (`string.find` with `plain` or a pattern of no magic characters, `string.split`); a pattern search (`find`, `match`, `gmatch`, `gsub`); `table.move` | 2^30 bytes (string × pattern); 2^26 (string bytes × the pattern's longest `[set]`); 2^20 elements. Past them the call is an error. |
 | Draw calls per `draw` | 4096 |
-| What a frame costs to draw | 1000 points for each 760 × 640 of the layer's area ([Drawing per frame](#drawing-per-frame)) |
+| What a frame costs to draw | 1000 points for each 760 × 640 of what the layer is charged over (a keypad's or a readout's, the window too), and never fewer than 1000 ([Drawing per frame](#drawing-per-frame)) |
 | Open pushes / saves at once | 32 each |
 | Path segments per frame | 16 384 |
 | Text per `draw:text` call; text calls per frame | 256 bytes; 64 |
@@ -1581,8 +1581,11 @@ shadow's by its offset and three times its blur) when it is popped, and a
 `push_blend` for all that can be seen (the software renderer blends whole
 layers, whatever is in them); what is drawn inside is charged as well. A
 picture drawn at all is also charged its own pixels, however small it is
-drawn. A frame has 1000 points for each 760 × 640 of its layer's own
-area; a call that takes it past them is an error, and the frame is
+drawn. A frame has 1000 points for each 760 × 640 of what its layer is
+charged over (its own area; a keypad's or a readout's, the window's too,
+as below), and never fewer than 1000 (a small layer, or one not yet sized,
+spends little anyway: what it draws is charged only where it can be
+seen); a call that takes it past them is an error, and the frame is
 dropped, as past any cap (that layer draws nothing that frame; the rest
 of the window is drawn). A keypad's or a readout's layer is charged for
 what it draws wherever the window shows it, beyond itself too.
