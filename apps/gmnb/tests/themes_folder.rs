@@ -1099,3 +1099,35 @@ fn nothing_watches_the_folder_once_settings_is_closed() {
         "{err}"
     );
 }
+
+/// A hostile themes folder with thousands of folders in it: Settings
+/// watches the folders a theme could be (a valid id), not all of them, and
+/// no more than a fixed number (inotify watches are the user's, all
+/// together).
+#[test]
+fn a_folder_of_thousands_of_folders_is_not_watched_all() {
+    let display = display_or_skip!();
+    let profile = Profile::new("thousands");
+    for n in 0..1200 {
+        std::fs::create_dir_all(profile.themes().join(format!("d{n}"))).unwrap();
+        std::fs::create_dir_all(profile.themes().join(format!("Not A Theme {n}"))).unwrap();
+    }
+    let app = Running::start(
+        &display,
+        &profile,
+        None,
+        &[
+            ("GMNB_THEME", ""),
+            ("GMNB_PREFS", "1"),
+            ("GMNB_STEPS", "wait:300;themes;wait:3000;quit"),
+        ],
+    );
+    let pid = app.child.id();
+    app.line("themes: ", 1);
+    let open = watched(pid).len();
+    let err = app.finish();
+    assert!(
+        open <= 100,
+        "Settings watches {open} folders for 2400 in the themes folder: {err}"
+    );
+}

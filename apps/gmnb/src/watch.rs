@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
+use gmnb_theme::theme;
 use gtk::prelude::*;
 use gtk::{gio, glib};
 
@@ -48,18 +49,24 @@ impl Watch {
     /// one that has gone.
     fn sync(self: &Rc<Self>) {
         let mut want = vec![self.dir.clone()];
+        // Folders a theme could be (a valid id, not the hidden ones GMNB
+        // writes into), and no more than Settings lists: the user's inotify
+        // watches are all of theirs, and a hostile folder has thousands.
+        let mut folders: Vec<(String, PathBuf)> = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&self.dir) {
             for entry in entries.flatten() {
-                // Theme folders, not the hidden ones GMNB writes into.
-                let shown = entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|n| !n.starts_with('.'));
-                if shown && entry.path().is_dir() {
-                    want.push(entry.path());
+                let name = entry.file_name();
+                let Some(id) = name.to_str().filter(|n| theme::valid_id(n)) else {
+                    continue;
+                };
+                if entry.path().is_dir() {
+                    folders.push((id.to_string(), entry.path()));
                 }
             }
         }
+        folders.sort();
+        folders.truncate(theme::MAX_USER_FOLDERS + theme::BUILT_IN.len());
+        want.extend(folders.into_iter().map(|(_, path)| path));
         let mut monitors = self.monitors.borrow_mut();
         monitors.retain(|path, monitor| {
             let keep = want.contains(path);

@@ -471,3 +471,27 @@ fn the_built_in_themes_load_from_their_folders() {
         assert_eq!(folder.credits(), own.credits(), "{id}");
     }
 }
+
+/// A hostile themes folder with a great many theme folders (each one a
+/// theme that never finishes loading) must not hold Settings' list for
+/// minutes: the list is bounded in how many folders it reads and in the
+/// time it spends on them.
+#[test]
+fn a_folder_of_many_hostile_themes_is_listed_in_bounded_time() {
+    let f = Folder::new("many");
+    for n in 0..400 {
+        let dir = f.theme(&format!("spin-{n}"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("theme.luau"), "while true do end").unwrap();
+    }
+    let start = std::time::Instant::now();
+    let sources = theme::discover(Some(&f.themes()), &[], None);
+    let listed = theme::list(&sources, &Limits::default());
+    let took = start.elapsed();
+    assert!(
+        took < std::time::Duration::from_secs(8),
+        "listing {} hostile themes took {took:?}",
+        listed.len()
+    );
+    assert!(listed.iter().all(|l| l.meta.is_err()));
+}

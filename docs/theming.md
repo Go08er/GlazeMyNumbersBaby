@@ -196,13 +196,18 @@ yours to edit, delete or replace.
   it has no folder, can't be deleted and is always first), then the
   built-in themes' ids in the order above where there is a folder, then
   every other theme folder by id, then `GMNB_THEME_DIR`'s. A theme GMNB
-  put in the folder is marked "Comes with GMNB". About → Legal keeps
+  put in the folder is marked "Comes with GMNB". Besides the built-in
+  themes, at most 64 theme folders are listed (the first by id), and
+  loading them for the list takes at most about two seconds in all: a theme
+  after that is listed as not checked, so a folder of thousands of themes
+  can't hold Settings. About → Legal keeps
   every built-in theme's credits whatever their folders hold: their fonts
   and pictures are in GMNB itself.
 - **Dragged in, it shows.** While Settings is open it watches the themes
   folder and each theme's folder in it: a theme dragged in, deleted, or
   whose `theme.luau` changes shows in the list a moment later (once the
-  folder has been still for 300 ms). Nothing watches the folder while
+  folder has been still for 300 ms). Only folders named like a theme's id
+  are watched, and no more than are listed. Nothing watches the folder while
   Settings is closed: GMNB wakes for nothing at rest, and a theme deleted
   then is noticed when Settings next opens or GMNB next starts.
 - **The chosen theme deleted** (seen at start, while Settings is open, or
