@@ -36,6 +36,15 @@ pub const EDGE_APART: f32 = UI_CONTRAST * UI_CONTRAST;
 /// The rings of the style, and where each is drawn.
 pub const RINGS: [&str; 3] = ["focus", "date.calendar.focus", "converter.value.focus"];
 
+/// The page's surfaces a control may sit on, each over the window's
+/// background: the ring of `focus` lies on them outside the control.
+pub const SURFACES: [&str; 4] = [
+    "plain.background",
+    "header.background",
+    "nav.background",
+    "panel",
+];
+
 /// The ring libadwaita draws itself: its accent colour at half opacity,
 /// 2 px wide, just inside the control's edge.
 pub fn native_ring(accent: Rgba) -> FocusRing {
@@ -73,6 +82,9 @@ pub struct Grounds {
     pub inside: Vec<Rgba>,
     /// Whether the ring's edge is drawn there.
     pub edge: bool,
+    /// The page's surfaces a control (not a key) may sit on, which a ring
+    /// outside it lies on, the ring alone (`focus` only).
+    pub surfaces: Vec<Rgba>,
 }
 
 impl Grounds {
@@ -138,6 +150,7 @@ pub fn grounds(
                 inside: over_all(&fill("date.calendar.day"), &popover),
                 outside: popover,
                 edge: false,
+                surfaces: Vec::new(),
             }
         }
         "converter.value.focus" => {
@@ -146,6 +159,7 @@ pub fn grounds(
                 inside: over_all(&fill("converter.field"), &plain),
                 outside: plain,
                 edge: false,
+                surfaces: Vec::new(),
             }
         }
         _ => {
@@ -153,10 +167,15 @@ pub fn grounds(
             for key in ["keys.number", "keys.func", "keys.operator", "keys.equals"] {
                 inside.extend(over_all(&fill(key), &backdrop));
             }
+            let surfaces = SURFACES
+                .iter()
+                .flat_map(|s| over_all(&fill(s), &backdrop))
+                .collect();
             Grounds {
                 outside: backdrop,
                 inside,
                 edge: true,
+                surfaces,
             }
         }
     }
@@ -217,7 +236,12 @@ pub fn floor(tokens: &Tokens, values: &mut BTreeMap<&'static str, Value>, notes:
         let why = if ring.width < LEAST_WIDTH {
             format!("it is {} px wide, under {LEAST_WIDTH}", ring.width)
         } else {
-            let got = worst(&ring, &grounds.under(&ring), grounds.edge);
+            let mut got = worst(&ring, &grounds.under(&ring), grounds.edge);
+            // Outside a control on one of the page's surfaces (the header,
+            // a panel, the sidebar): the ring alone, with no edge.
+            if ring.offset > 0.0 {
+                got = got.min(worst(&ring, &grounds.surfaces, false));
+            }
             if got >= LEAST_CONTRAST {
                 continue;
             }
@@ -246,17 +270,29 @@ fn base_ring(tokens: &Tokens, grounds: &Grounds) -> FocusRing {
         radius: None,
         edge: None,
     };
-    let reads = |color| worst(&ring(color), &grounds.outside, false);
+    let reads = |color| {
+        let ring = ring(color);
+        worst(&ring, &grounds.outside, false).min(worst(&ring, &grounds.surfaces, false))
+    };
     let c = &tokens.colors;
+    // Those that read on every ground; else (white on one, black on
+    // another) a grey between them, the one that reads best on the worst.
+    let greys = (0..=16).map(|i| {
+        let v = i as f32 / 16.0;
+        [v, v, v, 1.0]
+    });
     let best = [c.accent_text, c.fg, BLACK, WHITE]
         .into_iter()
         .map(|color| (reads(color), color))
         .find(|(got, _)| *got >= LEAST_CONTRAST)
         .map(|(_, color)| color)
-        .unwrap_or(if reads(BLACK) >= reads(WHITE) {
-            BLACK
-        } else {
-            WHITE
+        .unwrap_or_else(|| {
+            [BLACK, WHITE]
+                .into_iter()
+                .chain(greys)
+                .map(|color| (reads(color), color))
+                .fold((-1.0, BLACK), |a, b| if b.0 > a.0 { b } else { a })
+                .1
         });
     ring(best)
 }
