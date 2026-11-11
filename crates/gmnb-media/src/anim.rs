@@ -242,8 +242,74 @@ fn too_many(limits: &AnimLimits) -> Error {
     Error::Frames { max: limits.frames }
 }
 
+/// The most blocks a GIF of `len` bytes may have (extensions, image
+/// descriptors and the sub-blocks of both), with [`AnimLimits::frames`] of
+/// `frames`. The decoder's walk costs by the block, about 40 ns each: a
+/// file of 8 MiB made of blocks of a byte or two took it 60 to 90 ms of
+/// the call's 250 (round 4, area E). A real GIF's bytes are nearly all in
+/// data sub-blocks of 255, with a handful of blocks to a frame besides.
+fn most_gif_blocks(len: usize, frames: u32) -> usize {
+    // (Sixteen to a frame: a file of more frames than allowed, each with
+    // a few blocks, is refused by its count of frames, which says more.)
+    len / 64 + 16 * frames as usize + 64
+}
+
+/// Whether a GIF has no more than `most` blocks, counted without decoding
+/// (at most `most` steps). Anything other than what a GIF is made of
+/// stops the count, and the decoder judges the file as before.
+fn gif_blocks_within(b: &[u8], most: usize) -> bool {
+    // A colour table's length, by a packed byte's flag and size.
+    let table = |packed: u8| {
+        if packed & 0x80 != 0 {
+            3usize << ((packed & 7) + 1)
+        } else {
+            0
+        }
+    };
+    let Some(&packed) = b.get(10) else {
+        return true;
+    };
+    let mut at = 13 + table(packed);
+    let mut blocks = 0usize;
+    loop {
+        match b.get(at) {
+            // An extension: its introducer and label.
+            Some(0x21) => at += 2,
+            // An image: its descriptor, colour table and code size.
+            Some(0x2C) => {
+                let Some(&packed) = b.get(at + 9) else {
+                    return true;
+                };
+                at += 10 + table(packed) + 1;
+            }
+            // The trailer, the end of the file, or what the decoder judges.
+            _ => return true,
+        }
+        blocks += 1;
+        // Its sub-blocks, to the empty one that ends them.
+        loop {
+            if blocks > most {
+                return false;
+            }
+            let Some(&n) = b.get(at) else {
+                return true;
+            };
+            blocks += 1;
+            at += 1 + usize::from(n);
+            if n == 0 {
+                break;
+            }
+        }
+    }
+}
+
 /// A GIF's frames, by its decoder with frame decoding skipped.
 fn gif(bytes: &Bytes, width: u32, height: u32, limits: &AnimLimits) -> Result<Timeline, Error> {
+    if !gif_blocks_within(bytes, most_gif_blocks(bytes.len(), limits.frames)) {
+        return Err(broken(
+            "the GIF file is made of more blocks than a picture of its size needs",
+        ));
+    }
     let mut options = gif::DecodeOptions::new();
     options.skip_frame_decoding(true);
     let mut decoder = options
