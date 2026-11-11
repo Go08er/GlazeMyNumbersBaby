@@ -1,16 +1,20 @@
 --!strict
--- Aurora: a drifting aurora behind glass keys, in seven palettes.
+-- Aurora: an aurora behind glass keys, in seven palettes. Curtains of
+-- light over a night sky, drifting.
 --
--- This was GMNB's whole look up to version 0.2. It is a theme now, written
--- against theme API 1 (docs/theming.md) like any other: nothing in the app
--- knows it by name. It uses every part of the API, so it doubles as the
--- worked example. Copy what you like.
+-- This was GMNB's whole look up to version 0.2 (its aurora was four soft
+-- blobs of colour then). It is a theme now, written against theme API 1
+-- (docs/theming.md) like any other: nothing in the app knows it by name.
+-- It uses nearly every part of the API, so it doubles as the worked
+-- example. Copy what you like.
 --
 -- The file reads top to bottom:
 --   1. Palettes        the colours of each palette, light and dark
---   2. Inks and frost  what keeps every palette readable, see-through or not
+--   2. Inks, glass and frost
+--                      what keeps every palette readable over an aurora
+--                      that moves, see-through or not
 --   3. Style           how every part of the window looks
---   4. Background      the aurora, its grain, vignette and pulses
+--   4. Background      the sky, its stars, the aurora and its pulses
 --   5. Keypad          ripples, the light that follows the pointer, the cascade
 --   6. Display         gradient digits, their glow and their animations
 --   7. Options         what Settings offers, and the palette tiles
@@ -29,12 +33,14 @@ local TEXT, UI = gmnb.TEXT_CONTRAST, gmnb.UI_CONTRAST
 -- What a palette's author chooses.
 type Palette = {
 	dark: boolean,
-	-- The background's gradient, top to bottom.
-	base_top: Rgba,
-	base_bottom: Rgba,
-	-- The four drifting blobs, and how strong they are.
-	blobs: { Rgba },
-	blob_alpha: number,
+	-- The sky, top to bottom.
+	sky_top: Rgba,
+	sky_bottom: Rgba,
+	-- The aurora's light by height, lowest first: under the curtains'
+	-- hems, at the hems, the curtains' body, and three colours higher and
+	-- higher up, to the crown. As their author would have them: each is
+	-- tempered as far as the text over it needs (section 2).
+	lights: { Rgba },
 	fg: Rgba,
 	-- Operators, focus, selection.
 	accent: Rgba,
@@ -56,10 +62,9 @@ end
 
 local function palette(
 	dark: boolean,
-	base_top: string,
-	base_bottom: string,
-	blobs: { string },
-	blob_alpha: number,
+	sky_top: string,
+	sky_bottom: string,
+	lights: { string },
 	fg: string,
 	accent: string,
 	hot_a: string,
@@ -69,10 +74,9 @@ local function palette(
 ): Palette
 	return {
 		dark = dark,
-		base_top = hex(base_top),
-		base_bottom = hex(base_bottom),
-		blobs = list(blobs),
-		blob_alpha = blob_alpha,
+		sky_top = hex(sky_top),
+		sky_bottom = hex(sky_bottom),
+		lights = list(lights),
 		fg = hex(fg),
 		accent = hex(accent),
 		hot_a = hex(hot_a),
@@ -82,64 +86,74 @@ local function palette(
 	}
 end
 
+-- Each palette is an aurora of its own. In the dark it hangs in a night
+-- sky. In the light it is the same aurora at dawn: a pale sky, and the
+-- curtains in colours deep enough to show on it. (A black sky under the
+-- light look's dark text and milk glass would be the dark look.)
 local BUILT_IN: { [string]: (dark: boolean) -> Palette } = {
+	-- The aurora most often seen: green, teal above it, violet and
+	-- crimson at the crown.
 	aurora = function(dark)
 		if dark then
-			return palette(true, "#0b0820", "#150d33",
-				{ "#7c4dff", "#ff4fb0", "#19d3c5", "#3d6bff" }, 0.42,
-				"#f6f1ff", "#b79bff", "#ff7ad9", "#8a63ff", "#ffffff",
-				{ "#5ef2d6", "#ff7ad9", "#ffd36e", "#8fb4ff", "#b79bff", "#ff8f6b" })
+			return palette(true, "#02040b", "#071428",
+				{ "#b6ff9c", "#3df58f", "#19d6b0", "#3f8cff", "#9a62ff", "#e6509c" },
+				"#f2f6ff", "#7cf2c0", "#5cf2a8", "#22c8d8", "#03221c",
+				{ "#5ef2b0", "#ff7ad9", "#ffd36e", "#8fb4ff", "#b79bff", "#ff8f6b" })
 		end
-		return palette(false, "#fbf8ff", "#f1ebff",
-			{ "#c6b1ff", "#ffbfd9", "#9eeedc", "#b4caff" }, 0.62,
-			"#1f1640", "#6d3fe8", "#f05bbf", "#7448f0", "#ffffff",
-			{ "#0fa38e", "#d6339a", "#c98a00", "#3b6fe0", "#6d3fe8", "#e0582e" })
+		return palette(false, "#f5f4fd", "#fdf6ef",
+			{ "#8fe08a", "#2fcf8a", "#22bfae", "#5a9cf5", "#9a7af0", "#f07ab4" },
+			"#14213a", "#0b7d5c", "#19b97c", "#0f9fb3", "#ffffff",
+			{ "#0b8f6a", "#d6339a", "#b77a00", "#3b6fe0", "#7a4be0", "#e0582e" })
 	end,
+	-- The rare red aurora: amber at the hem, crimson, violet above.
 	ember = function(dark)
 		if dark then
-			return palette(true, "#170708", "#241016",
-				{ "#ff6a3d", "#ff3d7f", "#ffb13d", "#a13dff" }, 0.36,
-				"#fff3ee", "#ff9a6e", "#ffc35a", "#ff4f6e", "#2a0b10",
+			return palette(true, "#0b0406", "#1c0a10",
+				{ "#ffd27a", "#ff9a4a", "#ff5a46", "#f03a6e", "#c23ad0", "#7a48f0" },
+				"#fff3ee", "#ffb08a", "#ffc35a", "#ff4f6e", "#2a0b10",
 				{ "#ffc35a", "#ff6a8d", "#7ee0ff", "#c69bff", "#ff9a6e", "#9cf08a" })
 		end
-		return palette(false, "#fffaf6", "#fff0ea",
-			{ "#ffcfb3", "#ffc0d4", "#ffe39e", "#e6c9ff" }, 0.65,
+		return palette(false, "#fffaf6", "#fff0e6",
+			{ "#ffcf7a", "#ff9f5a", "#ff7a5c", "#f2608c", "#d06ad8", "#9a7af0" },
 			"#3a1416", "#d94a26", "#f7a21b", "#e6365b", "#ffffff",
 			{ "#d97a00", "#d6335e", "#0f8fb8", "#8a4fe0", "#d94a26", "#2f9e3a" })
 	end,
+	-- A blue one, over deep water.
 	abyss = function(dark)
 		if dark then
-			return palette(true, "#020c16", "#06182b",
-				{ "#00a6ff", "#00e0b0", "#3d4dff", "#7a3dff" }, 0.38,
-				"#eaf8ff", "#55d6ff", "#3af0d0", "#3a7bff", "#02121f",
+			return palette(true, "#01060f", "#04152b",
+				{ "#7dffe0", "#2ee6d6", "#18b6f0", "#3d74ff", "#5d4dff", "#9a4dff" },
+				"#eaf8ff", "#62dcff", "#3af0d0", "#3a7bff", "#02121f",
 				{ "#3af0d0", "#7ab8ff", "#ffd36e", "#ff7ad9", "#b79bff", "#a4f07a" })
 		end
-		return palette(false, "#f5fbff", "#e9f5ff",
-			{ "#b3e3ff", "#a9f2e2", "#c4ccff", "#d8c8ff" }, 0.66,
+		return palette(false, "#f4fbff", "#e9f4ff",
+			{ "#8fead8", "#4fd6d0", "#3fb6ee", "#5f8ff5", "#7a7af2", "#a07af0" },
 			"#0b2236", "#0a7fc2", "#10b9a0", "#2563eb", "#ffffff",
 			{ "#0a9e86", "#2563eb", "#c98a00", "#d6339a", "#6d3fe8", "#3f8f1f" })
 	end,
+	-- Leaf green, the gold of fruit, blossom at the crown.
 	orchard = function(dark)
 		if dark then
-			return palette(true, "#07100a", "#0e1c12",
-				{ "#4fd16a", "#c6e53f", "#22b3a0", "#ffc94a" }, 0.32,
-				"#f1fbec", "#9be37a", "#e8f05a", "#35c98a", "#0b1a0e",
+			return palette(true, "#040a05", "#0b1a0d",
+				{ "#6fe07a", "#9be35a", "#d4ea4a", "#ffd24a", "#ffa85a", "#ff7a9a" },
+				"#f1fbec", "#aee88a", "#e8f05a", "#35c98a", "#0b1a0e",
 				{ "#e8f05a", "#5ee0c0", "#ff9a6e", "#8fb4ff", "#ff7ad9", "#9be37a" })
 		end
-		return palette(false, "#f9fdf4", "#eef8e6",
-			{ "#c2efb8", "#e6f3a6", "#a8eadf", "#ffe3a6" }, 0.66,
+		return palette(false, "#f9fdf4", "#f3f8e6",
+			{ "#8fdc7a", "#b4dc5a", "#dcdc4a", "#f2c84a", "#f5a86a", "#f08aa4" },
 			"#142a12", "#2f8f2a", "#b7c71a", "#1d9f6a", "#ffffff",
 			{ "#2f8f2a", "#0f8f80", "#d2691e", "#3b6fe0", "#c0338f", "#8a6d00" })
 	end,
+	-- Light with no colour in it.
 	graphite = function(dark)
 		if dark then
-			return palette(true, "#0c0d10", "#15171c",
-				{ "#5b6474", "#8b93a3", "#3c4250", "#c9ced8" }, 0.20,
+			return palette(true, "#07080a", "#131519",
+				{ "#f2f3f5", "#d5d9e0", "#aab1bf", "#8b93a3", "#6c7585", "#525a68" },
 				"#f2f3f5", "#dfe3ea", "#f2f3f5", "#aab1bf", "#111318",
 				{ "#f2f3f5", "#9fb7ff", "#ffc58a", "#8ae0c8", "#ff9ac6", "#d5ff8a" })
 		end
 		return palette(false, "#fafafa", "#eff0f2",
-			{ "#d9dce2", "#c8ccd4", "#e7e9ee", "#bfc4cd" }, 0.6,
+			{ "#9aa0ab", "#a6acb7", "#b4b9c3", "#c2c6cf", "#cfd3da", "#dadde3" },
 			"#16181d", "#2c313a", "#2c313a", "#4a515e", "#ffffff",
 			{ "#2c313a", "#2563eb", "#d2691e", "#0f8f80", "#c0338f", "#6b8e00" })
 	end,
@@ -150,10 +164,11 @@ local DEFAULT_SECONDARY = "#ff6fb5"
 -- What System uses on a desktop that shares no accent colour.
 local FALLBACK_ACCENT = "#3584e4"
 
--- A complete palette from two colours: a tinted base, an aurora of the two
--- hues and their neighbours, a hot gradient running secondary to primary,
--- and six well-spread graph colours. System makes one from the desktop's
--- accent and its complement, Freestyle from the two colours you pick.
+-- A complete palette from two colours: a sky tinted with the first, an
+-- aurora that is the first at its hem and the second at its crown, a hot
+-- gradient running secondary to primary, and six well-spread graph
+-- colours. System makes one from the desktop's accent and its
+-- complement, Freestyle from the two colours you pick.
 local function generate(primary: Rgba, secondary: Rgba, dark: boolean): Palette
 	local ph, ps = gmnb.to_hsl(primary)
 	local qh, qs = gmnb.to_hsl(secondary)
@@ -170,10 +185,16 @@ local function generate(primary: Rgba, secondary: Rgba, dark: boolean): Palette
 		end
 		return {
 			dark = true,
-			base_top = hsl(ph, math.min(ps * 0.7, 0.55), 0.055),
-			base_bottom = hsl(ph, math.min(ps * 0.75, 0.6), 0.105),
-			blobs = { hsl(ph, pv, 0.58), hsl(qh, qv, 0.60), hsl(ph + 35, pv, 0.55), hsl(qh - 35, qv, 0.58) },
-			blob_alpha = 0.40,
+			sky_top = hsl(ph, math.min(ps * 0.7, 0.55), 0.025),
+			sky_bottom = hsl(ph, math.min(ps * 0.75, 0.6), 0.085),
+			lights = {
+				hsl(ph - 22, pv, 0.74),
+				hsl(ph, pv, 0.62),
+				hsl(ph + 26, pv, 0.58),
+				hsl(qh - 26, qv, 0.60),
+				hsl(qh, qv, 0.62),
+				hsl(qh + 22, qv, 0.64),
+			},
 			fg = hsl(ph, math.min(ps, 0.5), 0.965),
 			accent = hsl(ph, pv, 0.76),
 			hot_a = hsl(qh, qv, 0.66),
@@ -187,15 +208,16 @@ local function generate(primary: Rgba, secondary: Rgba, dark: boolean): Palette
 	end
 	return {
 		dark = false,
-		base_top = hsl(ph, math.min(ps, 0.6), 0.985),
-		base_bottom = hsl(ph, math.min(ps, 0.55), 0.955),
-		blobs = {
-			hsl(ph, math.min(pv, 0.8), 0.83),
-			hsl(qh, math.min(qv, 0.8), 0.84),
-			hsl(ph + 35, math.min(pv, 0.8), 0.85),
-			hsl(qh - 35, math.min(qv, 0.8), 0.83),
+		sky_top = hsl(ph, math.min(ps, 0.6), 0.975),
+		sky_bottom = hsl(ph, math.min(ps, 0.55), 0.955),
+		lights = {
+			hsl(ph - 22, math.min(pv, 0.8), 0.72),
+			hsl(ph, math.min(pv, 0.8), 0.64),
+			hsl(ph + 26, math.min(pv, 0.8), 0.62),
+			hsl(qh - 26, math.min(qv, 0.8), 0.66),
+			hsl(qh, math.min(qv, 0.8), 0.68),
+			hsl(qh + 22, math.min(qv, 0.8), 0.72),
 		},
-		blob_alpha = 0.62,
 		fg = hsl(ph, math.min(ps, 0.45), 0.15),
 		accent = hsl(ph, math.min(pv, 0.9), 0.42),
 		hot_a = hsl(qh, math.min(qv, 0.8), 0.58),
@@ -206,44 +228,86 @@ local function generate(primary: Rgba, secondary: Rgba, dark: boolean): Palette
 end
 
 ---------------------------------------------------------------------------
--- 2. Inks and frost
+-- 2. Inks, glass and frost
 ---------------------------------------------------------------------------
 --
--- A palette can come from anywhere (a neon-yellow desktop accent, pure
+-- Text here lies on glass, and behind the glass is an aurora: night sky in
+-- one place, a curtain's bright hem in the next, and the hem moves. A
+-- palette can come from anywhere (a neon-yellow desktop accent, pure
 -- grey, two colours somebody liked), and the window can be see-through
--- over any desktop. So nothing below trusts a colour to be readable: each
--- ink is worked out from the palette against what it will lie on.
+-- over any desktop. So nothing below trusts a colour to be readable, and
+-- it is settled from both sides:
 --
--- 0.2 chose these by eye, and some of its choices missed: small dim text
--- at 4:1 in the light palettes, errors at 2:1, and on a see-through window
--- any text that had no tint under it. The numbers that changed for that
--- are all here.
+--   the light  each colour of the aurora is tempered (the same hue, as
+--              saturated, nearer the sky's own lightness) until the text
+--              reads on it through the thinnest pane there is;
+--   the inks   every ink is then worked out against all that it can lie
+--              on: each pane over the sky and over each of those lights.
+--
+-- So wherever a curtain wanders, under whatever text, that text reads.
+-- crates/gmnb-theme/tests/css.rs goes through every colour the
+-- background can make under every text there is.
 
--- Glass: white, thin in the dark and milky in the light.
-local function glass_for(dark: boolean)
+local contrast = gmnb.contrast
+
+-- Glass. A key's is thin (`top` to `bottom`; a number key's ends at
+-- `number`, a little more solid), so that the aurora shows through the
+-- keypad, which is most of the window. What carries smaller and fainter
+-- text is thicker: a panel's glass, and the veil, the pane under text
+-- that lies straight on the page (the readout, the memory row, the
+-- header).
+--
+-- In the dark it is smoked, with the night's own colour: glass dims the
+-- aurora behind it and keeps its hue, and the sky behind it stays black.
+-- (White glass, as 0.2 had it, turns a night sky grey.) In the light it
+-- is milk glass.
+type Glass = {
+	top: Rgba,
+	bottom: Rgba,
+	number: Rgba,
+	panel_top: Rgba,
+	panel_bottom: Rgba,
+	rim: Rgba,
+	veil: number,
+}
+
+local function glass_for(dark: boolean, sky: Rgba): Glass
+	if dark then
+		return {
+			top = alpha(sky, 0.22),
+			bottom = alpha(sky, 0.32),
+			number = alpha(sky, 0.40),
+			panel_top = alpha(sky, 0.48),
+			panel_bottom = alpha(sky, 0.56),
+			rim = alpha(white, 0.12),
+			veil = 0.5,
+		}
+	end
 	return {
-		top = alpha(white, if dark then 0.11 else 0.78),
-		bottom = alpha(white, if dark then 0.055 else 0.50),
-		-- Number keys are a little more solid than the rest.
-		number = alpha(white, if dark then 0.085 else 0.72),
-		rim = alpha(white, if dark then 0.10 else 0.85),
+		top = alpha(white, 0.68),
+		bottom = alpha(white, 0.46),
+		number = alpha(white, 0.64),
+		panel_top = alpha(white, 0.80),
+		panel_bottom = alpha(white, 0.64),
+		rim = alpha(white, 0.85),
+		veil = 0.625,
 	}
 end
 
 -- The graph's canvas is a pane of smoked glass in the dark and of milk
--- glass in the light: top and bottom.
+-- glass in the light, thicker than a key's: top and bottom.
 local function canvas_tint(dark: boolean): (Rgba, Rgba)
 	if dark then
-		return alpha(black, 0.20), alpha(black, 0.30)
+		return alpha(black, 0.40), alpha(black, 0.50)
 	end
-	return alpha(white, 0.55), alpha(white, 0.42)
+	return alpha(white, 0.66), alpha(white, 0.56)
 end
 
 -- Whether `ink`, which may be translucent, reaches `target` on every one
 -- of `grounds`.
 local function reads(ink: Rgba, grounds: { Rgba }, target: number): boolean
 	for _, ground in grounds do
-		if gmnb.contrast(over(ink, ground), ground) < target then
+		if contrast(over(ink, ground), ground) < target then
 			return false
 		end
 	end
@@ -272,57 +336,44 @@ end
 -- `color` with its lightness moved, as little as possible, until it
 -- reaches `target` on every ground.
 local function legible(color: Rgba, grounds: { Rgba }, target: number): Rgba
-	for _, ground in grounds do
-		color = gmnb.with_contrast(color, ground, target)
+	-- (Twice: moved for a later ground, it may have left an earlier one.)
+	for _ = 1, 2 do
+		for _, ground in grounds do
+			color = gmnb.with_contrast(color, ground, target)
+		end
 	end
 	return color
 end
+
+-- What the lights give way to. On a key: its text at the opacity function
+-- keys have. On a panel and on the veil: the text colour at `STEP_BACK`
+-- (the lower, the dimmer the aurora there and the further captions can
+-- step back), and the palette's accent moved `KEPT` of the way to white
+-- (to black, in the light) and no further: so that what is written in
+-- the accent is still the accent.
+local ON_KEYS = 0.86
+local STEP_BACK = 0.70
+local KEPT = 0.3
 
 -- One thing that has to stay readable on a see-through window: an ink, the
 -- contrast it needs, and what it lies on above the frost (bottom-most
 -- first): a pane of glass, the tint of a lit button.
 type Check = { ink: Rgba, target: number, on: { Rgba } }
 
--- How much of the desktop a surface has to hide for every check to hold
--- over a black desktop and over a white one, as a fraction: 0.8 means
--- "four fifths this palette's own background, one fifth whatever is
--- behind the window".
-local function cover_for(base: Rgba, checks: { Check }, margin: number): number
-	local function holds(cover: number): boolean
-		for _, desktop in { black, white } do
-			local frosted = over(alpha(base, cover), desktop)
-			for _, check in checks do
-				local ground = frosted
-				for _, layer in check.on do
-					ground = over(layer, ground)
-				end
-				if gmnb.contrast(over(check.ink, ground), ground) < check.target * margin then
-					return false
-				end
-			end
-		end
-		return true
-	end
-	-- Down from everything hidden, in 64ths, to the last step that holds.
-	-- (Not a search by halves: over a desktop darker than a dark ink the
-	-- ink reads again once the frost is nearly gone, and that is not the
-	-- answer.)
-	local step = 64
-	while step > 0 and holds((step - 1) / 64) do
-		step -= 1
-	end
-	return step / 64
-end
-
 -- A palette, and everything worked out from it.
 type Scheme = {
 	dark: boolean,
-	base_top: Rgba,
-	base_bottom: Rgba,
-	blobs: { Rgba },
-	blob_alpha: number,
+	sky_top: Rgba,
+	sky_bottom: Rgba,
+	-- The aurora's colours, each as strong as the text lets it be, and the
+	-- brightest a star may be.
+	lights: { Rgba },
+	star: Rgba,
+	glass: Glass,
 	fg: Rgba,
 	accent: Rgba,
+	-- The accent as the palette has it: what tints are made of.
+	tint: Rgba,
 	hot_a: Rgba,
 	hot_b: Rgba,
 	on_hot: Rgba,
@@ -332,26 +383,34 @@ type Scheme = {
 	strong: Rgba,
 	soft: Rgba,
 	dim: Rgba,
-	-- The accent as text on something tinted with the accent.
+	-- The accent as text on something tinted with the accent, and as an
+	-- operator key's glyph on its tinted glass.
 	accent_ink: Rgba,
+	operator_ink: Rgba,
 	-- Errors.
 	danger: Rgba,
 	-- The hot gradient deep enough for small text.
 	lit_a: Rgba,
 	lit_b: Rgba,
-	-- How strong the two veils of light over the aurora are.
-	veil_alpha: number,
-	-- How much of the desktop must be hidden under text, and under the
-	-- graph, on a see-through window (see `cover_for`).
-	cover: number,
-	canvas_cover: number,
+	-- What has to hold on a see-through window: for text straight on the
+	-- frost, for text on glass over it, and on the graph's canvas.
+	bare: { Check },
+	glazed: { Check },
+	plotted: { Check },
+	-- The frost worked out so far, by the window's opacity.
+	frosts: { [number]: { number } },
+	frosts_count: number,
 }
 
 -- Generated palettes also pick white or `dark_text` for the equals key's
 -- glyph; the built-in ones keep the colour their author chose.
 local function finish(p: Palette, dark_text: Rgba?): Scheme
-	local top, bottom = p.base_top, p.base_bottom
+	local top, bottom = p.sky_top, p.sky_bottom
 	local fg = p.fg
+	local glass = glass_for(p.dark, bottom)
+	local veil = alpha(bottom, glass.veil)
+	-- The farthest an ink can be moved: what `legible` ends at.
+	local extreme = if p.dark then white else black
 
 	-- The equals key's glyph against its whole gradient (a large glyph: 3),
 	-- and a deeper gradient for the small text of whatever is lit: a toggle
@@ -364,81 +423,171 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 	end
 	local lit_a, lit_b = gmnb.gradient_for_text(on_hot, hot_a, hot_b, TEXT)
 
-	-- The accent as text on the background, and graph lines on it.
-	local accent = legible(p.accent, { top, bottom }, TEXT)
-	local series = {}
-	for i, c in p.series do
-		series[i] = legible(c, { top, bottom }, UI)
-	end
+	-- What text lies on: a key's glass, top to bottom; and the panes that
+	-- carry everything else, the veil and a panel's glass. Under some of
+	-- that text the pane is a little lighter or more coloured: the wash of
+	-- a field, a chip or a hovered row, the tint of whatever is chosen.
+	local key_panes = { glass.top, glass.bottom, glass.number }
+	local text_panes = { veil, glass.panel_top, glass.panel_bottom }
+	local wash = alpha(fg, 0.10)
+	local tint = alpha(p.accent, 0.24)
+	local key_tint = alpha(p.accent, 0.20)
+	local kept = mix(p.accent, extreme, KEPT)
 
-	-- What text lies on at full opacity: the background's two colours, the
-	-- body of each blob of the aurora, its veils, and any of those under
-	-- glass.
-	local glass = glass_for(p.dark)
-	local veil_alpha = if p.dark then 0.16 else 0.10
-	local grounds = { top, bottom, over(alpha(hot_a, veil_alpha), bottom), over(alpha(hot_b, veil_alpha), bottom) }
-	for _, blob in p.blobs do
-		table.insert(grounds, over(alpha(blob, p.blob_alpha * 0.62), bottom))
+	-- The lights. Each is brought toward the sky's lightness, a thirty-second
+	-- at a time, until all that is written over it reads.
+	local _, _, level = gmnb.to_hsl(bottom)
+	local function bearable(light: Rgba): boolean
+		for _, pane in key_panes do
+			local ground = over(pane, light)
+			if contrast(over(alpha(fg, ON_KEYS), ground), ground) < TEXT * 1.03 then
+				return false
+			end
+			-- An operator's glyph needs 3, on its tint.
+			if contrast(extreme, over(key_tint, ground)) < UI * 1.05 then
+				return false
+			end
+		end
+		for _, pane in text_panes do
+			local ground = over(pane, light)
+			if contrast(over(alpha(fg, STEP_BACK), ground), ground) < TEXT * 1.03 then
+				return false
+			end
+			if contrast(kept, ground) < TEXT then
+				return false
+			end
+			if contrast(fg, over(wash, ground)) < TEXT * 1.03 or contrast(fg, over(tint, ground)) < TEXT * 1.03 then
+				return false
+			end
+		end
+		return true
 	end
-	for i = 1, #grounds do
-		table.insert(grounds, over(glass.top, grounds[i]))
+	local function tempered(light: Rgba): Rgba
+		local h, s, l = gmnb.to_hsl(light)
+		for step = 32, 1, -1 do
+			local c = hsl(h, s, level + (l - level) * step / 32)
+			if bearable(c) then
+				return c
+			end
+		end
+		return hsl(h, s, level)
+	end
+	local lights = {}
+	for i, light in p.lights do
+		lights[i] = tempered(light)
+	end
+	local star = tempered(hex("#ececec"))
+
+	-- What the window shows at full opacity: the sky's two colours and the
+	-- lights. And what text lies on: each pane over each of those.
+	local backs = { top, bottom }
+	for _, light in lights do
+		table.insert(backs, light)
+	end
+	local function under(panes: { Rgba }, more: Rgba?): { Rgba }
+		local out = {}
+		for _, back in backs do
+			for _, pane in panes do
+				local ground = over(pane, back)
+				table.insert(out, if more then over(more, ground) else ground)
+			end
+		end
+		return out
+	end
+	local on_keys, on_panes = under(key_panes), under(text_panes)
+	local function both(a: { Rgba }, b: { Rgba }): { Rgba }
+		local out = table.clone(a)
+		table.move(b, 1, #b, #out + 1, out)
+		return out
 	end
 
 	-- 0.2 had these at .86, .78 and around .6 of the text colour whatever
-	-- the palette. Those are the floors now: the light palettes need more.
-	local strong = recede(fg, grounds, 0.86)
-	local soft = recede(fg, grounds, 0.78)
-	-- The dim text is also a bit's, a field's: on the text's own 4% wash.
-	local washed = table.clone(grounds)
-	for _, ground in grounds do
-		table.insert(washed, over(alpha(fg, 0.04), ground))
-	end
-	local dim = recede(fg, washed, 0.62)
-	-- A lit text button and the current number base write the accent on a
-	-- tint of the accent, and the operator keys are made of that tint.
-	local tint = alpha(accent, 0.24)
-	local accent_ink = legible(accent, { over(tint, top), over(tint, bottom) }, TEXT)
+	-- the palette. Those are the floors now: where a curtain is bright
+	-- behind them they need more. Function keys' text lies on keys; the
+	-- rest on panes, some of it on a wash (a bit, a field, a small button
+	-- on a panel).
+	local strong = recede(fg, both(on_keys, on_panes), ON_KEYS)
+	local soft = recede(fg, both(on_panes, under(text_panes, alpha(fg, 0.07))), 0.78)
+	local dim = recede(fg, both(on_panes, under(text_panes, alpha(fg, 0.07))), 0.62)
+
+	-- The accent as text: on the panes, and on the sky itself. As text on
+	-- a tint of itself (a lit text button, the current number base). And
+	-- as an operator's glyph, which is a sign and not text to read: 3.
+	local open = both(on_panes, { top, bottom })
+	local accent = legible(p.accent, open, TEXT)
+	local accent_ink = legible(accent, under(text_panes, tint), TEXT)
+	local operator_ink = legible(accent_ink, under(key_panes, key_tint), UI * 1.03)
 	-- Errors. 0.2 wrote them in the hot colour as it came: 2:1 in the light
 	-- Aurora, and teal in Abyss, where it didn't look like an error at all.
 	-- A rose reads as one in every palette.
-	local danger = legible(hsl(348, 0.9, if p.dark then 0.72 else 0.46), grounds, TEXT)
+	local danger = legible(hsl(348, 0.9, if p.dark then 0.72 else 0.46), open, TEXT)
+
+	-- Graph lines: on the canvas's own glass over all of it, and on the sky.
+	local canvas_top, canvas_bottom = canvas_tint(p.dark)
+	local plot = { top, bottom }
+	for _, back in backs do
+		table.insert(plot, over(canvas_top, back))
+		table.insert(plot, over(canvas_bottom, back))
+	end
+	local series = {}
+	for i, c in p.series do
+		series[i] = legible(c, plot, UI * 1.02)
+	end
 
 	-- See-through: what has to hold wherever the desktop shows through.
 	-- The text colour keeps the 4.5 it has on an opaque window; everything
 	-- fainter, and everything coloured, keeps at least 3.
-	local checks: { Check } = {
-		{ ink = fg, target = TEXT, on = {} },
-		{ ink = dim, target = UI, on = {} },
-		{ ink = accent, target = UI, on = {} },
-		{ ink = danger, target = UI, on = {} },
-		-- On a tint: lit buttons, operator keys; fields, bits and chips.
-		{ ink = accent_ink, target = UI, on = { tint } },
-		{ ink = dim, target = UI, on = { alpha(fg, 0.10) } },
-		-- Under glass: keys, the panels, and the small buttons on them.
-		{ ink = dim, target = UI, on = { glass.top } },
-		{ ink = dim, target = UI, on = { glass.bottom } },
-		{ ink = dim, target = UI, on = { glass.top, alpha(fg, 0.07) } },
+	local margin = 1.05
+	local function check(ink: Rgba, target: number, on: { Rgba }): Check
+		return { ink = ink, target = target * margin, on = on }
+	end
+	local bare: { Check } = {
+		check(fg, TEXT, {}),
+		check(dim, UI, {}),
+		check(accent, UI, {}),
+		check(danger, UI, {}),
+		-- On a tint: lit buttons; fields, bits and chips.
+		check(accent_ink, UI, { alpha(p.accent, 0.12) }),
+		check(fg, UI, { tint }),
+		check(dim, UI, { wash }),
+	}
+	-- Under glass: keys, the panels, and the small buttons on them.
+	local glazed: { Check } = {
+		check(fg, TEXT, { glass.top }),
+		check(fg, TEXT, { glass.number }),
+		check(fg, TEXT, { glass.panel_top }),
+		check(fg, TEXT, { glass.panel_bottom }),
+		check(strong, UI, { glass.top }),
+		check(strong, UI, { glass.bottom }),
+		-- An operator key: its tint thins from top to bottom.
+		check(operator_ink, UI, { glass.top, key_tint }),
+		check(operator_ink, UI, { glass.bottom, alpha(p.accent, 0.07) }),
+		check(dim, UI, { glass.panel_top }),
+		check(dim, UI, { glass.panel_bottom }),
+		check(dim, UI, { glass.panel_top, alpha(fg, 0.07) }),
+		check(dim, UI, { glass.panel_bottom, alpha(fg, 0.07) }),
 	}
 	-- The graph: every curve, the axes and the labels, under the canvas's
 	-- own glass. Curves only just reach 3 on the opaque background, so
 	-- this comes out close to 1: a graph needs to know what it is on.
-	local canvas_top, canvas_bottom = canvas_tint(p.dark)
-	local canvas_checks: { Check } = {}
+	local plotted: { Check } = {}
 	for _, smoke in { canvas_top, canvas_bottom } do
-		table.insert(canvas_checks, { ink = dim, target = UI, on = { smoke } })
+		table.insert(plotted, { ink = dim, target = UI * 1.01, on = { smoke } })
 		for _, c in series do
-			table.insert(canvas_checks, { ink = c, target = UI, on = { smoke } })
+			table.insert(plotted, { ink = c, target = UI * 1.01, on = { smoke } })
 		end
 	end
 
 	return {
 		dark = p.dark,
-		base_top = top,
-		base_bottom = bottom,
-		blobs = p.blobs,
-		blob_alpha = p.blob_alpha,
+		sky_top = top,
+		sky_bottom = bottom,
+		lights = lights,
+		star = star,
+		glass = glass,
 		fg = fg,
 		accent = accent,
+		tint = p.accent,
 		hot_a = hot_a,
 		hot_b = hot_b,
 		on_hot = on_hot,
@@ -447,12 +596,15 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 		soft = soft,
 		dim = dim,
 		accent_ink = accent_ink,
+		operator_ink = operator_ink,
 		danger = danger,
 		lit_a = lit_a,
 		lit_b = lit_b,
-		veil_alpha = veil_alpha,
-		cover = cover_for(bottom, checks, 1.05),
-		canvas_cover = cover_for(bottom, canvas_checks, 1.01),
+		bare = bare,
+		glazed = glazed,
+		plotted = plotted,
+		frosts = {},
+		frosts_count = 0,
 	}
 end
 
@@ -512,20 +664,78 @@ local function scheme(ctx: Ctx): Scheme
 	return scheme_for(tostring(ctx.options.palette), ctx)
 end
 
--- The frost a see-through window needs under what `cover` was worked out
--- for: the palette's own background colour at this opacity, laid over the
--- window's (which is already there at `opacity`).
---
--- Down to about four fifths opacity this is 0 and nothing changes but the
--- aurora thinning; below that the frost comes in by sixteenths, so that
--- dragging the slider restyles the window a dozen times, not at every
--- step.
-local function frost_for(cover: number, opacity: number): number
-	if opacity >= 1 or cover <= opacity then
-		return 0
+-- How strong the frost under `checks` has to be for each of them to hold
+-- over every one of `backs`: the sky's own colour, in sixteenths, and
+-- `least` at least.
+local function frost_needed(base: Rgba, backs: { Rgba }, checks: { Check }, least: number): number
+	local function holds(strength: number): boolean
+		for _, back in backs do
+			local frosted = over(alpha(base, strength), back)
+			for _, c in checks do
+				local ground = frosted
+				for _, layer in c.on do
+					ground = over(layer, ground)
+				end
+				if contrast(over(c.ink, ground), ground) < c.target then
+					return false
+				end
+			end
+		end
+		return true
 	end
-	local needed = 1 - (1 - cover) / (1 - opacity)
-	return math.min(math.ceil(needed * 16 - 0.001) / 16, 1)
+	-- Down from solid to the last step that holds. (Not a search by halves:
+	-- over a desktop darker than a dark ink the ink reads again once the
+	-- frost is nearly gone, and that is not the answer.)
+	local step = 16
+	local floor = math.ceil(least * 16 - 0.001)
+	while step > floor and holds((step - 1) / 16) do
+		step -= 1
+	end
+	return step / 16
+end
+
+-- The frost a see-through window needs: a layer of the sky's own colour
+-- under whatever carries text, as strong as this palette needs at this
+-- opacity and no stronger. Three of them: the veil under text straight
+-- on the page, what goes under glass, and what the graph's canvas needs.
+--
+-- A see-through window shows the sky and the aurora thinned over the
+-- desktop, which may be black or white or anything between. An opaque
+-- window needs none but the veil it always has (the lights were tempered
+-- for that); the frost comes in by sixteenths as the window clears, so
+-- that dragging the slider restyles the window a dozen times, not at
+-- every step.
+local function frost_for(s: Scheme, opacity: number): (number, number, number)
+	local veil = s.glass.veil
+	if opacity >= 1 then
+		return veil, 0, 0
+	end
+	local known = s.frosts[opacity]
+	if known then
+		return known[1], known[2], known[3]
+	end
+	local backs = {}
+	for _, desktop in { black, white } do
+		for _, back in { s.sky_top, s.sky_bottom } do
+			table.insert(backs, over(alpha(back, opacity), desktop))
+		end
+		for _, light in s.lights do
+			table.insert(backs, over(alpha(light, opacity), desktop))
+		end
+	end
+	local base = s.sky_bottom
+	local found = {
+		frost_needed(base, backs, s.bare, veil),
+		frost_needed(base, backs, s.glazed, 0),
+		frost_needed(base, backs, s.plotted, 0),
+	}
+	-- (Dragging the opacity slider asks for a new one each step.)
+	if s.frosts_count >= 64 then
+		s.frosts, s.frosts_count = {}, 0
+	end
+	s.frosts[opacity] = found
+	s.frosts_count += 1
+	return found[1], found[2], found[3]
 end
 
 ---------------------------------------------------------------------------
@@ -556,27 +766,30 @@ local function style(ctx: Ctx): Style
 	local dark = s.dark
 	local fg, accent, accent_ink = s.fg, s.accent, s.accent_ink
 	local strong, soft, dim = s.strong, s.soft, s.dim
-	local base = s.base_bottom
+	-- What tints are made of: the accent as the palette has it.
+	local tint = s.tint
+	local base = s.sky_bottom
 	-- 0.2 left whatever it didn't set in Outfit to the desktop's own font.
 	local system = ctx.font
 
-	-- See-through. Below full opacity the desktop shows through the aurora,
-	-- and every surface that carries text gets the frost under it: a layer
-	-- of the backdrop's own colour, as strong as this palette needs at this
-	-- opacity and no stronger (section 2).
+	-- What carries text has something of the sky's own colour under it
+	-- (section 2): the veil, under text that lies straight on the page;
+	-- and on a see-through window, where the desktop shows through the
+	-- aurora, the frost, under glass too. Each as strong as this palette
+	-- needs at this opacity and no stronger.
 	local see = ctx.opacity < 1
-	local frost_alpha = frost_for(s.cover, ctx.opacity)
-	local frost = alpha(base, frost_alpha)
-	local frosted = frost_alpha > 0
+	local veil_alpha, backing_alpha, canvas_alpha = frost_for(s, ctx.opacity)
+	local frost = alpha(base, veil_alpha)
+	local backing = alpha(base, backing_alpha)
 	-- `paint` over the frost.
 	local function on_frost(paint: Paint): Fill
-		local layers: { Paint } = { paint, frost }
-		return if frosted then layers else paint
+		local layers: { Paint } = { paint, backing }
+		return if backing_alpha > 0 then layers else paint
 	end
 	-- The backdrop's colour for a surface that was translucent anyway: at
-	-- its own strength, or the frost's if that is more.
+	-- its own strength, or the veil's if that is more.
 	local function sheet(opacity: number): Rgba
-		return alpha(base, math.max(opacity, frost_alpha))
+		return alpha(base, math.max(opacity, veil_alpha))
 	end
 	-- A halo in the backdrop's colour around text that lies straight on it,
 	-- for the busy wallpaper no contrast figure knows about.
@@ -585,8 +798,17 @@ local function style(ctx: Ctx): Style
 		else {}
 
 	-- Glass.
-	local glass = glass_for(dark)
+	local glass = s.glass
 	local pane = down(glass.top, glass.bottom)
+	local panel_pane = down(glass.panel_top, glass.panel_bottom)
+	-- A tint of the accent on a key's glass.
+	local function on_glass(paint: Paint): Fill
+		local layers: { Paint } = { paint, pane }
+		if backing_alpha > 0 then
+			table.insert(layers, backing)
+		end
+		return layers
+	end
 	local shade = if dark then alpha(black, 0.32) else alpha(hex("#3a2a6a"), 0.10)
 	local highlight: Shadow = { inset = true, y = 1, color = alpha(white, 0.10) }
 	local rim: Shadow = { inset = true, spread = 1, color = glass.rim }
@@ -600,7 +822,7 @@ local function style(ctx: Ctx): Style
 
 	-- What the toolkit's own widgets are coloured with: dialogs, menus,
 	-- lists, cards and the text on the accent colour.
-	local window = if dark then s.base_bottom else s.base_top
+	local window = if dark then s.sky_bottom else s.sky_top
 	local view, sidebar, dialog, popover, card, on_accent
 	if dark then
 		view = mix(window, black, 0.15)
@@ -623,7 +845,7 @@ local function style(ctx: Ctx): Style
 	local flat_hover: State = { background = alpha(fg, 0.07) }
 	local flat_active: State = { background = alpha(fg, 0.16) }
 	-- Something chosen: the accent as text, on a tint of it.
-	local chosen: State = { background = alpha(accent, 0.12), color = accent_ink }
+	local chosen: State = { background = alpha(tint, 0.12), color = accent_ink }
 
 	-- Shadows, listed topmost first: a highlight along the top edge, a
 	-- hairline rim, a shade along the bottom edge that gives the glass its
@@ -672,7 +894,7 @@ local function style(ctx: Ctx): Style
 	-- The graph's canvas: its glass, with the frost a graph needs mixed
 	-- in (it takes one paint, not layers).
 	local canvas_top, canvas_bottom = canvas_tint(dark)
-	local canvas_frost = alpha(base, frost_for(s.canvas_cover, ctx.opacity))
+	local canvas_frost = alpha(base, canvas_alpha)
 
 	return {
 		-- Tokens. Anything not styled below is derived from these.
@@ -742,26 +964,28 @@ local function style(ctx: Ctx): Style
 		},
 
 		window = {
-			background = base,
+			-- Under the background layer, and what stands if it ever fails:
+			-- the sky.
+			background = down(s.sky_top, s.sky_bottom),
 			color = fg,
 			font = { size = system.size, weight = 400 },
 			text_halo = halo,
 		},
 		-- Whatever holds text straight on the page (the memory row, the
 		-- number bases, the bits, a converter's values, a date's fields)
-		-- becomes a pane of frost on a see-through window. 0.2 had nothing
-		-- here, and such text sank to 1:1 over a desktop of its own colour.
+		-- lies on a pane: the veil, and on a see-through window as much
+		-- frost as that needs. 0.2 had nothing here, and such text sank to
+		-- 1:1 over a desktop of its own colour.
 		plain = { background = frost, radius = KEY_RADIUS },
 		-- The keyboard's focus: the accent, solid, a pixel out from what
-		-- holds it (it reaches 4.5 on the backdrop, and 3 on the frost of a
-		-- see-through window). Round a key, which lies on the aurora and on
-		-- whatever desktop shows through it, a line of the backdrop's own
-		-- colour along each side keeps it seen on either; see-through, the
-		-- accent is moved 9:1 from that line, so that one of the two reads
-		-- on any colour the desktop makes of the backdrop.
+		-- holds it. Round a key it lies on the aurora itself, sky in one
+		-- place and a curtain in the next, and on whatever desktop shows
+		-- through: so a line of the sky's own colour runs along each side
+		-- of it, and the accent is moved 9:1 from that line. Then one of
+		-- the two reads, 3:1 or more, on any colour there is.
 		focus = {
 			width = 2,
-			color = if see then gmnb.with_contrast(accent, base, UI * UI * 1.01) else accent,
+			color = gmnb.with_contrast(accent, base, UI * UI * 1.01),
 			offset = 3,
 			edge = { width = 1, color = base },
 		},
@@ -811,7 +1035,7 @@ local function style(ctx: Ctx): Style
 				hover = { background = alpha(fg, 0.06) },
 				active = { background = alpha(fg, 0.06) },
 				checked = {
-					background = across(alpha(accent, 0.24), alpha(accent, 0.06)),
+					background = across(alpha(tint, 0.24), alpha(tint, 0.06)),
 					shadow = { { inset = true, x = 3, color = accent } },
 					color = fg,
 					icon = { color = accent_ink },
@@ -879,8 +1103,8 @@ local function style(ctx: Ctx): Style
 			},
 			operator = {
 				font = outfit(22, 350),
-				color = accent_ink,
-				background = on_frost(down(alpha(accent, 0.20), alpha(accent, 0.07))),
+				color = s.operator_ink,
+				background = on_glass(down(alpha(tint, 0.20), alpha(tint, 0.07))),
 				border = false,
 				shadow = operator_shadow,
 			},
@@ -936,7 +1160,7 @@ local function style(ctx: Ctx): Style
 		},
 
 		panel = {
-			background = on_frost(pane),
+			background = on_frost(panel_pane),
 			radius = 20,
 			border = false,
 			shadow = panel_shadow,
@@ -988,7 +1212,7 @@ local function style(ctx: Ctx): Style
 					hover = { background = alpha(fg, 0.06) },
 					active = { background = alpha(fg, 0.06) },
 					checked = {
-						background = across(alpha(accent, 0.22), alpha(accent, 0)),
+						background = across(alpha(tint, 0.22), alpha(tint, 0)),
 						shadow = { { inset = true, x = 3, color = accent } },
 					},
 				},
@@ -1072,7 +1296,7 @@ local function style(ctx: Ctx): Style
 				padding = { 6, 4, 8, 4 },
 				transition = { background = 200, shadow = 240 },
 				checked = {
-					background = across(alpha(accent, 0.14), alpha(accent, 0.02)),
+					background = across(alpha(tint, 0.14), alpha(tint, 0.02)),
 					shadow = { { inset = true, x = 3, color = accent } },
 				},
 			},
@@ -1133,7 +1357,7 @@ local function style(ctx: Ctx): Style
 
 		graph = {
 			side = {
-				background = on_frost(pane),
+				background = on_frost(panel_pane),
 				radius = 20,
 				border = false,
 				shadow = panel_shadow,
@@ -1201,7 +1425,7 @@ local function style(ctx: Ctx): Style
 					halo = { grow = 3, color = "series", opacity = 0.25 },
 					ring = { width = 1.5, color = alpha(white, 0.9) },
 					bubble = {
-						background = if dark then alpha(s.base_bottom, 0.92) else alpha(white, 0.95),
+						background = if dark then alpha(s.sky_bottom, 0.92) else alpha(white, 0.95),
 						color = alpha(fg, 0.95),
 						radius = 10,
 						font = outfit(13),
@@ -1218,50 +1442,419 @@ end
 -- 4. Background: the aurora
 ---------------------------------------------------------------------------
 --
--- Bottom to top: the base gradient, four blobs of colour that wander, two
--- veils of light arching over them, a pulse wherever something just
--- happened, a vignette, and film grain.
+-- Bottom to top: the sky and its stars, the aurora with a ray of light
+-- wherever something just happened, and film grain.
+--
+-- An aurora is curtains of light. Each hangs along a line that wanders
+-- across the sky, its hem: sharp and bright there, and fading upward in
+-- rays, some tall and some short. Folds travel slowly along it. Its
+-- colours go by height: green lowest, then teal, and violet and crimson
+-- at the crown.
+--
+-- How bright the curtains are is a field (docs/theming-media.md,
+-- "Fields"): one number a point on a coarse grid, three times a second;
+-- the app glides between two of those and makes the picture. That picture
+-- is only ever white, more or less opaque. It is drawn as a mask, and
+-- what shows through it is the palette's lights, a gradient by height.
+-- (The colours can't live in the field's ramp: a theme may make eight
+-- ramps, and Freestyle's palettes are without number.)
+--
+-- So every pixel of the background is the sky, or one of the palette's
+-- lights at its height, or something between the two: nothing brighter
+-- than a light is ever drawn, which is what section 2 counts on.
 
--- The blobs: where each rests (as fractions of the window), how far it
--- wanders, how fast in x and in y (radians a second), where in its swing it
--- starts, and its size (a fraction of the window's longer side).
-local BLOBS = {
-	{ x = 0.10, y = 0.08, wander = 0.20, speed_x = 0.071, speed_y = 0.053, phase = 0.0, size = 0.62 },
-	{ x = 0.98, y = 0.34, wander = 0.16, speed_x = 0.047, speed_y = 0.067, phase = 1.7, size = 0.52 },
-	{ x = 0.22, y = 0.98, wander = 0.18, speed_x = 0.059, speed_y = 0.043, phase = 3.1, size = 0.58 },
-	{ x = 0.88, y = 0.96, wander = 0.14, speed_x = 0.038, speed_y = 0.061, phase = 4.4, size = 0.46 },
+local floor, ceil, sin, cos, min, max, sqrt, clamp =
+	math.floor, math.ceil, math.sin, math.cos, math.min, math.max, math.sqrt, math.clamp
+local readf32, writef32 = buffer.readf32, buffer.writef32
+local TAU = 2 * math.pi
+
+-- How strong the light is: none is clear, all of it is white.
+local LIGHT = gmnb.ramp({ colors = { alpha(white, 0), white } })
+
+-- Where each of a palette's lights is, from the top of the window, as a
+-- fraction of its height: the crown first. Below the last, the light
+-- stays what it is there.
+local HEIGHTS = { 0.04, 0.22, 0.35, 0.45, 0.58, 0.80 }
+
+-- 256 numbers from 0 to 1, the same every time: what rays and stars are
+-- made from.
+local NOISE: { number } = {}
+do
+	local s = 0x2545f491
+	for i = 1, 256 do
+		s = bit32.bxor(s, bit32.lshift(s, 13))
+		s = bit32.bxor(s, bit32.rshift(s, 17))
+		s = bit32.bxor(s, bit32.lshift(s, 5))
+		NOISE[i] = (s % 65536) / 65535
+	end
+end
+
+-- Smooth noise along a line: 0 to 1, a new number every whole step.
+local function noise(x: number): number
+	local i = floor(x)
+	local f = x - i
+	local a, b = NOISE[i % 256 + 1], NOISE[(i + 1) % 256 + 1]
+	return a + (b - a) * f * f * (3 - 2 * f)
+end
+
+-- A curtain. Heights are fractions of the window's; lengths along it are
+-- in units of the window's height too (or of its width and a fifth, in a
+-- narrow window), so that a wide window shows more of the sky and not a
+-- stretched one.
+--   y, lean   where its hem hangs, from the top, in the middle of the
+--             window; and how much lower it is at the right edge than at
+--             the left
+--   waves     the folds of the hem, each { how high, how long, how fast
+--             (radians a second), where it starts }
+--   tall      how far up its rays reach
+--   bright    how strong its light is, 0 to 1
+--   fine      how wide a ray is; `broad`, a patch of them
+--   drift     how fast the rays move along it (units a second)
+type Curtain = {
+	y: number,
+	lean: number,
+	waves: { { number } },
+	tall: number,
+	bright: number,
+	fine: number,
+	broad: number,
+	drift: number,
+	seed: number,
 }
-
--- The veils: each is a slice of a huge ring whose centre lies far below the
--- window, so that what shows is an arc with a bright lower edge, fading
--- upwards as an aurora's curtain does.
---   x, y      the arc's highest point, as fractions of the window
---   radius    of the ring, in window heights; `stretch` times that across
---   sway      how far the arc's top wanders sideways, and `speed`, `phase`
-local VEILS = {
-	{ x = 0.28, y = 0.30, radius = 1.3, stretch = 1.15, sway = 0.10, speed = 0.043, phase = 0.6 },
-	{ x = 0.80, y = 0.42, radius = 1.6, stretch = 1.10, sway = 0.08, speed = 0.031, phase = 2.9 },
+local CURTAINS: { Curtain } = {
+	-- The near one: across the whole window, rising to the right.
+	{
+		y = 0.61,
+		lean = -0.12,
+		waves = { { 0.034, 1.70, 0.045, 0.9 }, { 0.013, 0.52, -0.075, 2.0 }, { 0.005, 0.17, 0.120, 4.1 } },
+		tall = 0.50,
+		bright = 1.0,
+		fine = 0.020,
+		broad = 0.17,
+		drift = 0.004,
+		seed = 0,
+	},
+	-- Where it folds back on itself: the same curtain a little further
+	-- off, so a little higher, shorter and fainter.
+	{
+		y = 0.52,
+		lean = -0.07,
+		waves = { { 0.030, 1.55, 0.045, 2.3 }, { 0.012, 0.44, -0.070, 5.2 } },
+		tall = 0.36,
+		bright = 0.55,
+		fine = 0.017,
+		broad = 0.14,
+		drift = 0.003,
+		seed = 41,
+	},
+	-- A far one behind them, high up, small and faint.
+	{
+		y = 0.29,
+		lean = 0.07,
+		waves = { { 0.020, 1.10, -0.035, 4.0 }, { 0.007, 0.31, 0.065, 0.4 } },
+		tall = 0.24,
+		bright = 0.5,
+		fine = 0.013,
+		broad = 0.11,
+		drift = -0.003,
+		seed = 97,
+	},
 }
--- Where in the ring's gradient the bright edge is: the rest, out to 1, is
--- the fade above it.
-local VEIL_EDGE = 0.76
+-- How much of the window's height the curtains can take up, from the top:
+-- the field covers that much and no more, so its rows are spent where the
+-- hems are.
+local REACH = 0.80
+-- A curtain is brightest in a band along its hem, this much of the
+-- window's height deep.
+local BAND = 0.075
+-- Under its hem its light doesn't stop dead: this much of it glows on
+-- below, for this much of the window's height.
+local UNDERGLOW, UNDER = 0.30, 0.10
 
--- The blobs move about 5 px a second: 15 frames a second is smooth.
+-- Fifteen pictures a second while it drifts (a fold moves about 5 px a
+-- second), and the field three times a second: the app glides between
+-- two snapshots of it.
+local SHOWN_RATE = 15
+local FIELD_RATE = 3
+local SHOWN_PER_FIELD = SHOWN_RATE / FIELD_RATE
 local DRIFT_FRAME = 0.066
 -- How long a pulse lasts, in seconds.
 local PULSE_LIFE = 1.15
 
+-- About as many points as a field may have, in cells half again as tall
+-- as wide (rays are thin and stand upright), none narrower than 3 px: a
+-- bigger window gets a coarser grid, not more to work out. And about as
+-- many pixels for the app to colour as a 760 × 640 window's aurora has at
+-- two thirds size.
+local POINTS = 16000
+local FINEST = 3
+local PIXELS = 170000
+
 -- Film grain: it hides the gradients' banding and makes them feel like a
 -- material. White specks in the dark, black ones in the light.
 local GRAIN = 192
-local grain_dark = gmnb.noise({ size = GRAIN, seed = 0x9e3779b9, color = white, opacity = 0.07 })
-local grain_light = gmnb.noise({ size = GRAIN, seed = 0x9e3779b9, color = black, opacity = 0.05 })
+local grain_dark = gmnb.noise({ size = GRAIN, seed = 0x9e3779b9, color = white, opacity = 0.05 })
+local grain_light = gmnb.noise({ size = GRAIN, seed = 0x9e3779b9, color = black, opacity = 0.04 })
 
--- How far the aurora has drifted, in seconds. It starts at the frame 0.2
--- showed when it stood still, and only moves on while "Living background"
--- is on (`frame.dt` is 0 whenever the app isn't animating).
+-- How far the aurora has drifted, in seconds. It only moves on while
+-- "Living background" is on (`frame.dt` is 0 whenever the app isn't
+-- animating); where it starts is the picture it shows standing still.
 local STILL = 37.0
 local drift = STILL
+
+-- How much coarser than `POINTS` and `PIXELS` this machine needs both:
+-- 1, unless it is slow (`keep`, below, finds out).
+local thin = 1
+
+local function grid(width: number, height: number): (number, number)
+	local step = max(FINEST, sqrt(width * height * thin / (POINTS * 1.5)))
+	return clamp(ceil(width / step) + 1, 2, 256), clamp(ceil(height / (step * 1.5)) + 1, 2, 256)
+end
+
+-- How many pixels the app colours per pixel of the field, along a side.
+local function sharpness(width: number, height: number): number
+	return clamp(sqrt(PIXELS / thin / (width * height)), 0.1, 1)
+end
+
+-- What the background keeps between frames: two snapshots of the field
+-- and the one that comes after them (worked out a few rows a frame, so
+-- that no frame carries a whole snapshot), and each curtain's columns.
+type Kept = {
+	width: number,
+	height: number,
+	-- The field's own height: `REACH` of the window's.
+	reach: number,
+	cols: number,
+	rows: number,
+	a: buffer,
+	b: buffer,
+	c: buffer,
+	-- Per curtain and column, for the snapshot being worked out: the
+	-- hem's height in pixels, one over how far up its rays reach, and how
+	-- bright it is at the hem and in its rays.
+	hem: { { number } },
+	inv: { { number } },
+	crest: { { number } },
+	body: { { number } },
+	-- Which third of a second `a` is of, whether the snapshot after `b`
+	-- has been begun, and how many of its rows are done.
+	tick: number,
+	begun: boolean,
+	done: number,
+	-- The fifteenth shown, and how far from `a` to `b` it is.
+	shown: number,
+	mix: number,
+}
+local kept: Kept? = nil
+
+local function make(width: number, height: number): Kept
+	local reach = height * REACH
+	local cols, rows = grid(width, reach)
+	local size = cols * rows * 4
+	local hem, inv, crest, body = {}, {}, {}, {}
+	for c = 1, #CURTAINS do
+		hem[c], inv[c] = table.create(cols, 0), table.create(cols, 0)
+		crest[c], body[c] = table.create(cols, 0), table.create(cols, 0)
+	end
+	return {
+		width = width,
+		height = height,
+		reach = reach,
+		cols = cols,
+		rows = rows,
+		a = buffer.create(size),
+		b = buffer.create(size),
+		c = buffer.create(size),
+		hem = hem,
+		inv = inv,
+		crest = crest,
+		body = body,
+		tick = -1,
+		begun = false,
+		done = 0,
+		shown = -1,
+		mix = 0,
+	}
+end
+
+-- Each curtain's columns at drift time `t`: where its hem is, how far up
+-- its rays reach there and how bright they are.
+local function columns(k: Kept, t: number)
+	local width, height, cols = k.width, k.height, k.cols
+	local unit = min(height, width * 1.2)
+	for c, curtain in CURTAINS do
+		local hem, inv, crest, body = k.hem[c], k.inv[c], k.crest[c], k.body[c]
+		local waves = curtain.waves
+		local slide = t * curtain.drift
+		for i = 1, cols do
+			local across = (i - 1) / (cols - 1)
+			-- Along the curtain, from the window's middle.
+			local x = (across - 0.5) * width / unit
+			local y = curtain.y + curtain.lean * (across - 0.5)
+			-- How steeply the hem runs: a fold seen edge-on is brighter.
+			local slope = 0
+			for _, wave in waves do
+				local at = TAU * x / wave[2] + wave[3] * t + wave[4]
+				y += wave[1] * sin(at)
+				slope += wave[1] * TAU / wave[2] * cos(at)
+			end
+			slope *= height / unit
+			-- Rays: fine ones, some tall and some short, in broad patches
+			-- that come and go.
+			local along = x + slide
+			local fine = noise(along / curtain.fine + curtain.seed)
+			local finer = noise(along / (curtain.fine * 0.37) + curtain.seed * 1.9 + 40)
+			local patch = noise(along / curtain.broad + curtain.seed * 3.7 + t * 0.021)
+			local tall = noise(along / (curtain.broad * 0.6) + curtain.seed * 5.3 - t * 0.017)
+			local ray = 0.7 * fine + 0.3 * finer
+			local fold = min(1 + 6 * slope * slope, 1.4)
+			hem[i] = y * height
+			inv[i] = 1 / (curtain.tall * height * (0.62 + 0.58 * tall) * (0.85 + 0.30 * ray))
+			crest[i] = curtain.bright * min((0.66 + 0.34 * patch) * fold, 1)
+			body[i] = curtain.bright * (0.34 + 0.66 * ray * ray) * (0.62 + 0.38 * patch) * fold
+		end
+	end
+end
+
+-- The light at every point of rows `first` up to (not including) `last`,
+-- from the columns worked out last: each curtain's added to the others'.
+local function light_rows(k: Kept, buf: buffer, first: number, last: number)
+	local cols, rows = k.cols, k.rows
+	local pitch = k.reach / (rows - 1)
+	-- Under its hem a curtain's light is all but gone within a row and a
+	-- bit: an edge thinner than the grid would come out in steps.
+	local edge = 1 / max(pitch * 1.3, 3)
+	local under = 1 / (UNDER * k.height)
+	local band = 1 / (BAND * k.height)
+	for c = 1, #CURTAINS do
+		local hem, inv, crest, body = k.hem[c], k.inv[c], k.crest[c], k.body[c]
+		local o = first * cols * 4
+		for j = first, last - 1 do
+			local y = j * pitch
+			for i = 1, cols do
+				local v = 0
+				local up = hem[i] - y
+				if up >= 0 then
+					-- Above the hem: bright at it, and each ray fading as
+					-- far up as it reaches.
+					local u = 1 - up * inv[i]
+					if u > 0 then
+						v = body[i] * u
+					end
+					local b = 1 - up * band
+					if b > 0 then
+						v += (crest[i] - v) * b * b
+					end
+				else
+					local glow = 1 + up * under
+					if glow > 0 then
+						local u = 1 + up * edge
+						v = crest[i] * (UNDERGLOW * glow * glow + (if u > 0 then (1 - UNDERGLOW) * u else 0))
+					end
+				end
+				if c > 1 then
+					v += readf32(buf, o)
+				end
+				writef32(buf, o, v)
+				o += 4
+			end
+		end
+	end
+end
+
+-- A draw hook has 8 ms of the processor, and loses its place for good
+-- after three frames that take longer. A whole snapshot takes about a
+-- millisecond on the machine this was written on. Where one would take
+-- over 5, the grid and the picture are made as much coarser as brings it
+-- to 3.5, for as long as the theme is loaded. The first nine rows tell:
+-- three batches of three, of which the quickest counts (the machine may
+-- have been busy with something else during the others).
+local SLOW, AFFORDED = 0.005, 0.0035
+
+-- What is kept for a picture of this size, and whether it was just made:
+-- then with one whole snapshot, of the aurora where it has drifted to,
+-- which is both of its two until the next is ready.
+local function keep(width: number, height: number): (Kept, boolean)
+	local k = kept
+	if k and k.width == width and k.height == height then
+		return k, false
+	end
+	local made = make(width, height)
+	local started = os.clock()
+	columns(made, drift)
+	local spent = os.clock() - started
+	local row, quickest = 0, math.huge
+	while row + 3 <= min(made.rows, 9) do
+		started = os.clock()
+		light_rows(made, made.a, row, row + 3)
+		quickest = min(quickest, os.clock() - started)
+		row += 3
+	end
+	local whole = spent + quickest / 3 * made.rows
+	if row > 0 and whole > SLOW and thin < 16 then
+		thin = min(16, thin * whole / AFFORDED)
+		made = make(width, height)
+		columns(made, drift)
+		row = 0
+	end
+	light_rows(made, made.a, row, made.rows)
+	buffer.copy(made.b, 0, made.a)
+	kept = made
+	return made, true
+end
+
+-- The field for the fifteenth of a second the aurora has drifted to, the
+-- next snapshot a few rows further on.
+local function advance(k: Kept, fresh: boolean)
+	local shown = floor(drift * SHOWN_RATE + 0.03)
+	if not fresh and shown == k.shown then
+		-- Drawn again within the same fifteenth (a pulse plays, the colours
+		-- changed): the same numbers, and the app has that picture already.
+		return
+	end
+	local tick = floor(shown / SHOWN_PER_FIELD)
+	if k.tick < 0 then
+		k.tick = tick
+	elseif tick ~= k.tick and k.begun then
+		-- A new third of a second: the later snapshot becomes the earlier
+		-- one, the one that was being worked out the later (what is left of
+		-- it is done now, if frames were missed), and the next is begun.
+		if k.done < k.rows then
+			light_rows(k, k.c, k.done, k.rows)
+		end
+		k.a, k.b, k.c = k.b, k.c, k.a
+		k.tick = tick
+		k.begun = false
+	end
+	if not k.begun then
+		columns(k, (k.tick + 2) / FIELD_RATE)
+		k.done = 0
+		k.begun = true
+	end
+	-- A few rows of the next snapshot: all of it in four frames of five.
+	if k.done < k.rows then
+		local upto = min(k.rows, k.done + ceil(k.rows / (SHOWN_PER_FIELD - 1)))
+		light_rows(k, k.c, k.done, upto)
+		k.done = upto
+	end
+	k.mix = clamp((shown - k.tick * SHOWN_PER_FIELD) / SHOWN_PER_FIELD, 0, 1)
+	k.shown = shown
+end
+
+-- The stars: where each is (fractions of the window), how big (pixels),
+-- how bright (of the brightest a star may be). The same sky every night.
+local STARS: { { number } } = {}
+for i = 1, 160 do
+	local size = NOISE[(i * 7) % 256 + 1]
+	STARS[i] = {
+		NOISE[(i * 3 + 11) % 256 + 1],
+		NOISE[(i * 5 + 101) % 256 + 1],
+		1 + 1.1 * size * size,
+		0.3 + 0.7 * NOISE[(i * 13 + 57) % 256 + 1] ^ 2,
+	}
+end
+-- A star to every so many square pixels of window.
+local STAR_ROOM = 3000
 
 -- A soft light: a radial gradient centred on (cx, cy), painted only where
 -- it reaches inside the window.
@@ -1276,8 +1869,8 @@ local function light(
 	colors: { Rgba },
 	stops: { number }
 )
-	local left, top = math.max(cx - rx, 0), math.max(cy - ry, 0)
-	local right, bottom = math.min(cx + rx, w), math.min(cy + ry, h)
+	local left, top = max(cx - rx, 0), max(cy - ry, 0)
+	local right, bottom = min(cx + rx, w), min(cy + ry, h)
 	if right > left and bottom > top then
 		draw:rect(left, top, right - left, bottom - top, gmnb.radial({
 			center = { cx, cy },
@@ -1289,74 +1882,52 @@ local function light(
 	end
 end
 
--- One veil at drift time `t`, `strength` being its opacity at the edge.
-local function veil_at(draw: Draw, w: number, h: number, veil: typeof(VEILS[1]), color: Rgba, strength: number, t: number)
-	local top_x = (veil.x + veil.sway * math.sin(t * veil.speed + veil.phase)) * w
-	local top_y = (veil.y + 0.03 * math.cos(t * veil.speed * 1.7 + veil.phase)) * h
-	-- The bright edge's own ellipse, and the gradient's, which ends above it.
-	local ry = veil.radius * h
-	local rx = ry * veil.stretch
-	local cx, cy = top_x, top_y + ry
-	local a = strength * (0.85 + 0.15 * math.sin(t * 0.09 + veil.phase))
-	-- Nothing of it shows below where its edge leaves the window.
-	local reach = math.max(top_x, w - top_x) / rx
-	local lowest = cy - ry * math.sqrt(math.max(1 - reach * reach, 0)) + 0.06 * ry
-	local top = math.max(cy - ry / VEIL_EDGE, 0)
-	local bottom = math.min(lowest, h)
-	if bottom > top then
-		draw:rect(0, top, w, bottom - top, gmnb.radial({
-			center = { cx, cy },
-			radius = rx / VEIL_EDGE,
-			radius_y = ry / VEIL_EDGE,
-			colors = { alpha(color, 0), alpha(color, 0), alpha(color, a), alpha(color, a * 0.45), alpha(color, 0) },
-			stops = { 0, VEIL_EDGE - 0.06, VEIL_EDGE, VEIL_EDGE + 0.08, 1 },
-		}))
-	end
-end
-
--- A pulse: a bloom of light that swells from where something happened and
--- fades. The strong ones (the equals key, a result, the converter's swap,
--- a new palette) also send a thin wavefront running ahead of it.
-local function pulse_at(draw: Draw, w: number, h: number, x: number, y: number, color: Rgba, strength: number, age: number)
+-- A pulse: a ray of light that rises from where something happened, as
+-- far as `reach`, and fades. The strong ones (the equals key, a result,
+-- the converter's swap) light the sky around them too. It is drawn into
+-- the aurora's own mask: what it shows is the palette's lights where it
+-- stands, and never anything brighter.
+local function pulse_at(draw: Draw, w: number, h: number, x: number, y: number, strength: number, reach: number, age: number)
 	local life = age / PULSE_LIFE
 	-- It comes up over three frames instead of popping in.
-	local rise = ease.out_quad(math.min(age / 0.05, 1))
-	local radius = 40 + ease.out_cubic(life) * 340
-	local a = (1 - life) ^ 1.6 * 0.30 * strength * rise
-	light(draw, w, h, x, y, radius, radius, { alpha(color, a * 0.6), alpha(color, a), alpha(color, 0) }, { 0, 0.55, 1 })
-	local front = life * 1.8
-	if strength >= 1 and front < 1 then
-		local reach = 60 + ease.out_quart(front) * 420
-		local b = (1 - front) ^ 2 * 0.16 * strength
-		light(draw, w, h, x, y, reach, reach, { alpha(color, 0), alpha(color, 0), alpha(color, b), alpha(color, 0) }, { 0, 0.82, 0.94, 1 })
+	local rise = ease.out_quad(min(age / 0.05, 1))
+	local grown = ease.out_cubic(life)
+	local a = min((1 - life) ^ 1.6 * 0.6 * strength * rise, 1)
+	-- An ellipse standing on the point.
+	local ry = 26 + grown * reach * 0.5
+	local rx = 24 + grown * (26 + reach * 0.09)
+	light(draw, w, h, x, y + 14 - ry * 0.85, rx, ry, { alpha(white, a), alpha(white, a * 0.5), alpha(white, 0) }, { 0, 0.5, 1 })
+	if strength >= 1 then
+		local b = (1 - life) ^ 2 * 0.3 * strength * rise
+		light(draw, w, h, x, y, 60 + grown * w * 0.45, 40 + grown * h * 0.32, { alpha(white, b), alpha(white, 0) }, { 0, 1 })
 	end
 end
 
--- The colour and strength of the pulse a press makes.
-local function press_pulse(e: Event, s: Scheme): (Rgba, number)
+-- How strong the pulse a press makes is, and how far up its ray reaches,
+-- as a fraction of the window's height.
+local function press_pulse(e: Event): (number, number)
 	if e.source == "key" and e.key then
 		local key = e.key
+		-- Each key's ray is one of four heights: the choice the sounds
+		-- make of its note (section 8), so the higher the note, the
+		-- higher the light.
+		local id = key.id or 0
+		local reach = 0.30 + 0.12 * (id * (if e.page == "converter" then 5 else 7) % 4)
 		if e.page == "graphing" then
-			return s.accent, 0.4
+			return 0.4, reach
 		elseif e.via == "keyboard" then
-			if e.page == "converter" then
-				return s.accent, 0.5
-			end
-			return if key.kind == "equals" then s.hot_a else s.accent, 0.6
-		elseif e.page == "converter" then
-			return s.blobs[key.id * 5 % 4 + 1], 0.55
-		elseif key.kind == "equals" then
-			return s.hot_a, 1.4
+			return if e.page == "converter" then 0.5 else 0.6, reach
+		elseif e.page ~= "converter" and key.kind == "equals" then
+			return 1.4, 0.7
 		end
-		-- Each key has a blob's colour of its own.
-		return s.blobs[key.id * 7 % 4 + 1], 0.55
+		return 0.55, reach
 	elseif e.source == "swap" then
-		return s.hot_a, 1.0
+		return 1.0, 0.6
 	elseif e.source == "date" then
-		return s.hot_a, 0.9
+		return 0.9, 0.5
 	end
 	-- The memory row, F-E.
-	return s.accent, 0.5
+	return 0.5, 0.36
 end
 
 local function background(draw: Draw, frame: Frame): Again
@@ -1366,62 +1937,73 @@ local function background(draw: Draw, frame: Frame): Again
 	if living then
 		drift += frame.dt
 	end
-	local t = drift
 
-	-- The base: a gradient leaning a little to the right.
-	draw:rect(0, 0, w, h, gmnb.linear({
-		from = { 0, 0 },
-		to = { w * 0.35, h },
-		colors = { s.base_top, s.base_bottom },
-	}))
-
-	-- Four blobs, each swinging around its resting place and breathing.
-	local span = math.max(w, h)
-	for i, b in BLOBS do
-		local cx = (b.x + b.wander * math.sin(t * b.speed_x + b.phase)) * w
-		local cy = (b.y + b.wander * 0.8 * math.cos(t * b.speed_y + b.phase * 1.3)) * h
-		local breathe = 1 + 0.08 * math.sin(t * 0.11 + (i - 1))
-		local r = span * b.size * breathe
-		local c, a = s.blobs[i], s.blob_alpha
-		light(draw, w, h, cx, cy, r, r * 0.82,
-			{ alpha(c, a), alpha(c, a * 0.62), alpha(c, a * 0.18), alpha(c, 0) }, { 0, 0.3, 0.62, 1 })
+	-- The sky.
+	draw:rect(0, 0, w, h, gmnb.linear({ from = { 0, 0 }, to = { 0, h }, colors = { s.sky_top, s.sky_bottom } }))
+	if w < 2 or h < 2 then
+		return nil
+	end
+	-- Its stars, in the dark: specks, none brighter than a light may be.
+	if s.dark then
+		local count = min(#STARS, floor(w * h / STAR_ROOM))
+		for i = 1, count do
+			local star = STARS[i]
+			local size = star[3]
+			draw:rect(star[1] * w - size / 2, star[2] * h - size / 2, size, size, alpha(s.star, star[4]))
+		end
 	end
 
-	-- Two veils in the hot colours.
-	veil_at(draw, w, h, VEILS[1], s.hot_a, s.veil_alpha, t)
-	veil_at(draw, w, h, VEILS[2], s.hot_b, s.veil_alpha * 0.8, t)
-
-	-- Pulses: a bloom wherever something just happened.
+	-- The aurora's light, and the light of whatever just happened.
+	local k, fresh = keep(w, h)
+	if living and frame.motion then
+		advance(k, fresh)
+	end
+	draw:push_mask("alpha")
+	draw:field(0, 0, w, k.reach, {
+		data = k.a,
+		next = k.b,
+		mix = k.mix,
+		cols = k.cols,
+		rows = k.rows,
+		channels = 1,
+		ramp = LIGHT,
+		quality = sharpness(w, k.reach),
+	})
 	local pulsing = false
 	for _, e in frame.events do
 		if e.age < PULSE_LIFE then
 			if e.kind == "press" then
-				local color, strength = press_pulse(e, s)
+				local strength, reach = press_pulse(e)
 				pulsing = true
-				pulse_at(draw, w, h, e.x, e.y, color, strength, e.age)
+				pulse_at(draw, w, h, e.x, e.y, strength, reach * h, e.age)
 			elseif (e.kind == "result" or e.kind == "error") and e.page == "calculator" then
 				-- From under the last digits of the readout.
 				pulsing = true
-				local color = if e.kind == "error" then s.danger else s.hot_b
-				pulse_at(draw, w, h, e.rect.x + e.rect.w * 0.8, e.rect.y + e.rect.h * 0.65, color, 1.1, e.age)
+				local strength = if e.kind == "error" then 0.6 else 1.1
+				pulse_at(draw, w, h, e.rect.x + e.rect.w * 0.8, e.rect.y + e.rect.h * 0.65, strength, 0.3 * h, e.age)
 			elseif e.kind == "option" and e.id == "palette" then
-				-- A new palette introduces itself.
+				-- A new palette introduces itself: four rays the height of
+				-- the window, left to right, as its chord is played.
 				pulsing = true
-				for i, c in s.blobs do
-					pulse_at(draw, w, h, w * (0.2 + 0.2 * (i - 1)), h * 0.5, c, 1.4, e.age)
+				for i = 0, 3 do
+					local age = e.age - 0.09 * i
+					if age > 0 then
+						pulse_at(draw, w, h, w * (0.2 + 0.2 * i), h * 0.92, 0.9, h * 0.95, age)
+					end
 				end
 			end
 		end
 	end
-
-	-- Vignette: depth in the dark, a soft halo in the light.
-	local edge = if s.dark then alpha(black, 0.38) else alpha(white, 0.30)
-	draw:rect(0, 0, w, h, gmnb.radial({
-		center = { w * 0.5, h * 0.42 },
-		radius = math.sqrt(w * w + h * h) * 0.62,
-		colors = { alpha(edge, 0), edge },
-		stops = { 0.55, 1 },
+	draw:pop()
+	-- The lights that show through it.
+	local lights = s.lights
+	draw:rect(0, 0, w, h, gmnb.linear({
+		from = { 0, 0 },
+		to = { 0, h },
+		colors = { lights[6], lights[5], lights[4], lights[3], lights[2], lights[1] },
+		stops = HEIGHTS,
 	}))
+	draw:pop()
 
 	draw:tile(if s.dark then grain_dark else grain_light, 0, 0, w, h)
 
@@ -1687,28 +2269,43 @@ end
 -- 7. Options
 ---------------------------------------------------------------------------
 
--- A palette's tile in Settings: its background, its four blobs, a veil
--- and a dot of its hot gradient.
+-- The curtains in a window the size of a tile, standing still: one small
+-- field serves every palette's tile.
+local tile_kept: Kept? = nil
+
+local function tile_light(w: number, h: number): Kept
+	local k = tile_kept
+	if k and k.width == w and k.height == h then
+		return k
+	end
+	local made = make(w, h)
+	columns(made, STILL)
+	light_rows(made, made.a, 0, made.rows)
+	tile_kept = made
+	return made
+end
+
+-- A palette's tile in Settings: its sky, its aurora, and a dot of its hot
+-- gradient.
 local function tile(draw: Draw, frame: Preview, choice: string)
 	local s = scheme_for(choice, frame.ctx)
 	local w, h = frame.width, frame.height
 	draw:push_clip(0, 0, w, h, 12)
-	draw:rect(0, 0, w, h, gmnb.linear({
-		from = { 0, 0 },
-		to = { w * 0.3, h },
-		colors = { s.base_top, s.base_bottom },
-	}))
-	local spots = { { 0.2, 0.2 }, { 0.85, 0.35 }, { 0.35, 0.95 }, { 0.9, 0.95 } }
-	for i, spot in spots do
-		local c = s.blobs[i]
-		draw:rect(0, 0, w, h, gmnb.radial({
-			center = { spot[1] * w, spot[2] * h },
-			radius = w * 0.6,
-			colors = { alpha(c, math.min(s.blob_alpha * 1.4, 1)), alpha(c, 0) },
+	draw:rect(0, 0, w, h, gmnb.linear({ from = { 0, 0 }, to = { 0, h }, colors = { s.sky_top, s.sky_bottom } }))
+	if w >= 2 and h >= 2 then
+		local k = tile_light(w, h)
+		draw:push_mask("alpha")
+		draw:field(0, 0, w, k.reach, { data = k.a, cols = k.cols, rows = k.rows, channels = 1, ramp = LIGHT, quality = 1 })
+		draw:pop()
+		local lights = s.lights
+		draw:rect(0, 0, w, h, gmnb.linear({
+			from = { 0, 0 },
+			to = { 0, h },
+			colors = { lights[6], lights[5], lights[4], lights[3], lights[2], lights[1] },
+			stops = HEIGHTS,
 		}))
+		draw:pop()
 	end
-	-- (A tile is small: the veil needs to be twice as strong to show.)
-	veil_at(draw, w, h, VEILS[1], s.hot_a, math.min(s.veil_alpha * 2, 1), STILL)
 	draw:circle(w - 20, h - 18, 9, gmnb.linear({
 		from = { w - 34, h - 26 },
 		to = { w - 10, h - 8 },
@@ -1754,7 +2351,7 @@ local options: { Option } = {
 		type = "color",
 		group = "Palette",
 		label = "Primary colour",
-		description = "Accent, keys and the aurora's main hue",
+		description = "Accent, keys and the aurora's hem",
 		default = DEFAULT_PRIMARY,
 		visible = is("custom"),
 	},
@@ -1763,7 +2360,7 @@ local options: { Option } = {
 		type = "color",
 		group = "Palette",
 		label = "Secondary colour",
-		description = "The second glow and the = key's gradient",
+		description = "The aurora's crown and the = key's gradient",
 		default = DEFAULT_SECONDARY,
 		visible = is("custom"),
 		actions = {
@@ -1809,8 +2406,8 @@ local options: { Option } = {
 --   air      noise through a band that moves: clear, and a change of page.
 --
 -- And the notes. Every palette has a chord (`VOICES`). Number keys ring
--- its notes, each key its own, as each has a blob's colour in the
--- background; a result after = is two of them, rising; a palette newly
+-- its notes, each key its own, as each sends its ray of light so high in
+-- the background; a result after = is two of them, rising; a palette newly
 -- chosen plays all four. Every chord has an A in it, so the sounds that
 -- don't change with the palette (they are on A and E) fit them all.
 
@@ -2106,8 +2703,8 @@ local function sound(event: SoundEvent, ctx: Ctx): SoundChoice
 			repeats = 0
 		end
 		if key and last_key == "number" then
-			-- The key's note in this palette's chord: the same choice the
-			-- background makes of a blob's colour for the key's pulse.
+			-- The key's note in this palette's chord: picked as the
+			-- background picks how high the key's ray of light reaches.
 			local keys = voice_for(ctx).keys
 			local id = key.id or 0
 			local speed = keys[id * (if event.page == "converter" then 5 else 7) % #keys + 1]
@@ -2130,8 +2727,8 @@ local function sound(event: SoundEvent, ctx: Ctx): SoundChoice
 			repeats += 1
 			if repeats == 1 then
 				-- The chime: two notes, rising. The first comes just after
-				-- the key's own sound, the second while the wavefront the
-				-- key sent out is in full flight.
+				-- the key's own sound, the second while the light the key
+				-- sent up is at its widest.
 				local chime: { Play } = {
 					note(v, v.chime[1], 0.8, -0.25, 0.05),
 					note(v, v.chime[2], 0.95, 0.25, 0.19),
@@ -2149,8 +2746,8 @@ local function sound(event: SoundEvent, ctx: Ctx): SoundChoice
 	elseif event.kind == "error" then
 		repeats = 0
 	elseif event.kind == "option" and event.id == "palette" then
-		-- A new palette introduces itself: its chord, left to right, where
-		-- the background sends up its four pulses.
+		-- A new palette introduces itself: its chord, left to right, as
+		-- the background sends up its four rays.
 		local value = event.value
 		local v = (if type(value) == "string" then VOICES[value] else nil) or VOICES.aurora
 		local chord: { Play } = {}
@@ -2165,7 +2762,7 @@ end
 local theme: Theme = {
 	api = 1,
 	name = "Aurora",
-	description = "A drifting aurora behind glass keys, in seven palettes. The look GMNB was born with.",
+	description = "An aurora behind glass keys, in seven palettes: curtains of light drifting over a night sky. The look GMNB was born with.",
 	author = "GMNB contributors",
 	license = "MIT",
 	fonts = { "fonts/Outfit-Variable.ttf" },
