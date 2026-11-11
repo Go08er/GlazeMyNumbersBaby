@@ -107,6 +107,14 @@ pub const MAX_FONT_BYTES: u64 = 16 << 20;
 pub const MAX_FONTS_BYTES: u64 = 32 << 20;
 pub const MAX_CREDIT_BYTES: u64 = 64 << 10;
 
+/// Whether `bytes` are one of the files GMNB carries for a built-in theme
+/// (the same, byte for byte, in whichever folder it is found).
+pub fn is_built_in_file(bytes: &[u8]) -> bool {
+    BUILT_IN
+        .iter()
+        .any(|b| b.files.iter().any(|(_, own)| *own == bytes))
+}
+
 /// Where a theme comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
@@ -167,6 +175,17 @@ pub fn safe_relative(path: &str) -> bool {
 /// couldn't be written this run, served from GMNB's own copy where they
 /// have no folder. (Settings puts the base look before them all.)
 pub fn discover(themes: Option<&Path>, embedded: &[String], dev_dir: Option<&Path>) -> Vec<Source> {
+    discover_keeping(themes, embedded, dev_dir, "")
+}
+
+/// [`discover`], with the theme `keep` (the one chosen) never among those
+/// left out of a folder of more than [`MAX_USER_FOLDERS`].
+pub fn discover_keeping(
+    themes: Option<&Path>,
+    embedded: &[String],
+    dev_dir: Option<&Path>,
+    keep: &str,
+) -> Vec<Source> {
     let mut folders: Vec<(String, PathBuf)> = Vec::new();
     if let Some(entries) = themes.and_then(|d| std::fs::read_dir(d).ok()) {
         for entry in entries.flatten() {
@@ -182,15 +201,16 @@ pub fn discover(themes: Option<&Path>, embedded: &[String], dev_dir: Option<&Pat
     }
     folders.sort();
     // A hostile folder of thousands of themes is not run, all of them, each
-    // time Settings lists: the built-in themes' ids are taken first below,
-    // so they are never among those left out.
-    let mut cut = folders.len().saturating_sub(MAX_USER_FOLDERS);
+    // time Settings lists: besides the built-in themes' (never left out) and
+    // the chosen theme's, the first MAX_USER_FOLDERS by id are kept.
+    let mut room = MAX_USER_FOLDERS;
     folders.retain(|(id, _)| {
-        let keep = cut == 0 || BUILT_IN.iter().any(|b| b.id == id);
-        if !keep {
-            cut -= 1;
+        if id == keep || BUILT_IN.iter().any(|b| b.id == id) {
+            return true;
         }
-        keep
+        let fits = room > 0;
+        room = room.saturating_sub(1);
+        fits
     });
     let mut out = Vec::new();
     for b in &BUILT_IN {

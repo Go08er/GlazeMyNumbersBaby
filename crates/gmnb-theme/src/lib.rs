@@ -81,6 +81,7 @@ mod error;
 pub mod events;
 pub mod field;
 pub mod focus;
+pub mod fontname;
 pub mod install;
 pub mod layer;
 pub mod library;

@@ -505,10 +505,11 @@ impl Hub {
     // ---- The theme ------------------------------------------------------------
 
     fn sources(&self) -> Vec<Source> {
-        themes::discover(
+        themes::discover_keeping(
             Some(&user_dir()),
             &self.built_ins.borrow().embedded,
             self.dev_dir.as_deref(),
+            &self.active.borrow(),
         )
     }
 
@@ -833,10 +834,33 @@ impl Hub {
     /// Adds the theme's font files to the app's font map (they are known
     /// by the family names inside them). A built-in theme's are written to
     /// the cache directory first.
+    ///
+    /// A font stays in the map until the app quits, and is picked by its
+    /// family name wherever that is asked for: one named like a font the
+    /// app already has (the base look's, the desktop's) would take its
+    /// place in the base look and in Settings, whichever theme is chosen
+    /// after it (R3-E-1). A theme's font whose family is already in the
+    /// map, or that isn't a TrueType or OpenType font whose names can be
+    /// read, is left out, with a note. (A theme's own fonts may share a
+    /// family: the names are those the map had before this theme's fonts.)
     fn register_fonts(&self, theme: &Theme) {
+        let mut taken: Option<HashSet<String>> = None;
         for file in theme.font_files() {
             let path = match file {
-                FontFile::Path(path) => path,
+                FontFile::Path(path) => {
+                    if self.fonts.borrow().contains(&path) {
+                        continue;
+                    }
+                    let taken = taken.get_or_insert_with(known_families);
+                    if let Err(why) = font_allowed(&path, taken) {
+                        let name = path
+                            .file_name()
+                            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                        self.note(&name, why);
+                        continue;
+                    }
+                    path
+                }
                 FontFile::Bytes(name, bytes) => {
                     let name = name.rsplit('/').next().unwrap_or(name);
                     match crate::cache_font(&format!("{}-{name}", theme.source.id), bytes) {
@@ -893,24 +917,39 @@ impl Hub {
     /// Changes one of the loaded theme's options (the caller saves it).
     /// `drag`: as for [`Hub::set_opacity`].
     pub fn set_option(&self, id: &str, value: OptionValue, drag: bool) {
+        self.set_options(vec![(id.to_string(), value)], drag);
+    }
+
+    /// Changes several of the loaded theme's options at once (an action's):
+    /// the style is worked out once for all of them, not once for each (an
+    /// action may change every option the theme has, and each `style` call
+    /// may take its 50 ms), then each is told to the layers that listen.
+    pub fn set_options(&self, changes: Vec<(String, OptionValue)>, drag: bool) {
         let Some(theme) = self.with_theme(|t| t.map(|t| t.source.id.clone())) else {
             return;
         };
-        self.options
-            .borrow_mut()
-            .entry(theme)
-            .or_default()
-            .insert(id.to_string(), value);
-        // What the environment asked of this option stands only until
-        // the user changes it.
-        self.run_options.borrow_mut().retain(|(o, _)| o != id);
-        let told = self.option_values().get(id).cloned();
+        if changes.is_empty() {
+            return;
+        }
+        for (id, value) in &changes {
+            self.options
+                .borrow_mut()
+                .entry(theme.clone())
+                .or_default()
+                .insert(id.clone(), value.clone());
+            // What the environment asked of this option stands only until
+            // the user changes it.
+            self.run_options.borrow_mut().retain(|(o, _)| o != id);
+        }
+        let told = self.option_values();
         self.apply(drag);
         // After the style: a layer that hears of it sees the new `ctx`.
-        if let Some(value) = told {
-            let mut happened = Happened::new(EventKind::Option, Page::Settings, None);
-            happened.option = Some((id.to_string(), value));
-            self.layers.emit(&happened);
+        for (id, _) in changes {
+            if let Some(value) = told.get(&id).cloned() {
+                let mut happened = Happened::new(EventKind::Option, Page::Settings, None);
+                happened.option = Some((id, value));
+                self.layers.emit(&happened);
+            }
         }
     }
 
@@ -1479,9 +1518,43 @@ fn tell_and_prune(subscribers: &RefCell<Vec<SoundSubscriber>>, text: &str) {
     *subscribers.borrow_mut() = keep;
 }
 
+/// The family names the app's font map has now, as fontconfig compares
+/// them ([`gmnb_theme::fontname::normal`]).
+pub(crate) fn known_families() -> HashSet<String> {
+    use pango::prelude::*;
+    pangocairo::FontMap::default()
+        .list_families()
+        .iter()
+        .map(|f| gmnb_theme::fontname::normal(&f.name()))
+        .collect()
+}
+
+/// Whether a theme's font file may join the font map: a TrueType or
+/// OpenType font whose family names are not among those `taken`. (A
+/// built-in theme's own file is its own, whatever the system has.)
+pub(crate) fn font_allowed(path: &std::path::Path, taken: &HashSet<String>) -> Result<(), String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take(themes::MAX_FONT_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|e| format!("the font can't be read: {e}"))?;
+    if themes::is_built_in_file(&bytes) {
+        return Ok(());
+    }
+    let Some(families) = gmnb_theme::fontname::families(&bytes) else {
+        return Err("not a TrueType or OpenType font whose names can be read; left out".into());
+    };
+    match gmnb_theme::fontname::clash(&families, taken) {
+        Some(name) => Err(format!(
+            "its family “{name}” is already a font of this app or the desktop, and would take \
+             its place; left out"
+        )),
+        None => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-
     /// Settings' sound row subscribes each time Settings opens; a closed
     /// Settings' row is let go the next time one subscribes, not only when
     /// sound changes (the list grew by one an opening).

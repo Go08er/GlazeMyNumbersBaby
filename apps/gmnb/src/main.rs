@@ -458,59 +458,83 @@ mod tests {
         layout.pixel_size().0
     }
 
-    /// A theme's font that is named like the base look's ("Inter Variable")
-    /// stayed registered once the theme was left, and Pango set the base
-    /// look's text in it (fontconfig picks among files of one family).
+    /// `bytes` (a TrueType font) with its `name` table replaced by one that
+    /// names the family `family` (appended to the file; the table
+    /// directory points to it).
+    fn named(bytes: &[u8], family: &str) -> Vec<u8> {
+        let mut d = bytes.to_vec();
+        let text: Vec<u8> = family.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let mut table = vec![0, 0, 0, 3, 0, 42];
+        for (id, at) in [(1u16, 0u16), (4, 0), (16, 0)] {
+            for v in [3u16, 1, 0x409, id, text.len() as u16, at] {
+                table.extend(v.to_be_bytes());
+            }
+        }
+        table.extend(&text);
+        while !d.len().is_multiple_of(4) {
+            d.push(0);
+        }
+        let at = d.len() as u32;
+        d.extend(&table);
+        let tables = u16::from_be_bytes([d[4], d[5]]) as usize;
+        for i in 0..tables {
+            let record = 12 + 16 * i;
+            if &d[record..record + 4] == b"name" {
+                d[record + 8..record + 12].copy_from_slice(&at.to_be_bytes());
+                d[record + 12..record + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+            }
+        }
+        d
+    }
+
+    /// R3-E-1: a theme's font named like the base look's ("Inter Variable")
+    /// was added to the font map (where it stays until the app quits) and
+    /// Pango set the base look's text in it, in the base look and in
+    /// Settings, whichever theme was chosen after. (The test this replaces
+    /// measured signs Inter has no glyph for, and so held either way.) The
+    /// font is left out; one with a name of its own is added.
     #[test]
     fn a_theme_font_named_like_the_base_looks_does_not_replace_it() {
         let dir = std::env::temp_dir().join(format!("gmnb-fonts-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        // Signs both fonts have, set differently by each.
-        let text = "\u{2264}\u{2265}\u{221a}\u{2217}\u{2205}\u{2208}\u{2219}";
         // The base look's font, as `register_fonts` adds it.
         let inter = super::cache_font("Inter-test.ttf", super::INTER).unwrap();
         super::add_font_file(&inter);
+        let text = "Hello, 0123456789 \u{2264}";
         let before = width_in("Inter Variable", text);
-        // A theme's font with Inter's family name: Noto Sans Math's file,
-        // its name patched (both are 14 characters long).
-        let mut bytes = include_bytes!("../../dgmnb/assets/fonts/NotoSansMath-subset.otf").to_vec();
-        for (from, to) in [
-            (b"Noto Sans Math".to_vec(), b"Inter Variable".to_vec()),
-            (
-                "Noto Sans Math"
-                    .encode_utf16()
-                    .flat_map(u16::to_be_bytes)
-                    .collect(),
-                "Inter Variable"
-                    .encode_utf16()
-                    .flat_map(u16::to_be_bytes)
-                    .collect(),
-            ),
-        ] {
-            let mut at = 0;
-            while let Some(i) = bytes[at..].windows(from.len()).position(|w| w == from) {
-                bytes[at + i..at + i + to.len()].copy_from_slice(&to);
-                at += i + to.len();
+        // A theme's font with Inter's family name (Jersey 10's file, the
+        // names of it changed), another named differently, and a file that
+        // isn't a font.
+        let jersey = gmnb_theme::theme::BUILT_IN
+            .iter()
+            .flat_map(|b| b.files.iter())
+            .find(|(name, _)| name.ends_with("Jersey10-Regular.ttf"))
+            .unwrap()
+            .1;
+        let files = [
+            ("clash.ttf", named(jersey, "Inter Variable")),
+            ("spaced.ttf", named(jersey, "inter  VARIABLE")),
+            ("fresh.ttf", named(jersey, "Zzyzx Unused")),
+            ("junk.ttf", b"OTTO but not a font".to_vec()),
+        ];
+        for (name, bytes) in &files {
+            std::fs::write(dir.join(name), bytes).unwrap();
+        }
+        // What `register_fonts` does with each file of a theme.
+        let taken = crate::theme::known_families();
+        assert!(taken.contains("intervariable"));
+        let mut added = Vec::new();
+        for (name, _) in &files {
+            let path = dir.join(name);
+            if crate::theme::font_allowed(&path, &taken).is_ok() {
+                super::add_font_file(&path);
+                added.push(*name);
             }
         }
-        // Its version is the newest there is (`head.fontRevision`), the
-        // likeliest to be taken over the base look's file.
-        let tables = u16::from_be_bytes([bytes[4], bytes[5]]) as usize;
-        for i in 0..tables {
-            let record = 12 + 16 * i;
-            if &bytes[record..record + 4] == b"head" {
-                let at = u32::from_be_bytes(bytes[record + 8..record + 12].try_into().unwrap());
-                let at = at as usize + 4;
-                bytes[at..at + 4].copy_from_slice(&0x7fff_0000u32.to_be_bytes());
-            }
-        }
-        let other = dir.join("theme-inter.otf");
-        std::fs::write(&other, &bytes).unwrap();
-        // What `register_fonts` does when a theme is loaded.
-        super::add_font_file(&other);
         let after = width_in("Inter Variable", text);
         let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(added, ["fresh.ttf"]);
         assert_eq!(
             before, after,
             "the base look's text is set in the theme's font"

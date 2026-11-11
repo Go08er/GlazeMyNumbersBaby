@@ -1144,7 +1144,7 @@ impl ThemeSettings {
                 let button = gtk::Button::builder()
                     .label(&action.label)
                     .valign(gtk::Align::Center)
-                    .css_classes(["flat"])
+                    .css_classes(["flat", "wc-option-action"])
                     .build();
                 // The button's own label, cut short rather than wider than
                 // Settings (the tooltip and the name keep the whole).
@@ -1166,14 +1166,13 @@ impl ThemeSettings {
                     // A batch: the tiles are drawn once, as the options
                     // are built again below, not for each option set.
                     t.building.set(true);
-                    for (id, value) in t.ctx.hub.run_action(&action) {
-                        t.ctx.hub.set_option(&id, value.clone(), false);
-                        t.ctx
-                            .store
-                            .data
-                            .borrow_mut()
-                            .set_option(&theme, &id, &value);
+                    // One style pass for all that it changes (R3-E-3: an action
+                    // that changed 24 options ran the theme's 50 ms `style` 24 times).
+                    let changes: Vec<_> = t.ctx.hub.run_action(&action).into_iter().collect();
+                    for (id, value) in &changes {
+                        t.ctx.store.data.borrow_mut().set_option(&theme, id, value);
                     }
+                    t.ctx.hub.set_options(changes, false);
                     t.building.set(false);
                     t.ctx.store.persist();
                     // The rows show the new values.
