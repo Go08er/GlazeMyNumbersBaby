@@ -2140,8 +2140,8 @@ there is kept [9:1 from its edge](#text-surface-control-state).
 The same floor holds for every theme, not only the built-in ones, at the
 window's own colours (`crates/gmnb-theme/src/focus.rs`): a ring under
 1 px, or under 3:1 on what it lies on (with its edge around a key; and, for
-`focus` outside its control, the header, the sidebar, a panel and `plain`,
-the ring alone), is
+`focus`, the header, the sidebar, a panel and `plain`, outside its control or
+inside it, the ring alone), is
 the base look's ring instead (2 px just outside the control, in the
 theme's `accent_text`, else its `fg`, else black or white, whichever
 reads), and Settings notes why. A `native` ring that doesn't reach 3:1
