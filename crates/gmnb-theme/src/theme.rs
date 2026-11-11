@@ -139,6 +139,14 @@ pub fn valid_id(id: &str) -> bool {
         && id.bytes().all(|b| ok(b) || b == b'-' || b == b'_')
 }
 
+/// The most theme folders besides the built-in themes' that are listed
+/// (and that Settings watches): a folder with more has the rest left out.
+pub const MAX_USER_FOLDERS: usize = 64;
+
+/// How long, in all, loading the themes for Settings' list (or About's
+/// credits) may take before the rest are left unchecked.
+pub const LIST_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// A path a theme may name inside its own folder: relative, with no `..`
 /// (nor `.`, an empty part, a backslash or a control character).
 pub fn safe_relative(path: &str) -> bool {
@@ -173,6 +181,17 @@ pub fn discover(themes: Option<&Path>, embedded: &[String], dev_dir: Option<&Pat
         }
     }
     folders.sort();
+    // A hostile folder of thousands of themes is not run, all of them, each
+    // time Settings lists: the built-in themes' ids are taken first below,
+    // so they are never among those left out.
+    let mut cut = folders.len().saturating_sub(MAX_USER_FOLDERS);
+    folders.retain(|(id, _)| {
+        let keep = cut == 0 || BUILT_IN.iter().any(|b| b.id == id);
+        if !keep {
+            cut -= 1;
+        }
+        keep
+    });
     let mut out = Vec::new();
     for b in &BUILT_IN {
         match folders.iter().position(|(id, _)| id == b.id) {
@@ -976,14 +995,22 @@ pub struct Listing {
 /// What Settings lists: each theme's file is run in a throwaway sandbox
 /// for its name and description, which is then discarded.
 pub fn list(sources: &[Source], limits: &Limits) -> Vec<Listing> {
+    // The clock starts at the first theme that isn't one of GMNB's own.
+    let mut start = None;
     sources
         .iter()
         .map(|source| Listing {
             id: source.id.clone(),
             origin: source.origin,
-            meta: Theme::load(source.clone(), limits.clone())
-                .map(|t| t.def.meta.clone())
-                .map_err(|e| e.to_string()),
+            meta: if !BUILT_IN.iter().any(|b| b.id == source.id)
+                && start.get_or_insert_with(std::time::Instant::now).elapsed() >= LIST_BUDGET
+            {
+                Err("not checked: the themes before it took too long to load".to_string())
+            } else {
+                Theme::load(source.clone(), limits.clone())
+                    .map(|t| t.def.meta.clone())
+                    .map_err(|e| e.to_string())
+            },
         })
         .collect()
 }

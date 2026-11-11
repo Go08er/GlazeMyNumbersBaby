@@ -1356,6 +1356,15 @@ fn credits(sources: &[Source]) -> Vec<(String, String)> {
         .filter(|s| s.origin != Origin::BuiltIn && !as_carried(s))
         .cloned();
     let mut out: Vec<(String, String)> = Vec::new();
+    // (A folder's theme after the budget is left unread, as Settings' list
+    // does; GMNB's own copies are always read.)
+    let mut started = None;
+    let users = users.take_while(move |_| {
+        started
+            .get_or_insert_with(std::time::Instant::now)
+            .elapsed()
+            < themes::LIST_BUDGET
+    });
     for theme in built_in
         .chain(users)
         .filter_map(|source| Theme::load(source, Limits::default()).ok())
