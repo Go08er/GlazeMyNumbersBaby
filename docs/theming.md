@@ -344,12 +344,19 @@ on top of the background then in effect.
 grid. `size` is the drawn size and `stroke` the line's width, both in
 pixels. Without `color` an icon takes its control's.
 
-**FocusRing** `{ width, color, offset, radius }`: the ring around what
-holds the keyboard focus. It shows for keyboard use only; a click never
-draws it. `offset` is how far out from the element's edge the ring's
-outer edge is (negative: inside); the ring is `width` wide inside that,
-so DGMNB's `{ width 2, offset 2 }` touches the element. Its corners are
-the element's radius plus `offset`.
+**FocusRing** `{ width, color, offset, radius, edge }`: the ring around
+what holds the keyboard focus. It shows for keyboard use only; a click
+never draws it. `offset` is how far out from the element's edge the
+ring's outer edge is (negative: inside); the ring is `width` wide inside
+that, so DGMNB's `{ width 2, offset 2 }` touches the element. Its corners
+are the element's radius plus `offset`. `edge` (a Border, or `false`) is
+a line along both sides of the ring around a keypad's keys (the outer
+side only where the ring touches the key): keys lie on the window's
+background and whatever the theme draws there, which may be the ring's
+own colour. A ring and an edge 9:1 apart read on anything: on any colour,
+one of the two reaches 3:1. Elsewhere controls lie on the style's own
+surfaces, and the ring is drawn without it. The ring is never hidden: see
+[rule 5](#readability-rules).
 
 ---------------------------------------------------------------------------
 
@@ -766,7 +773,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph's equation column and its analysis. (An empty list's text in the History panel lies on the panel, a surface of the style's.) |
 | `plain.radius` | Radius | `shape.card_radius` | same |
 | `scrim` | Color | black at 0.30 | The shade over what the sidebar or a sheet covers |
-| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius |
+| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius. `edge`: the keypad (Rust, `widgets/keypad.rs`) draws it around its key that holds the focus |
 
 ### Header and window buttons
 
@@ -1893,7 +1900,7 @@ straight on a page counts wherever the style puts something under it in
 | `GMNB_DATE_TO=YYYY-MM-DD` | The date page's "To" date (the comparison's "Date with a result"). |
 | `GMNB_DATE_ADD` | Open the date page on "Add or subtract days". |
 | `GMNB_PREFS=about` | Open About, as `GMNB_PREFS=1` opens Settings. |
-| `GMNB_FOCUS=<css class>` | Give the keyboard's focus, its ring shown, to the first focusable widget with that class (`wc-conv-value`: the converter's first value), as Tab to it would. |
+| `GMNB_FOCUS=<css class>` | Give the keyboard's focus, its ring shown, to the first focusable widget with that class (`wc-conv-value`: the converter's first value; `wc-tile`: Settings' first tile), as Tab to it would, and say where it is in the window (`GMNB_FOCUS: <class> at x y w h`). |
 
 `GMNB_DARK`, `GMNB_OPACITY`, `GMNB_SIZE`, `GMNB_MODE`, `GMNB_KEYS` and the
 rest keep working.

@@ -611,6 +611,7 @@ pub static ROWS: &[Row] = &[
             color: s.t.colors.accent_text,
             offset: metrics::focus::OFFSET,
             radius: None,
+            edge: None,
         })
     }),
     // -- Header and window buttons.
@@ -1653,6 +1654,7 @@ pub fn neutral(kind: &Kind) -> Value {
             color: TRANSPARENT,
             offset: 0.0,
             radius: None,
+            edge: None,
         }),
         Kind::Text => Value::Text(Text {
             color: TRANSPARENT,

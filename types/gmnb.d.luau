@@ -104,13 +104,19 @@ export type Transition = {
 	opacity: Duration?,
 }
 
--- The ring around what holds the keyboard focus.
+-- The ring around what holds the keyboard focus. It is never hidden: one
+-- under 1 px, or under 3:1 (with its edge) on what it lies on, is the base
+-- look's ring instead, with a note.
 export type FocusRing = {
 	width: number?,
 	color: Color?,
 	-- Pixels between the element's edge and the ring (negative: inside).
 	offset: number?,
 	radius: number?,
+	-- A line along both sides of the ring around a keypad's keys, which lie
+	-- on the window's background: a ring in a colour of what is under it
+	-- stays seen. false: none.
+	edge: (Border | false)?,
 }
 
 export type Icon = {

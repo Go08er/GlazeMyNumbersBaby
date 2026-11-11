@@ -291,6 +291,17 @@ fn focus_by_class(win: adw::ApplicationWindow, class: String) {
             // (A text field takes it in its text, which grab_focus says.)
             if w.has_css_class(&class) && w.grab_focus() {
                 win.set_focus_visible(true);
+                // Where it is in the window, for the tests that look at
+                // its ring.
+                if let Some(b) = w.compute_bounds(&win) {
+                    eprintln!(
+                        "GMNB_FOCUS: {class} at {} {} {} {}",
+                        b.x(),
+                        b.y(),
+                        b.width(),
+                        b.height()
+                    );
+                }
                 return;
             }
             let mut child = w.last_child();
