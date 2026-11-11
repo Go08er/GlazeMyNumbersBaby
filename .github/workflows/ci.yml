@@ -96,6 +96,38 @@ jobs:
               least-test.log | grep -Eq "^test result: ok\. [1-9][0-9]* passed; 0 failed;"
           done
           if grep -q "skipped" least-test.log; then exit 1; fi
+      - name: GMNB's sound, themes-folder and layer tests ran (private headless weston)
+        run: |
+          set -o pipefail
+          # These skip, with a note, without a compositor named in
+          # GMNB_TEST_WAYLAND_DISPLAY, which the plain test run above never
+          # has: sound.rs (a theme's sounds from event to play, nothing
+          # waking at rest, against a stand-in sound server), themes_folder.rs
+          # (the built-in themes installed and restored, the folder watched
+          # only while Settings is open, *Open themes folder* with no other
+          # app in reach: it hides the desktop's apps in a mount namespace,
+          # which the runner's AppArmor must let it make) and the layers'
+          # render tests in the app itself. Here a skip fails the job.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          export XDG_RUNTIME_DIR
+          XDG_RUNTIME_DIR=$(mktemp -d)
+          nix shell --inputs-from . nixpkgs#weston -c weston --backend=headless \
+            --renderer=pixman --socket=ci-gmnb --idle-time=0 &
+          weston=$!
+          for _ in $(seq 150); do [ -S "$XDG_RUNTIME_DIR/ci-gmnb" ] && break; sleep 0.2; done
+          sleep 1
+          GMNB_SOUND=null GMNB_TEST_WAYLAND_DISPLAY=ci-gmnb nix develop -c \
+            cargo test -p gmnb --locked --bin gmnb --test sound --test themes_folder -- --nocapture 2>&1 \
+            | tee gmnb-display-test.log
+          kill "$weston"
+          # Each file's own result: passed, none failed, at least one run.
+          # (The unit tests' two layer tests start a child run of
+          # themselves with the display, so a skip there shows as one.)
+          for t in tests/sound.rs tests/themes_folder.rs unittests; do
+            awk -v t="Running $t" 'index($0, t) {f = 1; next} f && /^test result:/ {print; exit}' \
+              gmnb-display-test.log | grep -Eq "^test result: ok\. [1-9][0-9]* passed; 0 failed;"
+          done
+          if grep -q "skipped" gmnb-display-test.log; then exit 1; fi
       - name: D-Bus tests ran (private dbus-daemon)
         run: |
           set -o pipefail

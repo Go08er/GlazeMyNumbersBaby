@@ -1290,7 +1290,8 @@ per pixel (the picture the user's site draws), for the ColorMix swirl:
 
 A field every 12 px matches what colours every 4 px achieve, at a tenth
 of the Luau time, and its errors are soft where the other's are broken
-band edges. Stills of each are in `theming-work/media/out/swirls/`.
+band edges. (Stills of each were made while the design was worked out; they
+are not in the repository.)
 
 As built the same comparison is a test (`tests/field.rs`, the field
 computed in Rust; `gmnb-theme`'s `tests/media.rs`, by the demonstration
