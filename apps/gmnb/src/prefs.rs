@@ -541,9 +541,14 @@ impl ThemeSettings {
             // (GMNB_STEPS' `themes` reads each row's theme by its name.)
             row.set_widget_name(if l.id.is_empty() { "base" } else { &l.id });
             if l.comes_with {
-                let mark = gtk::Label::new(Some("Comes with GMNB"));
+                // On two lines: narrow, it would take the description's
+                // room. (GMNB_STEPS' `themes` finds it by its class.)
+                let mark = gtk::Label::new(Some("Comes with\nGMNB"));
                 mark.add_css_class("caption");
                 mark.add_css_class("dim-label");
+                mark.add_css_class("wc-comes-with");
+                mark.set_justify(gtk::Justification::Right);
+                mark.set_xalign(1.0);
                 mark.set_tooltip_text(Some(
                     "GMNB put this theme's folder in the themes folder. Delete the folder to \
                      remove it; Restore built-in themes brings it back",

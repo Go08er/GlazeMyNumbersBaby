@@ -154,10 +154,9 @@ fn next(win: Rc<Window>, steps: std::cell::RefCell<VecDeque<Step>>, gap: u64) {
                         .into_iter()
                         .filter(|w| w.is::<adw::ActionRow>())
                         .map(|row| {
-                            let marked = widgets(&row).iter().any(|w| {
-                                w.downcast_ref::<gtk::Label>()
-                                    .is_some_and(|l| l.label() == "Comes with GMNB")
-                            });
+                            let marked = widgets(&row)
+                                .iter()
+                                .any(|w| w.has_css_class("wc-comes-with"));
                             format!("{}{}", row.widget_name(), if marked { "*" } else { "" })
                         })
                         .collect()
