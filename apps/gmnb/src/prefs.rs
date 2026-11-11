@@ -38,7 +38,16 @@ pub fn show(win: &Rc<Window>) {
     let theme = adw::ToggleGroup::new();
     // In DGMNB's order (its Settings page's "Style").
     for (name, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-        theme.add(adw::Toggle::builder().name(name).label(label).build());
+        // Never cut short: a label of its own that doesn't ellipsize (the
+        // toggle's would, to "S…", and the row's text took the room).
+        let shown = gtk::Label::new(Some(label));
+        theme.add(
+            adw::Toggle::builder()
+                .name(name)
+                .label(label)
+                .child(&shown)
+                .build(),
+        );
     }
     theme.set_active_name(Some(&ctx.store.data.borrow().theme));
     // Its parts equal, as DGMNB's.
@@ -50,6 +59,18 @@ pub fn show(win: &Rc<Window>) {
         .build();
     row.add_suffix(&theme);
     group.add(&row);
+    {
+        // In the least window the three toggles and the row's text don't
+        // fit side by side: the toggles take only the room their labels
+        // need, and the row says only its title (the toggles say the
+        // rest).
+        let narrow = adw::Breakpoint::new(
+            adw::BreakpointCondition::parse("max-width: 330sp").expect("a condition"),
+        );
+        narrow.add_setter(&theme, "homogeneous", Some(&false.to_value()));
+        narrow.add_setter(&row, "subtitle", Some(&"".to_value()));
+        dialog.add_breakpoint(narrow);
+    }
     {
         let ctx = ctx.clone();
         theme.connect_active_name_notify(move |t| {
@@ -227,6 +248,38 @@ pub fn show(win: &Rc<Window>) {
     // A dialog's keys never reach the window's controllers.
     crate::window::own_keys(&dialog);
     dialog.present(Some(&win.widget()));
+    fit_least_window(&dialog);
+}
+
+/// What libadwaita's bottom sheet, which Settings is shown in when the
+/// window is narrow, puts around a dialog: 6 px each side (measured, 1.9).
+const SHEET_EDGES: i32 = 12;
+
+/// libadwaita's preferences dialog asks for 360 px however narrow its
+/// page could be (the width request of the breakpoint bin in its
+/// template). In a bottom sheet that is 372 px, more than a new window
+/// (360 px) or the least one (300 px) has: the sheet was cut off at the
+/// window's edge and its rows squeezed. Settings asks for what the least
+/// window leaves instead, and its rows for no more than that; wider, it
+/// is laid out as before.
+fn fit_least_window(dialog: &adw::PreferencesDialog) {
+    let least = appcore::metrics::window::MIN_SIZE.0 as i32 - SHEET_EDGES;
+    // As high as it asked to be (150 px in libadwaita 1.9).
+    let mut height = -1;
+    let mut todo = vec![dialog.clone().upcast::<gtk::Widget>()];
+    while let Some(w) = todo.pop() {
+        if w.is::<adw::BreakpointBin>() && w.width_request() > least {
+            w.set_width_request(least);
+            height = height.max(w.height_request());
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            todo.push(c);
+        }
+    }
+    // A dialog with breakpoints of its own (`show`) needs a least size.
+    dialog.set_size_request(least, height.max(150));
 }
 
 /// Settings' Theme group and the chosen theme's options under it.
@@ -648,7 +701,9 @@ impl ThemeSettings {
                 let flow = gtk::FlowBox::builder()
                     .selection_mode(gtk::SelectionMode::Single)
                     .max_children_per_line(5)
-                    .min_children_per_line(3)
+                    // Two in the least window, where three don't fit;
+                    // three or more wherever they do.
+                    .min_children_per_line(2)
                     .homogeneous(true)
                     .row_spacing(10)
                     .column_spacing(10)
@@ -668,7 +723,11 @@ impl ThemeSettings {
                     let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
                     b.append(&tile);
                     b.append(&label);
-                    let child = gtk::FlowBoxChild::builder().child(&b).build();
+                    // (GMNB_FOCUS=wc-tile: Settings scrolled to the tiles.)
+                    let child = gtk::FlowBoxChild::builder()
+                        .child(&b)
+                        .css_classes(["wc-tile"])
+                        .build();
                     child.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
                     flow.append(&child);
                     if matches!(value, Some(OptionValue::Text(v)) if *v == choice.id) {

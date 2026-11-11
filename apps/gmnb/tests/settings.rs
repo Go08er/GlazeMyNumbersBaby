@@ -395,6 +395,53 @@ end }"#;
     assert!(after.contains("sound:"), "the steps did not finish: {err}");
 }
 
+/// Settings in a new window (360 × 600), in the base look and in each
+/// built-in theme, is no wider than the window. libadwaita's preferences
+/// dialog asked for 360 px whatever its rows needed, and its bottom sheet
+/// 12 more: "AdwBottomSheet exceeds AdwBreakpointBin width: requested
+/// 372 px, 360 px available", the sheet cut off at the window's edge.
+#[test]
+fn settings_fits_a_new_window() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    fits(&display, "360x600");
+}
+
+/// Settings in the least window (300 × 400) too. It doesn't yet: the
+/// Theme group's two buttons, side by side, need 269 px in the base look
+/// and 302 in Aurora, where 264 are left. They are the themes-folder
+/// work's (a wrapping box fits them).
+#[test]
+#[ignore = "the Theme group's buttons don't wrap yet"]
+fn settings_fits_the_least_window() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    fits(&display, "300x400");
+}
+
+/// Settings opened at `size` in the base look and each built-in theme,
+/// and nothing in it wider than the window.
+fn fits(display: &Path, size: &str) {
+    const THEME: &str = r#"return { api = 1, name = "Plain" }"#;
+    let mut bad = Vec::new();
+    for theme in ["base", "aurora", "mono", "glazed", "swirls"] {
+        let env = [
+            ("GMNB_THEME", theme),
+            ("GMNB_PREFS", "1"),
+            ("GMNB_SIZE", size),
+        ];
+        let err = run(display, THEME, &env, 3_500);
+        if let Some(line) = err.lines().find(|l| l.contains("exceeds")) {
+            bad.push(format!("{theme}: {line}"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
 /// The theme of the tests above that time Settings: 24 options of 16
 /// choices, each `visible` and `preview` 6 ms of processor time. Each
 /// tile it draws says so.
