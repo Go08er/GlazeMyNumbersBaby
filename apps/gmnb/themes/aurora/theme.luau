@@ -1914,20 +1914,18 @@ end
 -- after three frames that take longer. A whole snapshot takes about a
 -- millisecond on the machine this was written on. Where one would take
 -- over 2, the grid and the picture are made as much coarser as brings it
--- to 1.5, for as long as the theme is loaded. The first twenty-four
--- columns tell, each time a window's size is new: three batches of
--- eight, of which the quickest counts (the machine may have been busy
--- with something else during the others).
+-- to 1.5. The first twenty-four columns tell, each time a window's size
+-- is new: three batches of eight, of which the quickest counts (the
+-- machine may have been busy with something else during the others).
+-- (`os.clock` is the clock on the wall, so a machine that is busy for a
+-- moment looks slow for that moment: a size that looks slow is timed
+-- again before the grid is made coarser, and a size that is comfortably
+-- quick makes it finer again, the next time the window's size is new.)
 local SLOW, AFFORDED = 0.002, 0.0015
 
--- What is kept for a picture of this size, and whether it was just made:
--- then with one whole snapshot, of the aurora where it has drifted to,
--- which is both of its two until the next is ready.
-local function keep(width: number, height: number): (Kept, boolean)
-	local k = kept
-	if k and k.width == width and k.height == height then
-		return k, false
-	end
+-- A whole snapshot's time at this size, as far as the first twenty-four
+-- columns tell, and the snapshot with the columns that were worked out.
+local function timed(width: number, height: number): (Kept, number, number)
 	local made = make(width, height)
 	local started = os.clock()
 	columns(made, drift)
@@ -1939,9 +1937,28 @@ local function keep(width: number, height: number): (Kept, boolean)
 		quickest = min(quickest, os.clock() - started)
 		column += 8
 	end
-	local whole = spent + quickest / 8 * made.cols
+	return made, spent + quickest / 8 * made.cols, column
+end
+
+-- What is kept for a picture of this size, and whether it was just made:
+-- then with one whole snapshot, of the aurora where it has drifted to,
+-- which is both of its two until the next is ready.
+local function keep(width: number, height: number): (Kept, boolean)
+	local k = kept
+	if k and k.width == width and k.height == height then
+		return k, false
+	end
+	local made, whole, column = timed(width, height)
 	if column > 0 and whole > SLOW and thin < 16 then
-		thin = min(16, thin * whole / AFFORDED)
+		-- Slow, or only busy for a moment: the quicker of two timings.
+		local again, whole_again, column_again = timed(width, height)
+		if whole_again < whole then
+			made, whole, column = again, whole_again, column_again
+		end
+	end
+	local steer = column > 0 and ((whole > SLOW and thin < 16) or (whole < AFFORDED / 2 and thin > 1))
+	if steer then
+		thin = clamp(thin * whole / AFFORDED, 1, 16)
 		made = make(width, height)
 		columns(made, drift)
 		column = 0

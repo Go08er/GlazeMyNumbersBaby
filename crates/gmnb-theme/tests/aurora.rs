@@ -1143,3 +1143,82 @@ fn frames() {
         }
     }
 }
+
+// ---- The slow-machine guard ---------------------------------------------------------
+
+/// Aurora with its `os.clock` replaced by one that runs `slow` s a call
+/// for the first `slow_calls` calls (a machine that is busy for a
+/// moment) and a millionth of a second after: the guard
+/// (`keep`) times the work of a new window size with it.
+fn aurora_timed(name: &str, slow_calls: u32) -> Theme {
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).unwrap();
+            }
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("gmnb-aurora-timed-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    copy(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/gmnb/themes/aurora"),
+        &dir,
+    );
+    let file = dir.join("theme.luau");
+    let source = std::fs::read_to_string(&file).unwrap();
+    let shim = format!(
+        "local ticks, now = 0, 0\nlocal os = {{ clock = function(): number\n\tticks += 1\n\tnow += if ticks <= {slow_calls} then 0.01 else 0.000001\n\treturn now\nend }}\n"
+    );
+    let (first, rest) = source.split_once('\n').unwrap();
+    assert_eq!(first, "--!strict");
+    std::fs::write(&file, format!("{first}\n{shim}{rest}")).unwrap();
+    let theme = Theme::load(Source::folder("aurora", &dir), common::limits())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    theme
+}
+
+/// The width of the picture the background's field is coloured at: the
+/// finer the grid, the wider.
+fn field_width(theme: &Theme, w: f32, h: f32) -> u32 {
+    let c = ctx(theme, true, &[]);
+    let f = Frame {
+        dt: 0.0,
+        ..Frame::sized(w, h)
+    };
+    let d = draw_at(theme, &c, &f, 0.0);
+    d.list
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            Op::Field { picture, .. } => Some(picture.width),
+            _ => None,
+        })
+        .expect("a field")
+}
+
+/// A machine that is busy for a moment looks slow for that moment (the
+/// clock is the clock on the wall): that must not make the aurora coarser
+/// for good; a machine that is slow does; and a size that then times
+/// quick has the fine grid again.
+#[test]
+fn the_guard_is_not_fooled_by_a_moment_of_busy_and_lets_go_of_a_slow_one() {
+    // The calls of one timing: two for the columns and two for each of
+    // three batches. Slow for the first timing only.
+    let fine = field_width(&aurora_timed("fast", 0), 760.0, 640.0);
+    assert!(fine >= 380, "{fine}");
+    let moment = field_width(&aurora_timed("moment", 8), 760.0, 640.0);
+    assert_eq!(moment, fine, "a moment of busy made the aurora coarser");
+    // Slow throughout: coarser.
+    let theme = aurora_timed("slow", 16);
+    let coarse = field_width(&theme, 760.0, 640.0);
+    assert!(coarse < fine / 2, "{coarse} {fine}");
+    // And the next size that times quick: fine again.
+    let again = field_width(&theme, 761.0, 640.0);
+    assert!(again >= fine - 4, "{again} {fine}");
+}
