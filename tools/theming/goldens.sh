@@ -7,15 +7,18 @@
 # BINDIR holds the gmnb and dgmnb binaries to capture (theming-work/v02-bin
 # for the v0.2.0 references).
 set -u
-SP=/tmp/claude-1000/-home-goober-Documents-wincalc/a4c4533e-9373-47f7-85c3-9ead96a053d7/scratchpad
+# The profiles go in a folder of their own (GOLDENS_TMP, or a new one);
+# the private bus is privbus.conf, beside this script.
+HERE=$(cd "$(dirname "$0")" && pwd)
+TMPBASE=${GOLDENS_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/goldens.XXXX")}
 OUT=${1:?outdir}; BIN=${2:?bindir}; WHICH=${3:-all}
 mkdir -p "$OUT"
 fresh() { # a new profile (the pages' shots: a graph saved by one isn't restored by the next)
-  X=$(mktemp -d "$SP/xdg.XXXX"); mkdir -p "$X"/{config,data,cache,state}
+  X=$(mktemp -d "$TMPBASE/xdg.XXXX"); mkdir -p "$X"/{config,data,cache,state}
   base=(env -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS -u PULSE_SERVER -u PULSE_RUNTIME_PATH GMNB_SOUND=null
         WAYLAND_DISPLAY=wincalc-shot XDG_CONFIG_HOME="$X/config"
         XDG_DATA_HOME="$X/data" XDG_CACHE_HOME="$X/cache" XDG_STATE_HOME="$X/state" GTK_A11Y=none NO_AT_BRIDGE=1
-        dbus-run-session --config-file="$SP/privbus.conf" --)
+        dbus-run-session --config-file="$HERE/privbus.conf" --)
 }
 fresh
 BOXES=${BOXES-1}  # BOXES= (empty) leaves the hook unset
