@@ -597,7 +597,7 @@ fn the_background_stays_within_its_limits_at_any_size() {
 
 /// What a frame costs in a 760 × 640 window, as the app runs the layers:
 /// the background and the readout thirty times a second each, flowing at
-/// the page's pace, and while somebody types (a key every quarter of a
+/// its own pace, and while somebody types (a key every quarter of a
 /// second, a result every six keys). Processor time: what the limit of
 /// 8 ms is of.
 #[test]
@@ -1016,7 +1016,7 @@ fn swirls_loads_and_returns_only_known_keys() {
     assert_eq!(credits.len(), 1);
     assert!(credits[0].0.contains("ColorMix"));
     assert!(credits[0].1.contains("https://github.com/fairyglade/ly"));
-    assert!(credits[0].1.contains("s0y b0y"));
+    assert!(credits[0].1.contains("src/animations/ColorMix.zig"));
     for opacity in [1.0, 0.5, 0.1] {
         for bands in BANDS {
             for glass in GLASS {
@@ -1031,7 +1031,7 @@ fn swirls_loads_and_returns_only_known_keys() {
             }
         }
     }
-    // A saved value that is no set of bands is the page's own.
+    // A saved value that is no set of bands is the default.
     let odd = ctx(&theme, &[("bands", text("nonsense"))]);
     assert!(theme.style(&odd).unwrap().notes.is_empty());
 }

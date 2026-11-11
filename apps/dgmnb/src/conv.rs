@@ -421,7 +421,7 @@ impl ConvPage {
         y += mc::SECTION_GAP;
         if self.vm.is_currency_current_category() {
             // Each line is also a label for assistive technology (as the
-            // original's text blocks are), the changing ones live.
+            // design's text blocks are), the changing ones live.
             let spoken = |f: &mut Frame, key: &str, text: &str, r: Rect, live: bool| {
                 if !text.is_empty()
                     && let Some(n) =

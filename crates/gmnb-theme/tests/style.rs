@@ -678,7 +678,7 @@ fn built_in(id: &str) -> Theme {
     theme
 }
 
-/// Aurora and Mono load in the real engine, their `style` runs for every
+/// Aurora and a small theme of its own load in the real engine, their `style` runs for every
 /// combination of options that matters, and every key they return is one
 /// the schema knows, of the right type: no notes at all.
 #[test]
@@ -765,8 +765,30 @@ fn the_built_in_themes_load_and_return_only_known_keys() {
         BTreeMap::from([("secondary".to_string(), OptionValue::Text("#d0ff4d".into()))])
     );
 
-    let mut mono = built_in("mono");
-    assert_eq!(mono.def.meta.name, "Mono");
+    // A small theme of its own (the one in docs/theming.md's "A theme in
+    // twenty lines"): tokens only, an accent option, a toggle.
+    let mut typewriter = load(
+        "typewriter",
+        r##"return {
+	api = 1,
+	name = "Typewriter",
+	options = {
+		{ id = "accent", type = "color", label = "Accent", default = "#e5484d" },
+		{ id = "square", type = "toggle", label = "Square corners", default = true },
+	},
+	style = function(ctx)
+		local corner = if ctx.options.square then 2 else 8
+		return {
+			colors = gmnb.base(ctx.dark, ctx.options.accent),
+			fonts = { ui = "monospace", display = "monospace" },
+			shape = { radius = corner, row_radius = corner, card_radius = corner * 2 },
+			keys = { gap = 2 },
+		}
+	end,
+}"##,
+    )
+    .unwrap();
+    assert_eq!(typewriter.def.meta.name, "Typewriter");
     for dark in [false, true] {
         for opacity in [1.0, 0.5, 0.1] {
             for square in [true, false] {
@@ -774,10 +796,10 @@ fn the_built_in_themes_load_and_return_only_known_keys() {
                 let c = Ctx {
                     dark,
                     opacity,
-                    options: theme::complete_options(&mono.def.options, &saved),
+                    options: theme::complete_options(&typewriter.def.options, &saved),
                     ..Ctx::default()
                 };
-                let r = mono.style(&c).unwrap();
+                let r = typewriter.style(&c).unwrap();
                 assert!(r.notes.is_empty(), "{:#?}", r.notes);
                 let s = &r.style;
                 let corner = if square { 2.0 } else { 8.0 };
@@ -867,7 +889,7 @@ fn discovery_lists_built_ins_then_the_rest() {
         "zebra",
         "return { api = 1, name = 'Zebra', description = 'Stripes.' }",
     );
-    write("mono", "return { api = 1, name = 'My Mono' }");
+    write("aurora", "return { api = 1, name = 'My Aurora' }");
     write("swirls", "return { api = 1, name = 'My Swirls' }");
     write("broken", "return {");
     write("aardvark", "return { api = 1, name = 'Aardvark' }");
@@ -876,8 +898,8 @@ fn discovery_lists_built_ins_then_the_rest() {
     write(".gmnb-new-aurora-1-2-3", "return { api = 1, name = 'x' }");
     std::fs::create_dir_all(root.join("empty")).unwrap();
     let dev = root.join("zebra");
-    // Glazed's folder couldn't be written this run; Aurora was deleted.
-    let embedded = ["glazed".to_string()];
+    // Sprinkles' folder couldn't be written this run; Aurora's is the user's.
+    let embedded = ["sprinkles".to_string()];
     let sources = theme::discover(Some(&root), &embedded, Some(&dev));
     let ids: Vec<(&str, theme::Origin)> =
         sources.iter().map(|s| (s.id.as_str(), s.origin)).collect();
@@ -885,8 +907,8 @@ fn discovery_lists_built_ins_then_the_rest() {
     assert_eq!(
         ids,
         [
-            ("mono", Folder),
-            ("glazed", BuiltIn),
+            ("aurora", Folder),
+            ("sprinkles", BuiltIn),
             ("swirls", Folder),
             ("aardvark", Folder),
             ("broken", Folder),
@@ -897,8 +919,8 @@ fn discovery_lists_built_ins_then_the_rest() {
     assert_eq!(sources[1].dir(), None);
     assert_eq!(sources[2].dir(), Some(root.join("swirls").as_path()));
     let listed = theme::list(&sources, &common::limits());
-    assert_eq!(listed[0].meta.as_ref().unwrap().name, "My Mono");
-    assert_eq!(listed[1].meta.as_ref().unwrap().name, "Glazed");
+    assert_eq!(listed[0].meta.as_ref().unwrap().name, "My Aurora");
+    assert_eq!(listed[1].meta.as_ref().unwrap().name, "Sprinkles");
     assert_eq!(listed[2].meta.as_ref().unwrap().name, "My Swirls");
     assert_eq!(listed[3].meta.as_ref().unwrap().name, "Aardvark");
     assert!(
@@ -920,7 +942,7 @@ fn discovery_lists_built_ins_then_the_rest() {
         .into_iter()
         .map(|s| s.id)
         .collect();
-    assert_eq!(ids, ["aurora", "mono", "glazed", "swirls"]);
+    assert_eq!(ids, ["aurora", "sprinkles", "swirls"]);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -976,11 +998,11 @@ fn theme_files_stay_inside_the_folder() {
     }
     assert!(theme::safe_relative("fonts/My Font.ttf"));
     for (id, ok) in [
-        ("mono", true),
+        ("aurora", true),
         ("my-theme_2", true),
         ("2cool", true),
         ("", false),
-        ("Mono", false),
+        ("Aurora", false),
         ("-x", false),
         ("a b", false),
         ("base", false),

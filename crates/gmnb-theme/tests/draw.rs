@@ -1985,8 +1985,8 @@ fn built_in(id: &str, limits: Limits) -> Theme {
 }
 
 #[test]
-fn mono_has_no_layers() {
-    let theme = built_in("mono", common::limits());
+fn a_theme_without_layers_has_none() {
+    let (theme, _dir) = load("no-layers", "return { api = 1, name = 'Plain' }");
     assert!(theme.def.layers.is_empty());
     assert!(theme.hooks().is_empty());
     for kind in LayerKind::ALL {

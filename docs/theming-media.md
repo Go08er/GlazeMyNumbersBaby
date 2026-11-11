@@ -1771,9 +1771,9 @@ well under any music playing.
     the result it brings about.
 11. **DGMNB**: the widened `cargo tree` check.
 12. **A built-in theme's sounds** (`crates/gmnb-theme/tests/aurora_sound.rs`
-    for Aurora, `glazed_sound.rs` for Glazed, `swirls_sound.rs` for Swirls):
+    for Aurora, `sprinkles_sound.rs` for Sprinkles, `swirls_sound.rs` for Swirls):
     they load with no note, each within the gain a built-in theme may have;
-    every event plays what the theme means it to, in every palette (Glazed:
+    every event plays what the theme means it to, in every palette (Sprinkles:
     in every flavour, whose notes are the same sounds at other speeds, and a
     slower sound is a longer one), and nothing lasts longer than the budget of
     [Designing sounds](#designing-sounds-a-few-rules-that-work) allows;
@@ -1826,7 +1826,7 @@ field of every frame is theirs to choose:
 | `gmnb-theme` `tests/media.rs` | The same through a theme: the four kinds of still; hostile files through the draw path; every cap of the limits table hit on purpose; an animation's frames, loop and next frame under a clock the test holds; reduced motion, previews, tiles; "plays slower"; `gmnb.pixels` and its allowance; ramps; a field written by Luau hashing to the stored value; the allowance, the owed frame, the unchanged field; the swirl demonstration under the real limits |
 | `apps/gmnb` `layers::tests::a_themes_pictures_render` | A still, a tile, a filled picture, an animation's frame and a field through the toolkit's software renderer, colours checked at points, the toolkit's criticals fatal, no media thread started |
 | `apps/gmnb` `theme::tests::theming_installs_no_sources` | The one place the media thread reaches the main loop (`wake`) |
-| The running app (`GMNB_THEME_STATS`) | Media threads ever started (0 for the base look and Mono), the thread's wake-ups, frames decoded |
+| The running app (`GMNB_THEME_STATS`) | Media threads ever started (0 for the base look), the thread's wake-ups, frames decoded |
 
 Test 7 as first written said a malformed file "never allocates past the
 image total". What holds, counted: a refused header allocates nothing;

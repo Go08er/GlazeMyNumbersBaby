@@ -1,9 +1,9 @@
 -- Swirls: a demonstration of draw:field, for the tests and for looking at.
 -- Not one of GMNB's themes.
 --
--- The picture is the background of s0y b0y: the ColorMix field
+-- The picture is the ColorMix field
 -- (fairyglade/ly, WTFPL, src/animations/ColorMix.zig) pushed through
--- three colour bands. The page computes it in a fragment shader. Here the
+-- three colour bands. ColorMix is computed it in a fragment shader. Here the
 -- theme computes the smooth part, the distorted coordinate, on a coarse
 -- grid ten times a second; the app interpolates it for every pixel thirty
 -- times a second and only then looks the colour up, so the bands' edges
@@ -14,7 +14,7 @@ local floor, ceil = math.floor, math.ceil
 local writef32 = buffer.writef32
 local TAU = 2 * math.pi
 
--- The page's three colours: gold, cyan, near-black. A band blends into
+-- The design's three colours: gold, cyan, near-black. A band blends into
 -- the next between 8% and 92% of its width, and after the last comes the
 -- first again.
 local ramp = gmnb.ramp({
@@ -24,7 +24,7 @@ local ramp = gmnb.ramp({
 })
 
 -- How often the field is computed, and how often the picture is made of
--- it: the page's own rates.
+-- it: the design's own rates.
 local FIELD_RATE = 10
 local SHOWN_RATE = 30
 

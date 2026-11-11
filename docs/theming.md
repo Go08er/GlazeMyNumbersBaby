@@ -8,11 +8,10 @@ writing a theme; from [How style reaches the app](#how-style-reaches-the-app)
 on it is also the specification the app is built to.
 
 - The matching type definitions are [`types/gmnb.d.luau`](../types/gmnb.d.luau).
-- Four themes ship with the app and serve as examples:
-  [`mono`](../apps/gmnb/themes/mono/theme.luau) (20 lines),
+- Three themes ship with the app and serve as examples:
   [`aurora`](../apps/gmnb/themes/aurora/theme.luau) (everything a theme
   can compute),
-  [`glazed`](../apps/gmnb/themes/glazed/theme.luau) (pictures, keys that
+  [`sprinkles`](../apps/gmnb/themes/sprinkles/theme.luau) (pictures, keys that
   move, an overlay, a scale of sounds) and
   [`swirls`](../apps/gmnb/themes/swirls/theme.luau) (a picture the theme
   computes, behind glass).
@@ -47,10 +46,10 @@ Contents
 ## A theme in twenty lines
 
 ```lua
--- ~/.local/share/gmnb/themes/mono/theme.luau
+-- ~/.local/share/gmnb/themes/typewriter/theme.luau
 return {
 	api = 1,
-	name = "Mono",
+	name = "Typewriter",
 	description = "Tight corners, a monospaced face, one accent of your choosing.",
 	options = {
 		{ id = "accent", type = "color", label = "Accent", default = "#e5484d" },
@@ -158,7 +157,7 @@ mytheme/
 
 ### The themes folder
 
-GMNB comes with four themes, `aurora`, `mono`, `glazed` and `swirls`
+GMNB comes with three themes, `aurora`, `sprinkles` and `swirls`
 (from `apps/gmnb/themes/`). It carries their files, and writes each one's
 folder into the themes folder the first time it starts for you. From then
 on they are folders like any other. This replaces "your copy" (a folder
@@ -701,7 +700,7 @@ The base look's treatment, all of it switched off at opacity 1:
 | `series` | six: the accent's hue + 0°, 180°, 60°, 240°, 120°, 300° at saturation 0.70, lightness 0.66 dark / 0.45 light, each moved to 3:1 against `bg` and `surface` | | Graph colours |
 
 `gmnb.base(dark, accent)` returns this table for any pair, so a theme can
-re-derive it from its own accent (as Mono does).
+re-derive it from its own accent (as [the example above](#a-theme-in-twenty-lines) does).
 
 ### Text, fonts
 
@@ -1706,7 +1705,7 @@ itself, takes seconds a frame at the cap for blurs and shadows.)
 
 The built-in themes' busiest frames, at rest and mid-animation (their
 tests assert it, Swirls' at every size from 300 × 400 to 3840 × 2160):
-Swirls' cost 6% of what a frame may, Glazed's 12%, and Aurora's, made of
+Swirls' cost 6% of what a frame may, Sprinkles' 12%, and Aurora's, made of
 radial gradients, 56% (a new palette's four blooms over the window; its
 background standing, a fifth).
 `Api::frame_cost` and `Api::busiest_frame` (in `gmnb-theme`) say what the
@@ -1758,7 +1757,7 @@ How each of Aurora's effects is made:
 | The keyboard flash of a key | **Built in**: the key is `active` for 110 ms | |
 | Outfit | A font file in the theme's folder, named in `fonts` | |
 
-How each of Glazed's effects is made. Glazed is the other half of the API:
+How each of Sprinkles' effects is made. Sprinkles is the other half of the API:
 where Aurora computes light, it shows pictures, moves keys and makes a
 noise.
 
@@ -1780,25 +1779,25 @@ noise.
 | Jersey 10 | A font file in the theme's folder, set at whole multiples of its own pixel where it has to be sharp (the readout, the number keys), and at one and a half for words | The app sets text unhinted, to a quarter of a pixel: a pixel face is only crisp where its pixels are whole ones. |
 | The flavours' tiles in Settings | **Scripted** (`preview`) | |
 
-What Glazed asks of the engine while it lives, measured as Aurora's was
+What Sprinkles asks of the engine while it lives, measured as Aurora's was
 (release build, 760×640, the software renderer): the wall's loop at eight
 frames a second costs 5 to 6% of a core, where Aurora's drift takes 55%;
 at rest, in a window not in use, under reduced motion and once the app
 has settled, nothing runs at all.
 
 There are no effect presets: nothing in the app is specific to Aurora or
-to Glazed.
+to Sprinkles.
 
 ### How each of Swirls' effects is made
 
-Swirls is the paint behind s0y b0y, the homepage of GMNB's owner (the
+Swirls is flowing paint inspired by ly's ColorMix (the
 ColorMix field of [ly](https://github.com/fairyglade/ly), WTFPL), with the
 calculator standing in it. Where Aurora is many gradients, Swirls is one
 picture the theme computes, and everything in it is built on that.
 
 | Effect | How | Why |
 |---|---|---|
-| The swirl | **Scripted field** (`background` layer, `draw:field`, `gmnb.ramp`): the theme works out the page's bent coordinate on a coarse grid in a Luau `buffer`, five times a second; the app glides between two snapshots and colours every pixel through the ramp, thirty times a second | The smooth part is cheap to compute coarsely and the sharp part (the bands' edges) is the app's, per pixel. The same picture per pixel in Luau takes 62 ms a frame. |
+| The swirl | **Scripted field** (`background` layer, `draw:field`, `gmnb.ramp`): the theme works out the design's bent coordinate on a coarse grid in a Luau `buffer`, five times a second; the app glides between two snapshots and colours every pixel through the ramp, thirty times a second | The smooth part is cheap to compute coarsely and the sharp part (the bands' edges) is the app's, per pixel. The same picture per pixel in Luau takes 62 ms a frame. |
 | One cost at every window size | **Scripted**: the grid has about 3,600 points whatever the window's size (a point every 12 px at 760×640, every 48 px at 4K), at most 256 a side, and the app is asked for about 160,000 pixels of picture (`quality`: half size at 760×640, less in a bigger window) | The bands grow with the window, so they are as smooth on the coarser grid, and a frame never costs more. |
 | No frame carries a whole snapshot | **Scripted**: the snapshot *after* the two the picture glides between is worked out a fifth of its rows a frame | A snapshot is 1.6 ms of sines; a fifth of one is 0.3. Only the first frame at a new window size works out a whole one. |
 | A slow machine keeps the theme | **Scripted**: that first snapshot times its first nine rows (`os.clock`). Where a whole one would take over 5 ms, the grid and the picture are made coarser by as much as brings it to 3.5; and a frame that has used 4 ms leaves the oldest disturbances for the next | A hook that overruns its 8 ms three times is switched off for good. |
@@ -1806,8 +1805,8 @@ picture the theme computes, and everything in it is built on that.
 | Thirty pictures a second, in step with the screen | **Scripted**: the hook returns the time left of its thirtieth, never a whole thirtieth | A wait of 1/30 s or more is a plain timer (see [Asking for the next frame](#asking-for-the-next-frame)), which is not in step with the screen: the paint ran at 20 pictures a second in one run and 28 in the next. |
 | Stirring, the ripple, the shudder | **Scripted**: a press, a result or an error moves *where the field is looked up* (a twist about the key that swings back; a ring pushed outward from the readout), inside the box of grid points it touches, on both snapshots | The field itself is three sines deep; looking it up somewhere else is four reads and three blends a point, for a few hundred points. |
 | Typing hurries the paint | **Scripted**: each recent press adds to the pace at which the swirl's phase advances, wearing off in a second | A function of the events the layer is handed, with their ages: no state to keep. |
-| Glass keys and panes; the page's hairline, hover and focus ring | **Declared** (style values) | Box drawing is the toolkit's. |
-| How strong the glass is | **Scripted** (`style`): the least strength at which every ink reads over every band, for this set of bands at this window opacity; the glass chosen is never thinner | White on the page's gold is 1.4 to 1. See [the readability rules](#readability-rules). |
+| Glass keys and panes; the design's hairline, hover and focus ring | **Declared** (style values) | Box drawing is the toolkit's. |
+| How strong the glass is | **Scripted** (`style`): the least strength at which every ink reads over every band, for this set of bands at this window opacity; the glass chosen is never thinner | White on the design's gold is 1.4 to 1. See [the readability rules](#readability-rules). |
 | A pressed key clears | **Declared** (`keys.active` with a thinner background, and a slow `transition` back) | The toolkit animates it. |
 | Figures made of paint | **Scripted** (`display` layer): the glyphs as a mask (`draw:push_mask`), and behind them a second, small field: a slice of the swirl as one number a point, kept inside the ramp's first band | With one channel and values between 0 and 1 a three-colour cyclic ramp gives only its first two colours and the blend between them, so no figure is ever dark. One ramp serves both layers (a theme may make eight). |
 | Every page in the least window, a long figure in its readout | **Declared**: keys and bits with no least size of their own; the readouts' figures name their optical size | The window may be 300×400; a readout shrunk in Inter's smaller cuts would run past its end ([Font](#font)). |
@@ -1825,7 +1824,7 @@ on the page too).
 Measured (release build, a 760×640 window on the private headless
 compositor, the machine under a processor cap and shared with other
 work; Aurora beside it in the same runs; ranges are over five runs, the
-last after the merge with Glazed):
+last after the merge with Sprinkles):
 
 | | Swirls | Aurora |
 |---|---|---|
@@ -1977,10 +1976,10 @@ container); the readout's value, its error colour and its expression on
 the readout's own scrim; a card's heading. For Aurora the whole table is
 `auroras_page_texts_read`, and `auroras_generated_palettes_read` runs it
 again for System and Freestyle generated from rule 2's colours. For
-Glazed it is `glazeds_page_texts_read`, in each of its five flavours.
+Sprinkles it is `sprinkles_page_texts_read`, in each of its five flavours.
 The table sees a style's fills, not what a layer draws, so a theme whose
 layers paint under text, or paint the text, owes a test of its own:
-Glazed's is `what_glazed_paints_reads` (`tests/glazed.rs`), which runs
+Sprinkles' is `what_glazed_paints_reads` (`tests/sprinkles.rs`), which runs
 the layers and holds the header's title and buttons to 4.5 on both
 stripes of the awning its background layer draws, and every colour of
 a glazed number, read out of the icing's picture pixel by pixel, to 3
@@ -2008,7 +2007,7 @@ opacity 0.1 and 0.5, each stack composited over
 white desktop. Every pair must reach **3**; in the base look, `fg` pairs
 must reach 4.5 (its scrim is computed to). Halos are not counted. Text
 straight on a page counts wherever the style puts something under it in
-`plain.background`: the base look's scrim, Aurora's frost, Glazed's cards
+`plain.background`: the base look's scrim, Aurora's frost, Sprinkles' cards
 (solid at every opacity: only its wall thins).
 
 **5. The focus ring** (new). The keyboard's focus is never hidden. For
@@ -2058,7 +2057,7 @@ keyboard is (`a_ring_that_would_hide_the_focus_is_the_base_looks`).
 | `GMNB_DISPLAY_RECT` | Each readout prints where in the window it is (`display rect: x y w h`), for comparing it with DGMNB's. |
 | `GMNB_ACTIVE` | The window counts as the one in use whatever the compositor says. A headless compositor never says so, and layers only animate in a window that is. |
 | `GMNB_POINTER="x,y"` | A pointer position for the first keypad's layer, as now. |
-| `GMNB_BENCH="themes=base,aurora,mono,base;opacity"` | Measure: each theme switch, and an opacity drag from 1 to 0.1 and back, each to the end of the next painted frame; prints the figures and the hub's counters, then quits. |
+| `GMNB_BENCH="themes=base,aurora,swirls,base;opacity"` | Measure: each theme switch, and an opacity drag from 1 to 0.1 and back, each to the end of the next painted frame; prints the figures and the hub's counters, then quits. |
 | `GMNB_THEME_STATS` | Print the hub's counters once the window has settled, after 1.2 s or after as many milliseconds as its value: Luau machines, `style` calls, provider loads and their property counts; and for the layers the frames drawn by kind, the milliseconds their hooks and their replay took, the timers and frame callbacks ever armed and alive now, and each hook's failures; and for a theme's animations the media threads ever started (0 in the base look), the thread's wake-ups, the frames it decoded and the processor time they took; and Settings' calls into the theme (made, the passes they were made in, the longest pass in processor time), with a line `Settings has its answers` whenever it has made them all, and the processor time Settings took to open (`GMNB_PREFS=1`). |
 | `GMNB_SOUND=0` | No sound for the run; nothing sound-related is created. `null`: the mixer runs with no sound server, for tests. |
 | `GMNB_SOUND_DUMP=<folder>` | Every sound the theme makes is written there as a WAV file. |
@@ -2325,5 +2324,5 @@ Decided here, and worth a second look by the owner:
     the base look's ring has an edge of `bg`, and its colour is moved
     9:1 from it (rule 5 over a black desktop: 1.15:1 without them in the
     light palette at 0.5, and an edge alone left 2.15:1 at 0.7), which
-    Mono and Glazed, whose rings start from it, keep. At opacity 1 the
+    Sprinkles, whose ring starts from it, keeps. At opacity 1 the
     ring is DGMNB's.

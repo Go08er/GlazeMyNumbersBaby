@@ -59,7 +59,7 @@ rustPlatform.buildRustPackage {
     install -Dm644 packaging/${appId}.desktop -t $out/share/applications
     install -Dm644 packaging/${appId}.metainfo.xml -t $out/share/metainfo
     install -Dm644 packaging/icons/${appId}.svg -t $out/share/icons/hicolor/scalable/apps
-    install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/glazed/fonts/OFL-Jersey10.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
+    install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/sprinkles/fonts/OFL-Jersey10.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
       -t $out/share/licenses/${appId}
   '';
   preFixup = ''

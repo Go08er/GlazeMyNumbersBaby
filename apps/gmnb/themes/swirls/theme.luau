@@ -1,15 +1,15 @@
 --!strict
--- Swirls: the paint that flows behind s0y b0y, with a calculator of
+-- Swirls: flowing paint inspired by ly's ColorMix, with a calculator of
 -- smoked glass standing in it.
 --
--- The homepage's background is the ColorMix field of fairyglade/ly (WTFPL,
+-- The design's background is the ColorMix field of fairyglade/ly (WTFPL,
 -- src/animations/ColorMix.zig): a coordinate bent three times and pushed
 -- through three bands of colour, gold, cyan and near-black. Here the theme
 -- works out the bent coordinate on a coarse grid five times a second, and
 -- the app colours every pixel of it thirty times a second (draw:field,
 -- docs/theming-media.md). Everything else is built on that one picture:
 --
---   the keys      panes of dark glass with the page's cyan hairline, its
+--   the keys      panes of dark glass with the design's cyan hairline, its
 --                 hover and its gold focus ring; a pressed key clears, and
 --                 the paint shows through it
 --   the paint     is stirred where a key is pressed, runs faster while you
@@ -53,7 +53,7 @@ local function bands(a: string, b: string, ground: string): Bands
 	return { a = hex(a), b = hex(b), ground = hex(ground) }
 end
 
--- The first is the homepage's own: #ffcf29, #0ed6f0, #010609.
+-- The first is the own: #ffcf29, #0ed6f0, #010609.
 local BANDS: { [string]: Bands } = {
 	party = bands("#ffcf29", "#0ed6f0", "#010609"),
 	lava = bands("#ffb224", "#ff3b4e", "#100306"),
@@ -63,10 +63,10 @@ local BANDS: { [string]: Bands } = {
 	marble = bands("#f5faff", "#93a1ad", "#020507"),
 }
 
--- The page's text colour.
+-- The design's text colour.
 local FG = hex("#f5faff")
 
--- The ramp of each set: its three colours in the page's order, each
+-- The ramp of each set: its three colours in the design's order, each
 -- blending into the next between 8% and 92% of its band, and after the
 -- last the first again. (A theme may make eight ramps: these are six.)
 local RAMPS: { [string]: Ramp } = {}
@@ -92,7 +92,7 @@ end
 -- every entry of the ramp all the same: crates/gmnb-theme/tests/css.rs.)
 
 -- How strong the glass is, by the `glass` option: how much of the paint
--- it hides. The last is the homepage's panels, rgba(1, 6, 9, .91).
+-- it hides. The last is the design's panels, rgba(1, 6, 9, .91).
 local CLEAR, SMOKED, PANEL = 0.60, 0.76, 0.91
 local STRENGTH: { [string]: number } = { clear = CLEAR, smoked = SMOKED, panel = PANEL }
 
@@ -171,7 +171,7 @@ type Scheme = {
 	b: Rgba,
 	ground: Rgba,
 	fg: Rgba,
-	-- The glass under the pointer: the page's #13252b.
+	-- The glass under the pointer: the design's #13252b.
 	lift: Rgba,
 	-- The text colour stepping back: function keys, then captions.
 	soft: Rgba,
@@ -196,7 +196,7 @@ type Scheme = {
 local function finish(id: string, set: Bands, strength: number, opacity: number): Scheme
 	local a, b, ground = set.a, set.b, set.ground
 	local fg = FG
-	-- The page's hover colour, #13252b, is its near-black a twelfth of the
+	-- The design's hover colour, #13252b, is its near-black a twelfth of the
 	-- way to its cyan and then a fourteenth of the way to its text.
 	local lift = mix(mix(ground, b, 0.08), fg, 0.07)
 	local colours = { a, b, ground }
@@ -340,7 +340,7 @@ end
 -- 3. Style
 ---------------------------------------------------------------------------
 
--- The page's panels: radius 12.
+-- The design's panels: radius 12.
 local RADIUS = 12
 
 local function style(ctx: Ctx): Style
@@ -379,11 +379,11 @@ local function style(ctx: Ctx): Style
 	local pane = alpha(ground, s.glass)
 	local raised = alpha(lift, s.glass)
 	local slab = alpha(ground, s.panel)
-	-- The page's lines: its cyan at 0.6 around a panel, fainter round a key.
+	-- The design's lines: its cyan at 0.6 around a panel, fainter round a key.
 	local line = alpha(b, 0.6)
 	local hair = alpha(b, 0.3)
 	local on_a = ground
-	-- The page's shadow under a panel: 0 8px 32px #01060955.
+	-- The design's shadow under a panel: 0 8px 32px #01060955.
 	local drop: Shadow = { y = 8, blur = 32, color = alpha(ground, 0.33) }
 	-- A dark edge round text on a see-through window, for the wallpaper no
 	-- contrast figure knows about.
@@ -502,7 +502,7 @@ local function style(ctx: Ctx): Style
 		},
 
 		window = {
-			-- Under the field, which covers it: the page's own backdrop, its
+			-- Under the field, which covers it: the design's own backdrop, its
 			-- three bands on a slant.
 			background = gmnb.linear({ angle = 135, colors = { a, ground, b } }),
 			color = fg,
@@ -510,7 +510,7 @@ local function style(ctx: Ctx): Style
 			text_halo = halo,
 		},
 		plain = { background = pane, radius = RADIUS },
-		-- The page's gold ring. Around a key it lies on the paint itself,
+		-- The design's gold ring. Around a key it lies on the paint itself,
 		-- which is gold too where the warm band flows (and the equals key
 		-- is filled with it): a line of the dark band along each side
 		-- keeps it seen there, and the gold wherever the paint is dark.
@@ -561,7 +561,7 @@ local function style(ctx: Ctx): Style
 		},
 
 		display = {
-			-- The page's panel. Its hairline is drawn by the display layer.
+			-- The design's panel. Its hairline is drawn by the display layer.
 			background = slab,
 			radius = RADIUS,
 			padding_x = 16,
@@ -600,7 +600,7 @@ local function style(ctx: Ctx): Style
 				transform = { ms = 300, ease = "spring" },
 				filter = 180,
 			},
-			-- The page's hover: its lifted glass and a gold border.
+			-- The design's hover: its lifted glass and a gold border.
 			hover = { background = raised, border = { width = 1, color = a } },
 			-- Pressed, the glass clears and the paint shows.
 			active = {
@@ -699,7 +699,7 @@ local function style(ctx: Ctx): Style
 		tooltip = { background = alpha(fg, 0.95), color = ground, radius = 8 },
 
 		panel = {
-			-- The page's panel, whole.
+			-- The design's panel, whole.
 			background = slab,
 			radius = RADIUS,
 			border = { width = 1, color = line },
@@ -931,13 +931,13 @@ end
 ---------------------------------------------------------------------------
 
 -- The picture thirty times a second, as on the page. The field five times
--- (the page's ten are for a browser's shader; at the page's pace the swirl
+-- (the design's ten are for a browser's shader; at the design's pace the swirl
 -- turns a hundredth of a radian between two of these, and gliding over
--- that is still the page's picture).
+-- that is still the design's picture).
 local FIELD_RATE = 5
 local SHOWN_RATE = 30
 local SHOWN_PER_FIELD = SHOWN_RATE / FIELD_RATE
--- How fast the page's swirl turns: its phase, in radians a second.
+-- How fast the design's swirl turns: its phase, in radians a second.
 local TURN = 0.06
 -- Which thirtieth of a second a layer's clock is in. (A frame may come
 -- half a millisecond before it is due: it belongs to the thirtieth it
@@ -962,14 +962,14 @@ end
 local POINTS = 3600
 local FINEST = 12
 -- And about as many pixels for the app to colour as that window has at
--- half size (`quality` 0.5, the page's own sharpness there): a bigger
+-- half size (`quality` 0.5, the design's own sharpness there): a bigger
 -- window's picture is scaled up further, not coloured for longer. The
 -- bands are soft-edged and grow with the window; it doesn't show.
 local PIXELS = 160000
 
 -- The bent coordinate (u, v) at every point of a cols × rows grid whose
 -- corners are the corners of a width × height picture, as two 32-bit
--- floats a point. This is the page's shader, line for line. Only the
+-- floats a point. This is the design's shader, line for line. Only the
 -- rows from `first` up to (not including) `last` are worked out.
 local function swirl(buf: buffer, cols: number, rows: number, width: number, height: number, turned: number, first: number, last: number)
 	local p = turned % TAU
@@ -1014,7 +1014,7 @@ local function sharpness(width: number, height: number): number
 	return clamp(sqrt(PIXELS / thin / (width * height)), 0.1, 0.5)
 end
 
--- Where the page's swirl stands before it has flowed at all.
+-- Where the design's swirl stands before it has flowed at all.
 local STILL = 0
 
 -- How far the swirl has turned, in radians, since the theme was loaded:
@@ -1820,7 +1820,7 @@ local options: { Option } = {
 		type = "slider",
 		group = "Motion",
 		label = "Flow",
-		description = "How fast the paint moves: 1 is the homepage's own pace, 0 holds it still",
+		description = "How fast the paint moves: 1 is the own pace, 0 holds it still",
 		min = 0,
 		max = 4,
 		step = 0.25,
@@ -2195,7 +2195,7 @@ end
 local theme: Theme = {
 	api = 1,
 	name = "Swirls",
-	description = "The paint that flows behind s0y b0y, under a calculator of dark glass. Keys stir it.",
+	description = "Flowing paint inspired by ly's ColorMix, under a calculator of dark glass. Keys stir it.",
 	author = "GMNB contributors",
 	license = "MIT",
 	credits = { { title = "The swirl (ColorMix, from ly)", file = "credits/ColorMix.txt" } },

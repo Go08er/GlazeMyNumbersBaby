@@ -451,7 +451,7 @@ fn the_built_in_themes_load_from_their_folders() {
     assert_eq!(pass.written.len(), BUILT_IN.len(), "{pass:?}");
     let sources = theme::discover(Some(&f.themes()), &[], None);
     let ids: Vec<&str> = sources.iter().map(|s| s.id.as_str()).collect();
-    assert_eq!(ids, ["aurora", "mono", "glazed", "swirls"]);
+    assert_eq!(ids, ["aurora", "sprinkles", "swirls"]);
     let limits = Limits {
         load: std::time::Duration::from_secs(20),
         ..Limits::default()

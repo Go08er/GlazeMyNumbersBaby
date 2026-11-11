@@ -106,7 +106,7 @@ for id in %{app_id} %{dapp_id}; do
 done
 
 %files
-%license LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/glazed/fonts/OFL-Jersey10.txt apps/gmnb/themes/swirls/credits/ColorMix.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt
+%license LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/sprinkles/fonts/OFL-Jersey10.txt apps/gmnb/themes/swirls/credits/ColorMix.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt
 %doc README.md
 %{_bindir}/gmnb
 %{_libexecdir}/gmnb/
@@ -125,7 +125,7 @@ done
 %changelog
 * Mon Nov 09 2026 Go08er <Go08er@users.noreply.github.com> - 0.3.0-1
 - GMNB gets scripted themes (Luau) with pictures, animations and sounds;
-  the default look matches DGMNB's; Aurora, Glazed and Swirls built in
+  the default look matches DGMNB's; Aurora, Sprinkles and Swirls built in
 * Sun Nov 01 2026 Go08er <Go08er@users.noreply.github.com> - 0.2.0-1
 - Add the dgmnb subpackage, the lean twin
 * Fri Oct 02 2026 Go08er <Go08er@users.noreply.github.com> - 0.1.0-1

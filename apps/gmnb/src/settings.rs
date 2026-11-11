@@ -428,7 +428,7 @@ mod tests {
             "entries",
             r##"{"theme":"light","active_theme":7,"system_accent":"no","palette":"abyss",
                 "theme_options":{"aurora":5,
-                                 "mono":{"accent":"#00ff00","square":"yes","extra":[1],"n":0.25},
+                                 "typewriter":{"accent":"#00ff00","square":"yes","extra":[1],"n":0.25},
                                  "gone":{"kept":true}}}"##,
         );
         assert_eq!(s.theme, "light");
@@ -440,7 +440,7 @@ mod tests {
         // Values of a type no option takes are left out; the rest stand
         // (whether they fit their option is the theme's to say).
         assert_eq!(
-            s.options_of("mono"),
+            s.options_of("typewriter"),
             BTreeMap::from([
                 ("accent".to_string(), text("#00ff00")),
                 ("square".to_string(), text("yes")),
@@ -454,10 +454,10 @@ mod tests {
         // `theme_options` itself mistyped: only it is lost.
         let s = loaded(
             "whole",
-            r#"{"theme":"dark","theme_options":"x","active_theme":"mono","system_accent":false}"#,
+            r#"{"theme":"dark","theme_options":"x","active_theme":"swirls","system_accent":false}"#,
         );
         assert_eq!(s.theme, "dark");
-        assert_eq!(s.active_theme, "mono");
+        assert_eq!(s.active_theme, "swirls");
         assert!(!s.system_accent);
         assert_eq!(s.options_of("aurora")["palette"], text("aurora"));
     }
@@ -541,14 +541,14 @@ mod tests {
         assert!(s.built_in_record().is_empty());
         let s = loaded(
             "record",
-            r#"{"built_in_themes":{"aurora":"sha256:aa","mono":7,"glazed":"sha256:gg"},"theme":"light"}"#,
+            r#"{"built_in_themes":{"aurora":"sha256:aa","swirls":7,"sprinkles":"sha256:gg"},"theme":"light"}"#,
         );
         assert_eq!(s.theme, "light");
         assert_eq!(
             s.built_in_record(),
             BTreeMap::from([
                 ("aurora".to_string(), "sha256:aa".to_string()),
-                ("glazed".to_string(), "sha256:gg".to_string()),
+                ("sprinkles".to_string(), "sha256:gg".to_string()),
             ])
         );
         let mut s = s;
@@ -560,10 +560,10 @@ mod tests {
             !s.set_built_in_record(&record),
             "unchanged: nothing to save"
         );
-        record.insert("mono".into(), "sha256:mm".into());
+        record.insert("swirls".into(), "sha256:mm".into());
         assert!(s.set_built_in_record(&record));
         let json = serde_json::to_value(&s).unwrap();
-        assert_eq!(json["built_in_themes"]["mono"], "sha256:mm");
+        assert_eq!(json["built_in_themes"]["swirls"], "sha256:mm");
         let s = loaded(
             "record-mistyped",
             r#"{"built_in_themes":[1],"theme":"dark"}"#,

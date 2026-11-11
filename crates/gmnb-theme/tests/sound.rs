@@ -1334,10 +1334,10 @@ fn random_recipes_never_fail() {
     assert!(noted > 1000);
 }
 
-/// Mono has no sounds. (Aurora has: tests/aurora_sound.rs.)
+/// A theme without sounds makes none. (Aurora has: tests/aurora_sound.rs.)
 #[test]
-fn a_built_in_theme_without_sounds_makes_none() {
-    let theme = Theme::load(Source::built_in("mono").unwrap(), Limits::default()).unwrap();
+fn a_theme_without_sounds_makes_none() {
+    let (theme, _folder) = theme("");
     let sounds = theme.sounds();
     assert!(!sounds.any());
     assert!(theme.take_sound_notes().is_empty());

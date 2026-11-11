@@ -163,11 +163,11 @@ fn the_base_look_keeps_the_least_window() {
     every_page_fits("base");
 }
 
-/// Glazed lets its keys shrink (short keys below 24 pixels: `keys.short`)
+/// Sprinkles lets its keys shrink (short keys below 24 pixels: `keys.short`)
 /// and keeps the least window on every page.
 #[test]
-fn glazed_keeps_the_least_window() {
-    every_page_fits("glazed");
+fn sprinkles_keeps_the_least_window() {
+    every_page_fits("sprinkles");
 }
 
 /// Aurora's keys and bits keep no least size, as the base's, and it keeps

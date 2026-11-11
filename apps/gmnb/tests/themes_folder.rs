@@ -806,21 +806,21 @@ fn built_in_themes_are_installed_once_and_restored_from_settings() {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     names.sort();
-    assert_eq!(names, ["aurora", "glazed", "mono", "swirls"], "{err}");
+    assert_eq!(names, ["aurora", "sprinkles", "swirls"], "{err}");
     let settings = std::fs::read_to_string(profile.path("config/gmnb/settings.json")).unwrap();
     let settings: serde_json::Value = serde_json::from_str(&settings).unwrap();
-    for id in ["aurora", "mono", "glazed", "swirls"] {
+    for id in ["aurora", "sprinkles", "swirls"] {
         let digest = settings["built_in_themes"][id].as_str().unwrap_or("");
         assert!(digest.starts_with("sha256:"), "{id}: {settings}");
     }
 
-    std::fs::remove_dir_all(profile.themes().join("mono")).unwrap();
+    std::fs::remove_dir_all(profile.themes().join("aurora")).unwrap();
     let app = Running::start(
         &display,
         &profile,
         None,
         &[
-            ("GMNB_THEME", "mono"),
+            ("GMNB_THEME", "aurora"),
             ("GMNB_PREFS", "1"),
             (
                 "GMNB_STEPS",
@@ -833,15 +833,15 @@ fn built_in_themes_are_installed_once_and_restored_from_settings() {
     let err = app.finish();
     assert!(
         err.lines()
-            .any(|l| l == "gmnb: Theme “mono” isn't installed"),
+            .any(|l| l == "gmnb: Theme “aurora” isn't installed"),
         "{err}"
     );
-    // Mono wasn't written again: missing, it is listed as the choice that
+    // Aurora wasn't written again: missing, it is listed as the choice that
     // isn't installed.
     assert_eq!(
         before,
         (
-            ["base", "aurora*", "glazed*", "swirls*", "mono"]
+            ["base", "sprinkles*", "swirls*", "aurora"]
                 .map(String::from)
                 .to_vec(),
             true
@@ -851,14 +851,14 @@ fn built_in_themes_are_installed_once_and_restored_from_settings() {
     assert_eq!(
         after,
         (
-            ["base", "aurora*", "mono*", "glazed*", "swirls*"]
+            ["base", "aurora*", "sprinkles*", "swirls*"]
                 .map(String::from)
                 .to_vec(),
             false
         ),
         "{err}"
     );
-    assert!(profile.themes().join("mono/theme.luau").is_file());
+    assert!(profile.themes().join("aurora/theme.luau").is_file());
     // Restored, the chosen theme was loaded: no note of it missing after.
     let restored_at = err.find("themes: ").unwrap();
     assert_eq!(
@@ -884,7 +884,7 @@ fn built_in_themes_that_cant_be_written_are_served_from_gmnbs_copies() {
         &profile,
         None,
         &[
-            ("GMNB_THEME", "mono"),
+            ("GMNB_THEME", "aurora"),
             ("GMNB_PREFS", "1"),
             ("GMNB_STEPS", "wait:300;themes;quit"),
         ],
@@ -893,14 +893,14 @@ fn built_in_themes_that_cant_be_written_are_served_from_gmnbs_copies() {
     let err = app.finish();
     assert_eq!(
         listed.0,
-        ["base", "aurora*", "mono*", "glazed*", "swirls*"],
+        ["base", "aurora*", "sprinkles*", "swirls*"],
         "{err}"
     );
     let said = err
         .lines()
         .filter(|l| l.contains("GMNB's own copy of the theme is used for this run"))
         .count();
-    assert_eq!(said, 4, "{err}");
+    assert_eq!(said, 3, "{err}");
     assert!(!err.contains("isn't installed"), "{err}");
     assert!(!err.contains("couldn't be loaded"), "{err}");
     let settings =
@@ -921,7 +921,7 @@ fn themes_dragged_in_or_deleted_show_while_settings_is_open() {
         &profile,
         None,
         &[
-            ("GMNB_THEME", "mono"),
+            ("GMNB_THEME", "aurora"),
             ("GMNB_PREFS", "1"),
             (
                 "GMNB_STEPS",
@@ -932,7 +932,7 @@ fn themes_dragged_in_or_deleted_show_while_settings_is_open() {
     let first = themes_line(&app.line("themes: ", 1));
     assert_eq!(
         first.0,
-        ["base", "aurora*", "mono*", "glazed*", "swirls*"],
+        ["base", "aurora*", "sprinkles*", "swirls*"],
         "{}",
         app.stderr()
     );
@@ -945,12 +945,12 @@ fn themes_dragged_in_or_deleted_show_while_settings_is_open() {
         "return { api = 1, name = 'Zebra' }",
     )
     .unwrap();
-    std::fs::remove_dir_all(profile.themes().join("glazed")).unwrap();
+    std::fs::remove_dir_all(profile.themes().join("sprinkles")).unwrap();
     let second = themes_line(&app.line("themes: ", 2));
     assert_eq!(
         second,
         (
-            ["base", "aurora*", "mono*", "swirls*", "zebra"]
+            ["base", "aurora*", "swirls*", "zebra"]
                 .map(String::from)
                 .to_vec(),
             true
@@ -960,17 +960,13 @@ fn themes_dragged_in_or_deleted_show_while_settings_is_open() {
     );
     assert!(!app.stderr().contains("isn't installed"));
     // The chosen theme deleted.
-    std::fs::remove_dir_all(profile.themes().join("mono")).unwrap();
+    std::fs::remove_dir_all(profile.themes().join("aurora")).unwrap();
     let third = themes_line(&app.line("themes: ", 3));
     let err = app.finish();
-    assert_eq!(
-        third.0,
-        ["base", "aurora*", "swirls*", "zebra", "mono"],
-        "{err}"
-    );
+    assert_eq!(third.0, ["base", "swirls*", "zebra", "aurora"], "{err}");
     assert!(
         err.lines()
-            .any(|l| l == "gmnb: Theme “mono” isn't installed"),
+            .any(|l| l == "gmnb: Theme “aurora” isn't installed"),
         "{err}"
     );
 }
@@ -1016,19 +1012,27 @@ fn switches(pid: u32) -> u64 {
 
 /// Settings watches the themes folder and each theme's folder while it is
 /// open, and once it is closed nothing does (no inotify watch on any of
-/// them is left in the process): the chosen theme (Mono, which draws
-/// nothing) deleted then wakes nothing, and at rest GMNB doesn't wake at
+/// them is left in the process): the chosen theme (a theme of the test's own that
+/// draws nothing) deleted then wakes nothing, and at rest GMNB doesn't wake at
 /// all. Settings opened again notices it: the base look, and GMNB says so.
 #[test]
 fn nothing_watches_the_folder_once_settings_is_closed() {
     let display = display_or_skip!();
     let profile = Profile::new("closed");
+    // A theme of the test's own that draws nothing, chosen: the built-in
+    // ones all animate, and an animation would wake GMNB at rest.
+    std::fs::create_dir_all(profile.themes().join("plain")).unwrap();
+    std::fs::write(
+        profile.themes().join("plain/theme.luau"),
+        "return { api = 1, name = 'Plain' }",
+    )
+    .unwrap();
     let app = Running::start(
         &display,
         &profile,
         None,
         &[
-            ("GMNB_THEME", "mono"),
+            ("GMNB_THEME", "plain"),
             ("GMNB_PREFS", "1"),
             (
                 "GMNB_STEPS",
@@ -1040,13 +1044,13 @@ fn nothing_watches_the_folder_once_settings_is_closed() {
     let pid = app.child.id();
     app.line("themes: ", 1);
     let ours: Vec<u64> = std::iter::once(profile.themes())
-        .chain(["aurora", "mono", "glazed", "swirls"].map(|id| profile.themes().join(id)))
+        .chain(["aurora", "sprinkles", "swirls", "plain"].map(|id| profile.themes().join(id)))
         .map(|p| std::fs::metadata(&p).unwrap().ino())
         .collect();
     let open = watched(pid);
     for (ino, what) in ours
         .iter()
-        .zip(["themes", "aurora", "mono", "glazed", "swirls"])
+        .zip(["themes", "aurora", "sprinkles", "swirls", "plain"])
     {
         assert!(
             open.contains(ino),
@@ -1067,7 +1071,7 @@ fn nothing_watches_the_folder_once_settings_is_closed() {
         );
     }
     // The chosen theme deleted with Settings closed; then at rest.
-    std::fs::remove_dir_all(profile.themes().join("mono")).unwrap();
+    std::fs::remove_dir_all(profile.themes().join("plain")).unwrap();
     std::thread::sleep(Duration::from_millis(1500));
     let (before, start) = (switches(pid), Instant::now());
     std::thread::sleep(Duration::from_secs(3));
@@ -1086,12 +1090,12 @@ fn nothing_watches_the_folder_once_settings_is_closed() {
     assert_eq!(woke, 0, "GMNB woke at rest after Settings closed: {err}");
     assert_eq!(
         reopened.0,
-        ["base", "aurora*", "glazed*", "swirls*", "mono"],
+        ["base", "aurora*", "sprinkles*", "swirls*", "plain"],
         "{err}"
     );
     assert!(
         err.lines()
-            .any(|l| l == "gmnb: Theme “mono” isn't installed"),
+            .any(|l| l == "gmnb: Theme “plain” isn't installed"),
         "{err}"
     );
 }
