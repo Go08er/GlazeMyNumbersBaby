@@ -1488,7 +1488,7 @@ Common fields: `id` (letters, digits, `_`; unique in the theme), `label`,
                 run = function(o) return { secondary = gmnb.to_hex(gmnb.complement(o.primary)) } end } }
   ```
 
-  The returned values are checked like any other and saved.
+  The returned values are checked like any other and saved, all together: `style` runs once for them all, not once for each.
 
 Changing an option saves it, calls `style` again, and sends an `option`
 event to layers that listen for it.

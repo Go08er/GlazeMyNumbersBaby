@@ -471,7 +471,7 @@ mod tests {
             }
         }
         table.extend(&text);
-        while d.len() % 4 != 0 {
+        while !d.len().is_multiple_of(4) {
             d.push(0);
         }
         let at = d.len() as u32;

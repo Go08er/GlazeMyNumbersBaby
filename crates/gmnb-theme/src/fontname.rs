@@ -120,8 +120,10 @@ fn names_of(b: &[u8], start: usize, out: &mut Vec<String>) -> Option<()> {
                     return None;
                 }
                 let units: Vec<u16> = raw
-                    .chunks_exact(2)
-                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_be_bytes(*c))
                     .collect();
                 String::from_utf16(&units).ok()?
             }

@@ -916,24 +916,39 @@ impl Hub {
     /// Changes one of the loaded theme's options (the caller saves it).
     /// `drag`: as for [`Hub::set_opacity`].
     pub fn set_option(&self, id: &str, value: OptionValue, drag: bool) {
+        self.set_options(vec![(id.to_string(), value)], drag);
+    }
+
+    /// Changes several of the loaded theme's options at once (an action's):
+    /// the style is worked out once for all of them, not once for each (an
+    /// action may change every option the theme has, and each `style` call
+    /// may take its 50 ms), then each is told to the layers that listen.
+    pub fn set_options(&self, changes: Vec<(String, OptionValue)>, drag: bool) {
         let Some(theme) = self.with_theme(|t| t.map(|t| t.source.id.clone())) else {
             return;
         };
-        self.options
-            .borrow_mut()
-            .entry(theme)
-            .or_default()
-            .insert(id.to_string(), value);
-        // What the environment asked of this option stands only until
-        // the user changes it.
-        self.run_options.borrow_mut().retain(|(o, _)| o != id);
-        let told = self.option_values().get(id).cloned();
+        if changes.is_empty() {
+            return;
+        }
+        for (id, value) in &changes {
+            self.options
+                .borrow_mut()
+                .entry(theme.clone())
+                .or_default()
+                .insert(id.clone(), value.clone());
+            // What the environment asked of this option stands only until
+            // the user changes it.
+            self.run_options.borrow_mut().retain(|(o, _)| o != id);
+        }
+        let told = self.option_values();
         self.apply(drag);
         // After the style: a layer that hears of it sees the new `ctx`.
-        if let Some(value) = told {
-            let mut happened = Happened::new(EventKind::Option, Page::Settings, None);
-            happened.option = Some((id.to_string(), value));
-            self.layers.emit(&happened);
+        for (id, _) in changes {
+            if let Some(value) = told.get(&id).cloned() {
+                let mut happened = Happened::new(EventKind::Option, Page::Settings, None);
+                happened.option = Some((id, value));
+                self.layers.emit(&happened);
+            }
         }
     }
 
