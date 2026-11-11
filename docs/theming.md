@@ -182,7 +182,7 @@ What `theme.luau` returns:
 | The theme is chosen, at start, or on *Reload* | The file, once, top to bottom. Its return value is the theme. | The theme table; fonts registered; the file's locals live until the theme is unloaded. |
 | Right after, and whenever `ctx` changes: light/dark, the desktop's accent, an option, the Background opacity, reduced motion, the desktop's font | `style(ctx)` | The checked result and the style generated from it. Regenerated only if the result differs. |
 | A layer needs a new picture (see [Drawing](#drawing)) | That layer's `draw` | The picture, until the layer next needs one. |
-| Settings shows the theme's options | `visible`, `preview`, an action's `run` | Each tile's picture until `ctx` changes. |
+| Settings shows the theme's options | `visible`, `preview`, an action's `run` | Each tile's picture until `ctx` changes. `visible` and `preview` are asked in passes of a shared budget ([Limits](#limits-and-what-happens-when-a-theme-fails)), never all at once. |
 | Something happens that may have a sound, and theme sounds are on | `sound(event, ctx)` | Nothing. |
 
 Rules the app keeps:
@@ -190,7 +190,11 @@ Rules the app keeps:
 - **A theme with no draw hooks costs nothing at rest.** No timers, no
   frames. The same holds for a theme whose hooks return `nil`.
 - The Background opacity slider calls `style` at most once per frame while
-  it is dragged.
+  it is dragged: the window follows it on the frame clock, at the value it
+  has when each frame begins, however many steps the toolkit reported
+  since the last one.
+- Settings asks a theme nothing while it is closed: no pass of its calls
+  waits, and nothing is armed for it.
 - Listing themes in Settings runs each theme's file in a throwaway sandbox
   to read its `name`, `description` and `options`, then discards it.
 - Without a theme no Luau machine is created at all.
@@ -1334,7 +1338,11 @@ reader hears. If the hook fails, the app paints the value the base way:
 A `choice` option may have `preview(draw, frame, choice)`. It draws one
 tile for one choice with the same draw API; `frame` is
 `{ width = 96, height = 56, ctx }`. Tiles are still pictures, redrawn
-when `ctx` changes.
+when `ctx` changes. Settings draws them in passes of a shared budget
+([Limits](#limits-and-what-happens-when-a-theme-fails)), after whether
+each option is shown: until its picture comes, a tile shows a faint
+blank of its size, and after a change of `ctx` each keeps the picture it
+had until its new one is drawn.
 
 ## Options
 
@@ -1504,6 +1512,7 @@ sounds.
 | Time: `style` | 50 ms |
 | Time: one `draw` call; all `place` calls of one keypad frame | 8 ms; 2 ms |
 | Time: one `preview`, `visible` or action | 10 ms |
+| Time: Settings' `visible` and `preview` calls together | 10 ms a pass. Once a pass's calls have used it, no more start that pass (the one running keeps its own 10 ms, so a pass is never much over 20 ms); the rest wait for the next pass, an idle callback once the window has drawn and taken its input, while Settings is open. Whether options are shown is asked first, then the tiles, in order. Opening Settings, and each change of `ctx` while it is open, runs one pass at once. |
 | One library call's own work, which the time limit can't stop midway: a plain search (`string.find` with `plain` or a pattern of no magic characters, `string.split`); a pattern search (`find`, `match`, `gmatch`, `gsub`); `table.move` | 2^30 bytes (string × pattern); 2^26 (string bytes × the pattern's longest `[set]`); 2^20 elements. Past them the call is an error. |
 | Draw calls per `draw` | 4096 |
 | Open pushes / saves at once | 32 each |
@@ -1878,7 +1887,7 @@ straight on a page counts wherever the style puts something under it in
 | `GMNB_ACTIVE` | The window counts as the one in use whatever the compositor says. A headless compositor never says so, and layers only animate in a window that is. |
 | `GMNB_POINTER="x,y"` | A pointer position for the first keypad's layer, as now. |
 | `GMNB_BENCH="themes=base,aurora,mono,base;opacity"` | Measure: each theme switch, and an opacity drag from 1 to 0.1 and back, each to the end of the next painted frame; prints the figures and the hub's counters, then quits. |
-| `GMNB_THEME_STATS` | Print the hub's counters once the window has settled, after 1.2 s or after as many milliseconds as its value: Luau machines, `style` calls, provider loads and their property counts; and for the layers the frames drawn by kind, the milliseconds their hooks and their replay took, the timers and frame callbacks ever armed and alive now, and each hook's failures; and for a theme's animations the media threads ever started (0 in the base look), the thread's wake-ups, the frames it decoded and the processor time they took. |
+| `GMNB_THEME_STATS` | Print the hub's counters once the window has settled, after 1.2 s or after as many milliseconds as its value: Luau machines, `style` calls, provider loads and their property counts; and for the layers the frames drawn by kind, the milliseconds their hooks and their replay took, the timers and frame callbacks ever armed and alive now, and each hook's failures; and for a theme's animations the media threads ever started (0 in the base look), the thread's wake-ups, the frames it decoded and the processor time they took; and Settings' calls into the theme (made, the passes they were made in, the longest pass in processor time), with a line `Settings has its answers` whenever it has made them all, and the processor time Settings took to open (`GMNB_PREFS=1`). |
 | `GMNB_SOUND=0` | No sound for the run; nothing sound-related is created. `null`: the mixer runs with no sound server, for tests. |
 | `GMNB_SOUND_DUMP=<folder>` | Every sound the theme makes is written there as a WAV file. |
 | `GMNB_DATE_TO=YYYY-MM-DD` | The date page's "To" date (the comparison's "Date with a result"). |
@@ -2037,6 +2046,12 @@ tables, says `library:0:`.
     [the media chapter](theming-media.md#tests) (the synthesiser's test
     vectors, no sound system, the caps, nothing running at rest or in the
     base look, bad files, DGMNB linking none of it).
+11. Settings' calls into a theme (`apps/gmnb/src/paced.rs`, and in the
+    running app `tests/settings.rs`): a theme with 24 options of 16
+    tiles whose hooks each take 6 ms opens Settings in one pass, no pass
+    is much over its budget and one call, every call is made in the end
+    with none failed, none is made once Settings has closed, and the
+    opacity slider moved nine times in one frame calls `style` once.
 
 ### Open points
 
@@ -2085,3 +2100,8 @@ Decided here, and worth a second look by the owner:
 12. **GMNB draws text unhinted, as DGMNB**, whatever the desktop's font
     settings say ([Text in its place](#text-in-its-place)). It applies to
     every theme and to the dialogs, and to the toolkit's own labels.
+13. **Settings' theme calls are paced, not capped**: a theme whose hooks
+    all run just under their limits still gets every tile drawn, about
+    a pass a frame, while Settings is open, rather than blanks after a
+    total. Each change of `ctx` starts the tiles again (an opacity drag
+    redraws a pass a frame).

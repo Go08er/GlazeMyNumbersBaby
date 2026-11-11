@@ -13,6 +13,7 @@ use gmnb_theme::layer::PREVIEW_SIZE;
 use gmnb_theme::theme::{OptionDef, OptionKind};
 
 use crate::layers::tile::Tile;
+use crate::paced::{self, Ask};
 use crate::pages::Ctx;
 use crate::settings::Persist;
 use crate::theme::{parse_hex, rgba, to_hex};
@@ -120,6 +121,8 @@ pub fn show(win: &Rc<Window>) {
         scale.set_hexpand(true);
         scale.set_valign(gtk::Align::Center);
         scale.set_width_request(160);
+        // (GMNB_STEPS' `slide:` finds it by this.)
+        scale.add_css_class("wc-opacity-slider");
         // The range reports its value as a fraction (0.1); say it as shown.
         scale.update_property(&[
             gtk::accessible::Property::Label("Background opacity"),
@@ -136,11 +139,29 @@ pub fn show(win: &Rc<Window>) {
         opacity.add_suffix(&scale);
         opacity.add_suffix(&shown);
         {
+            // The window follows the slider once a frame, at the value it
+            // has then: the toolkit sends a step for every move it is told
+            // of, and each step calls the theme's `style`
+            // (docs/theming.md, "When a theme runs").
+            let follow = {
+                let ctx = ctx.clone();
+                let pending = Rc::default();
+                paced::OnceAFrame::new(&scale, move |v: f64| {
+                    let alpha = crate::settings::backdrop_alpha(v);
+                    apply_backdrop(&ctx.backdrop, alpha);
+                    // One step of a drag: only the properties that change
+                    // with the opacity are rewritten (the live provider).
+                    ctx.hub.set_opacity(alpha, true);
+                    ctx.store.data.borrow_mut().background_opacity = v;
+                    persist_at_rest(&ctx, &pending);
+                })
+            };
             let (ctx, shown) = (ctx.clone(), shown.clone());
-            let pending = Rc::default();
             scale.connect_value_changed(move |s| {
                 if ctx.layers.covers(s) {
-                    // Covered, Settings changes nothing (R15-M-02).
+                    // Covered, Settings changes nothing (R15-M-02): what
+                    // was moved before it was covered stands.
+                    follow.flush();
                     let saved = ctx.store.data.borrow().background_opacity;
                     let saved = f64::from(crate::settings::backdrop_alpha(saved));
                     if s.value() != saved {
@@ -151,13 +172,7 @@ pub fn show(win: &Rc<Window>) {
                 let v = s.value();
                 shown.set_text(&percent(v));
                 s.update_property(&[gtk::accessible::Property::ValueText(&percent(v))]);
-                let alpha = crate::settings::backdrop_alpha(v);
-                apply_backdrop(&ctx.backdrop, alpha);
-                // One step of a drag: only the properties that change
-                // with the opacity are rewritten (the live provider).
-                ctx.hub.set_opacity(alpha, true);
-                ctx.store.data.borrow_mut().background_opacity = v;
-                persist_at_rest(&ctx, &pending);
+                follow.set(s, v);
             });
         }
         group.add(&opacity);
@@ -206,10 +221,9 @@ pub fn show(win: &Rc<Window>) {
     page.add(&group);
 
     dialog.add(&page);
-    // The theme rows' handlers live as long as the dialog does.
-    dialog.connect_closed(move |_| {
-        let _ = &themes;
-    });
+    // The theme rows' handlers live as long as the dialog does; once it
+    // has closed, nothing more is asked of the theme for it.
+    dialog.connect_closed(move |_| themes.stop());
     // A dialog's keys never reach the window's controllers.
     crate::window::own_keys(&dialog);
     dialog.present(Some(&win.widget()));
@@ -228,11 +242,14 @@ struct ThemeSettings {
     options_box: gtk::Box,
     /// Each option row and its option, to show or hide as `visible` says.
     rows: RefCell<Vec<(gtk::Widget, OptionDef)>>,
-    /// Each tile a `preview` drew, with its option and its choice: they
+    /// Each tile a `preview` draws, with its option and its choice: they
     /// are drawn again when `ctx` changes.
     tiles: RefCell<Vec<(Tile, OptionDef, String)>>,
-    /// The `ctx` the tiles were drawn for: each is drawn once for each.
+    /// The `ctx` the tiles are drawn for: each is drawn once for each.
     tiles_ctx: RefCell<Option<gmnb_theme::Ctx>>,
+    /// The calls into the theme still to make (`visible`, `preview`), in
+    /// passes that never hold the window.
+    turns: Rc<paced::Turns>,
     /// The theme's load the tiles' options are of ([`Hub::epoch`]): after
     /// another, they are the options of a theme that isn't loaded, and
     /// are built again, not drawn.
@@ -292,6 +309,7 @@ impl ThemeSettings {
             rows: RefCell::default(),
             tiles: RefCell::default(),
             tiles_ctx: RefCell::default(),
+            turns: paced::Turns::new(),
             tiles_epoch: std::cell::Cell::new(0),
             building: std::cell::Cell::new(false),
             pending: Rc::default(),
@@ -447,15 +465,26 @@ impl ThemeSettings {
         } else {
             self.ctx.store.persist();
         }
-        self.sync_visible();
-        self.draw_tiles();
+        self.want_visible();
+        self.want_tiles();
+        self.ask();
         self.sync_report();
     }
 
     /// Has the theme draw every tile again (still pictures, for the
     /// `ctx` there is now), once for each `ctx`; not while the options
     /// are being built or changed in a batch (they are drawn after).
-    fn draw_tiles(&self) {
+    fn draw_tiles(self: &Rc<Self>) {
+        if self.building.get() {
+            return;
+        }
+        self.want_tiles();
+        self.ask();
+    }
+
+    /// Every tile, to be drawn for the `ctx` there is now, if it hasn't
+    /// been asked for that one. Each keeps the picture it has until then.
+    fn want_tiles(&self) {
         if self.building.get() || self.tiles_epoch.get() != self.ctx.hub.epoch() {
             return;
         }
@@ -463,16 +492,57 @@ impl ThemeSettings {
         if self.tiles_ctx.borrow().as_ref() == Some(&ctx) {
             return;
         }
-        for (tile, option, choice) in self.tiles.borrow().iter() {
-            tile.set_list(self.ctx.hub.preview(option, choice));
+        for n in 0..self.tiles.borrow().len() {
+            self.turns.ask(Ask::Tile(n));
         }
         self.tiles_ctx.replace(Some(ctx));
     }
 
-    fn sync_visible(&self) {
-        for (row, option) in self.rows.borrow().iter() {
-            row.set_visible(self.ctx.hub.option_visible(option));
+    /// Every row with a `visible`, to be asked again.
+    fn want_visible(&self) {
+        for (n, (_, option)) in self.rows.borrow().iter().enumerate() {
+            if option.visible.is_some() {
+                self.turns.ask(Ask::Visible(n));
+            }
         }
+    }
+
+    /// Asks the theme what is waiting: as much as one pass's budget allows
+    /// now, the rest in passes to come while Settings is open.
+    fn ask(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.turns.go(Rc::new(move |ask| {
+            if let Some(t) = weak.upgrade() {
+                t.answer(ask);
+            }
+        }));
+    }
+
+    /// One call into the theme, and its answer shown.
+    fn answer(&self, ask: Ask) {
+        // Asked of a theme that has been replaced since: its rows are gone.
+        if self.tiles_epoch.get() != self.ctx.hub.epoch() {
+            return;
+        }
+        match ask {
+            Ask::Visible(n) => {
+                let row = self.rows.borrow().get(n).cloned();
+                if let Some((row, option)) = row {
+                    row.set_visible(self.ctx.hub.option_visible(&option));
+                }
+            }
+            Ask::Tile(n) => {
+                let tile = self.tiles.borrow().get(n).cloned();
+                if let Some((tile, option, choice)) = tile {
+                    tile.set_list(self.ctx.hub.preview(&option, &choice));
+                }
+            }
+        }
+    }
+
+    /// Settings has closed: nothing more is asked.
+    fn stop(&self) {
+        self.turns.stop();
     }
 
     /// The chosen theme's options, rendered from its option list: one
@@ -484,8 +554,9 @@ impl ThemeSettings {
         }
         self.rows.borrow_mut().clear();
         self.tiles.borrow_mut().clear();
-        // Each tile is drawn as it is made, for this `ctx`.
-        self.tiles_ctx.replace(Some(self.ctx.hub.frame_ctx()));
+        // What was asked of the rows that were is forgotten.
+        self.turns.stop();
+        self.tiles_ctx.replace(None);
         self.tiles_epoch.set(self.ctx.hub.epoch());
         let defs = self.ctx.hub.option_defs();
         let values = self.ctx.hub.option_values();
@@ -510,7 +581,12 @@ impl ThemeSettings {
             self.rows.borrow_mut().push((row, def));
         }
         self.building.set(false);
-        self.sync_visible();
+        // Whether each row is shown, then each tile's picture: the first
+        // pass now, so a theme whose hooks are quick shows them all at
+        // once; until its picture comes, a tile shows its place.
+        self.want_visible();
+        self.want_tiles();
+        self.ask();
         self.sync_report();
     }
 
@@ -581,9 +657,9 @@ impl ThemeSettings {
                 flow.update_property(&[gtk::accessible::Property::Label(&def.label)]);
                 let (w, h) = PREVIEW_SIZE;
                 for choice in choices {
+                    // Drawn in the passes that follow (`want_tiles`).
                     let tile = Tile::new(w, h);
                     tile.set_halign(gtk::Align::Center);
-                    tile.set_list(self.ctx.hub.preview(def, &choice.id));
                     self.tiles
                         .borrow_mut()
                         .push((tile.clone(), def.clone(), choice.id.clone()));
