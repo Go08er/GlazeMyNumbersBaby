@@ -180,6 +180,8 @@ type Scheme = {
 	-- The two bright colours as text.
 	a_ink: Rgba,
 	b_ink: Rgba,
+	-- The focus ring: the warm band, 9:1 from the dark one.
+	ring: Rgba,
 	danger: Rgba,
 	series: { Rgba },
 	-- How strong the glass is: the least the text can bear; keys and
@@ -293,6 +295,7 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 		faint = faint,
 		a_ink = a_ink,
 		b_ink = b_ink,
+		ring = gmnb.with_contrast(a, ground, UI * UI * 1.01),
 		danger = danger,
 		series = series,
 		least = least,
@@ -507,7 +510,13 @@ local function style(ctx: Ctx): Style
 			text_halo = halo,
 		},
 		plain = { background = pane, radius = RADIUS },
-		focus = { width = 3, color = a, offset = 5 },
+		-- The page's gold ring. Around a key it lies on the paint itself,
+		-- which is gold too where the warm band flows (and the equals key
+		-- is filled with it): a line of the dark band along each side
+		-- keeps it seen there, and the gold wherever the paint is dark.
+		-- Ring and line 9:1 apart, one of them reaches 3:1 on any colour
+		-- at all (orchid's pink is lifted a little for it).
+		focus = { width = 3, color = s.ring, offset = 5, edge = { width = 1, color = ground } },
 		scrim = alpha(ground, 0.55),
 
 		header = {
