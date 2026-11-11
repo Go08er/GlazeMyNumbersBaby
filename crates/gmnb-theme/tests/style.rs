@@ -665,6 +665,23 @@ fn ctx_is_what_the_contract_says() {
     }
 }
 
+/// R2-D-1: a slider whose range is finite but whose width is not
+/// (-1e308 to 1e308) gave Settings an infinite step, which the toolkit
+/// refuses with a critical. Such a slider is left out, with a note.
+#[test]
+fn a_slider_whose_range_overflows_is_left_out() {
+    let theme = load(
+        "widerange",
+        "return { api = 1, name = 'Wide', options = {
+           { id = 'a', type = 'slider', min = -1e308, max = 1e308 },
+           { id = 'b', type = 'slider', min = 0, max = 1 } } }",
+    )
+    .unwrap();
+    let ids: Vec<&str> = theme.def.options.iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(ids, ["b"]);
+    assert!(theme.notes.list.iter().any(|n| n.path.contains("max")));
+}
+
 // ---- 7: the built-in themes -------------------------------------------------------
 
 const PALETTES: [&str; 7] = [

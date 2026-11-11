@@ -365,6 +365,7 @@ impl ThemeSettings {
         group.add(&list);
         let report = gtk::Label::builder()
             .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
             .xalign(0.0)
             .selectable(true)
             .margin_top(10)
@@ -849,6 +850,7 @@ impl ThemeSettings {
                 let label = gtk::Label::builder()
                     .label(&def.label)
                     .wrap(true)
+                    .wrap_mode(gtk::pango::WrapMode::WordChar)
                     .xalign(0.0)
                     .margin_top(8)
                     .css_classes(["caption", "dim-label"])
@@ -912,6 +914,12 @@ impl ThemeSettings {
                         .push((tile.clone(), def.clone(), choice.id.clone()));
                     let label = gtk::Label::new(Some(&choice.label));
                     label.add_css_class("caption");
+                    // A theme's word of 80 letters is wider than Settings:
+                    // broken across lines.
+                    label.set_wrap(true);
+                    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                    label.set_max_width_chars(12);
+                    label.set_justify(gtk::Justification::Center);
                     let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
                     b.append(&tile);
                     b.append(&label);
@@ -963,6 +971,7 @@ impl ThemeSettings {
                         &gtk::Label::builder()
                             .label(description)
                             .wrap(true)
+                            .wrap_mode(gtk::pango::WrapMode::WordChar)
                             .xalign(0.0)
                             .css_classes(["caption", "dim-label"])
                             .build(),
@@ -1089,6 +1098,10 @@ impl ThemeSettings {
                 let shown = gtk::Label::new(Some(&show(now)));
                 shown.add_css_class("numeric");
                 shown.set_width_chars(5);
+                // A range of 1e300 shows 300 digits: never wider than a
+                // row can be.
+                shown.set_max_width_chars(12);
+                shown.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 shown.set_xalign(1.0);
                 {
                     let shown = shown.clone();
@@ -1133,6 +1146,13 @@ impl ThemeSettings {
                     .valign(gtk::Align::Center)
                     .css_classes(["flat"])
                     .build();
+                // The button's own label, cut short rather than wider than
+                // Settings (the tooltip and the name keep the whole).
+                if let Some(text) = button.child().and_downcast::<gtk::Label>() {
+                    text.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                    text.set_max_width_chars(14);
+                }
+                button.update_property(&[gtk::accessible::Property::Label(&action.label)]);
                 if let Some(tip) = &action.tooltip {
                     button.set_tooltip_text(Some(tip));
                 }

@@ -399,6 +399,69 @@ fn settings_closed_asks_nothing_more() {
     assert!(after.contains("sound:"), "the steps did not finish: {err}");
 }
 
+/// R2-D-1: a slider whose values are 300 digits long (a range to 1e300)
+/// gave the value beside it a label as wide as the digits, and Settings a
+/// width of 3000 px against a window's 360: libadwaita warned that the
+/// content exceeded its bin.
+#[test]
+fn a_slider_with_enormous_values_does_not_widen_settings() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    const THEME: &str = r#"
+return { api = 1, name = "Huge", options = {
+  { id = "a", type = "slider", label = "A", min = 0, max = 1e300 },
+  { id = "b", type = "slider", label = "B", min = 1e299, max = 1e300, step = 1e299 },
+} }"#;
+    let err = run(
+        &display,
+        THEME,
+        &[
+            ("GMNB_STEPS_AFTER_MS", "500"),
+            ("GMNB_STEPS", "settings;wait:1500;close;wait:200;quit"),
+        ],
+        30_000,
+    );
+    assert!(err.contains("sound:"), "the steps did not finish: {err}");
+    assert!(!err.contains("exceeds AdwBreakpointBin"), "{err}");
+    assert!(!err.contains("step-increment"), "{err}");
+}
+
+/// R2-D-2: a theme's 80-letter word in a tile's caption, an action's
+/// button or a note could not be broken, and Settings asked for 1000 to
+/// 2000 px against a window's 360.
+#[test]
+fn long_words_in_a_themes_options_do_not_widen_settings() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    const THEME: &str = r#"
+local W = string.rep("W", 80)
+local function draw(d, f, c) end
+return { api = 1, name = "Long", options = {
+  { id = "a", type = "choice", label = "A", preview = draw,
+    choices = { { id = "x", label = W }, { id = "y", label = W } } },
+  { id = "b", type = "slider", label = "S", min = 0, max = 1,
+    actions = { { label = W, run = function() return {} end } } },
+  { id = "c", type = "note", label = W },
+  { id = "d", type = "choice", label = "D", description = W, preview = draw,
+    choices = { { id = "x", label = "x" }, { id = "y", label = "y" } } },
+} }"#;
+    let err = run(
+        &display,
+        THEME,
+        &[
+            ("GMNB_STEPS_AFTER_MS", "500"),
+            ("GMNB_STEPS", "settings;wait:1500;close;wait:200;quit"),
+        ],
+        30_000,
+    );
+    assert!(err.contains("sound:"), "the steps did not finish: {err}");
+    assert!(!err.contains("exceeds AdwBreakpointBin"), "{err}");
+}
+
 /// The Background opacity dragged faster than the screen shows it (nine
 /// steps at once, as the toolkit reports a quick drag): the window, and
 /// the theme's `style`, follow once a frame, at the last of them. It
