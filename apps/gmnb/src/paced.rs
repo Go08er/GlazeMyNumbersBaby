@@ -141,8 +141,11 @@ impl Turns {
 
     /// One pass now, and if anything is left, the rest in passes to come,
     /// each in an idle callback of its own. `answer` makes one call.
+    /// While a pass is waiting already, what was asked waits for it:
+    /// however many changes come in one turn of the main loop, they cost
+    /// one pass's budget there.
     pub fn go(self: &Rc<Self>, answer: Rc<dyn Fn(Ask)>) {
-        if !self.run(&*answer) || self.idle.borrow().is_some() {
+        if self.idle.borrow().is_some() || !self.run(&*answer) {
             return;
         }
         let weak = Rc::downgrade(self);

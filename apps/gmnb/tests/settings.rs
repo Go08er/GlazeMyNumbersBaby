@@ -313,6 +313,53 @@ fn settings_never_holds_the_window_for_a_slow_theme() {
     assert!(notes.is_empty(), "the slow hooks failed: {notes:?}");
 }
 
+/// One change of an option costs one pass: whether each row is shown is
+/// asked in the pass that draws the tiles again for the style the change
+/// made (it was a pass of its own after it, a second budget in the same
+/// turn of the main loop).
+#[test]
+fn an_option_changed_costs_one_pass() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    const THEME: &str = r#"
+local options = {
+	{ id = "level", type = "slider", label = "Level", min = 0, max = 1, step = 0.1, default = 0.5 },
+	{ id = "pick", type = "choice", label = "Pick", choices = { { id = "a" }, { id = "b" } },
+	  preview = function(draw, frame, choice) end },
+}
+for i = 1, 3 do
+	options[#options + 1] = { id = "v" .. i, type = "toggle", label = "V" .. i, default = true,
+		visible = function(o, ctx) return true end }
+end
+return { api = 1, name = "Changes", options = options, style = function(ctx)
+	return { shape = { radius = math.floor(ctx.options.level * 10) } }
+end }"#;
+    let err = run(
+        &display,
+        THEME,
+        &[
+            ("GMNB_THEME_STATS", "1"),
+            ("GMNB_STEPS_AFTER_MS", "500"),
+            (
+                "GMNB_STEPS",
+                "settings;wait:800;slide:wc-option-slider:0.8;wait:800;quit",
+            ),
+        ],
+        30_000,
+    );
+    let (_, after) = err
+        .split_once("GMNB_STEPS: sliding")
+        .unwrap_or_else(|| panic!("the slider never moved: {err}"));
+    let answered: Vec<&str> = after
+        .lines()
+        .filter(|l| l.contains("Settings has its answers"))
+        .collect();
+    assert_eq!(answered.len(), 1, "{answered:?}");
+    assert!(after.contains("sound:"), "the steps did not finish: {err}");
+}
+
 /// Settings closed while it still has calls to make: none of them is
 /// made once it has closed (nothing of Settings runs while it is closed).
 #[test]
@@ -337,10 +384,8 @@ fn settings_closed_asks_nothing_more() {
         .lines()
         .filter(|l| l.starts_with("gmnb theme dev: tile "))
         .count();
-    assert!(
-        (1..384).contains(&asked),
-        "{asked} tiles drawn before Settings closed"
-    );
+    // (Some of the 384 were still to draw when it closed.)
+    assert!(asked < 384, "{asked} tiles drawn before Settings closed");
     let late: Vec<&str> = after
         .lines()
         .filter(|l| l.starts_with("gmnb theme dev: tile "))

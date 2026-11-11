@@ -310,6 +310,8 @@ struct ThemeSettings {
     /// Set while the list or the options are being built: their widgets'
     /// signals then change nothing.
     building: std::cell::Cell<bool>,
+    /// Settings has closed.
+    closed: std::cell::Cell<bool>,
     pending: Rc<RefCell<Option<gtk::glib::SourceId>>>,
 }
 
@@ -365,6 +367,7 @@ impl ThemeSettings {
             turns: paced::Turns::new(),
             tiles_epoch: std::cell::Cell::new(0),
             building: std::cell::Cell::new(false),
+            closed: std::cell::Cell::new(false),
             pending: Rc::default(),
         });
         {
@@ -507,6 +510,10 @@ impl ThemeSettings {
     /// options as their `visible` now says.
     fn changed(self: &Rc<Self>, id: &str, value: OptionValue, drag: bool) {
         let theme = self.ctx.hub.active();
+        // Whether each row is shown is asked again, before the option is
+        // set: a style that changes with it asks for the tiles, and the
+        // rows go first in that same pass, not in one of their own.
+        self.want_visible();
         self.ctx.hub.set_option(id, value.clone(), drag);
         self.ctx
             .store
@@ -518,7 +525,6 @@ impl ThemeSettings {
         } else {
             self.ctx.store.persist();
         }
-        self.want_visible();
         self.want_tiles();
         self.ask();
         self.sync_report();
@@ -563,6 +569,11 @@ impl ThemeSettings {
     /// Asks the theme what is waiting: as much as one pass's budget allows
     /// now, the rest in passes to come while Settings is open.
     fn ask(self: &Rc<Self>) {
+        // Closed, Settings asks nothing (a change of style after it closed
+        // still reaches its subscriber until the dialog has gone).
+        if self.closed.get() {
+            return;
+        }
         let weak = Rc::downgrade(self);
         self.turns.go(Rc::new(move |ask| {
             if let Some(t) = weak.upgrade() {
@@ -595,6 +606,7 @@ impl ThemeSettings {
 
     /// Settings has closed: nothing more is asked.
     fn stop(&self) {
+        self.closed.set(true);
         self.turns.stop();
     }
 
@@ -883,6 +895,8 @@ impl ThemeSettings {
                     }
                 };
                 let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step);
+                // (GMNB_STEPS' `slide:` finds it by this.)
+                scale.add_css_class("wc-option-slider");
                 scale.set_value(now);
                 scale.set_draw_value(false);
                 scale.set_hexpand(true);
