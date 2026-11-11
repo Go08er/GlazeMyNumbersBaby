@@ -635,3 +635,35 @@ fn choosing_a_theme_leaves_no_stray_note_from_the_old_tiles() {
     let notes: Vec<&str> = err.lines().filter(|l| l.starts_with("note: ")).collect();
     assert!(notes.is_empty(), "stray notes after the switch: {notes:?}");
 }
+
+/// R3-A-2: R2-D-2 gave the captions, notes and buttons a way to break an
+/// 80-letter word; every other place a theme's words go (its name and
+/// description in the list, a toggle's, a menu's, a slider's and a colour's
+/// rows) must not widen Settings either.
+#[test]
+fn long_words_in_every_row_of_a_theme_do_not_widen_settings() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    const THEME: &str = r#"
+local W = string.rep("W", 80)
+return { api = 1, name = W, description = W, options = {
+  { id = "t", type = "toggle", label = W, description = W },
+  { id = "m", type = "choice", label = W, description = W,
+    choices = { { id = "x", label = W }, { id = "y", label = W } } },
+  { id = "s", type = "slider", label = W, description = W, min = 0, max = 1 },
+  { id = "c", type = "color", label = W, description = W },
+} }"#;
+    let err = run(
+        &display,
+        THEME,
+        &[
+            ("GMNB_STEPS_AFTER_MS", "500"),
+            ("GMNB_STEPS", "settings;wait:1500;close;wait:200;quit"),
+        ],
+        30_000,
+    );
+    assert!(err.contains("sound:"), "the steps did not finish: {err}");
+    assert!(!err.contains("exceeds AdwBreakpointBin"), "{err}");
+}
