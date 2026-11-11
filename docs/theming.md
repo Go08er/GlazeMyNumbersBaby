@@ -1296,7 +1296,9 @@ calls chain; or from `gmnb.svg_path("M6 12.5h12")` (`gsk_path_parse`).
 A circle's radius, and a rounded rectangle's corners in a path, are taken
 up to 10^6 (as is `draw:circle`'s), and SVG data may reach no further than
 10^6 from the origin, every relative step counted, nor have an arc of a
-larger radius (else `gmnb.svg_path` is an error): the toolkit's circles,
+larger radius (else `gmnb.svg_path` is an error; an arc's radii too small
+for its two ends are grown to reach them, as SVG has it, and it is the grown
+radius that counts): the toolkit's circles,
 corners and arcs cost it more to draw the larger they are in the path's
 own units, and the further from the origin (it works them out in single
 precision, to half a unit). Measured on its software renderer, a circle

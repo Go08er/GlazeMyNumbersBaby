@@ -391,11 +391,16 @@ impl Pen {
     }
 
     /// One set of numbers of `command` (its arguments, flags as 0 or 1).
-    fn go(&mut self, command: u8, v: &[f64; 7], first_of_move: bool) {
+    ///
+    /// `Err`: an arc whose radii, grown to reach from one end to the other
+    /// as the SVG grammar has it, are past [`SVG_REACH`]. Else, for an arc,
+    /// the largest radius it is drawn with.
+    fn go(&mut self, command: u8, v: &[f64; 7], first_of_move: bool) -> Result<f64, String> {
         let rel = command.is_ascii_lowercase();
         let [x0, y0] = self.at;
         let pt = |x: f64, y: f64| if rel { [x0 + x, y0 + y] } else { [x, y] };
         let (mut cubic, mut quad) = (None, None);
+        let mut grown = 0.0;
         let end = match command.to_ascii_lowercase() {
             b'm' => {
                 let p = pt(v[0], v[1]);
@@ -440,10 +445,29 @@ impl Pen {
             }
             _ => {
                 // An arc: its radii, grown to reach from one end to the
-                // other if they are too small.
+                // other if they are too small (F.6.6: both by the root of
+                // how far the ends are out of the ellipse, so a long thin
+                // one is grown to a very long one).
                 let end = pt(v[5], v[6]);
                 let chord = ((end[0] - x0).powi(2) + (end[1] - y0).powi(2)).sqrt();
-                let r = v[0].abs().max(v[1].abs()).max(chord / 2.0);
+                let (mut rx, mut ry) = (v[0].abs(), v[1].abs());
+                if rx > 0.0 && ry > 0.0 {
+                    let (sin, cos) = v[2].to_radians().sin_cos();
+                    let (dx, dy) = ((x0 - end[0]) / 2.0, (y0 - end[1]) / 2.0);
+                    let (x1, y1) = (cos * dx + sin * dy, cos * dy - sin * dx);
+                    let lambda = (x1 / rx).powi(2) + (y1 / ry).powi(2);
+                    if lambda > 1.0 {
+                        let by = lambda.sqrt();
+                        (rx, ry) = (rx * by, ry * by);
+                    }
+                }
+                let r = rx.max(ry).max(chord / 2.0);
+                if r > SVG_REACH {
+                    return Err(format!(
+                        "an arc whose radius, grown to reach its two ends, is past {SVG_REACH:e}"
+                    ));
+                }
+                grown = r;
                 self.mark(self.at, 2.0 * r);
                 self.mark(end, 2.0 * r);
                 end
@@ -454,6 +478,7 @@ impl Pen {
         self.at = end;
         self.cubic = cubic;
         self.quad = quad;
+        Ok(grown)
     }
 
     fn close(&mut self) {
@@ -633,7 +658,8 @@ pub fn svg_shape(d: &str) -> Result<(usize, f64, Option<[f64; 4]>), String> {
                     reach
                 });
             }
-            pen.go(command, &vals, sets == 0);
+            let grown = pen.go(command, &vals, sets == 0)?;
+            furthest = furthest.max(absolute + steps + 2.0 * grown);
             sets += 1;
             count += 1;
         }
@@ -751,5 +777,29 @@ mod tests {
         }
         let long = format!("m0 0{}", " l3e38 3e38".repeat(8));
         assert!(svg_segments(&long).is_err());
+    }
+
+    /// A radius too small for an arc's two ends is grown to reach them, both
+    /// radii by the root of how far the ends are out of the ellipse: a long
+    /// thin ellipse, its short side across the chord, is grown to a very long
+    /// one, however small its numbers. (R2-E-1: `A 1e6 1e-27 90 1 0 300 10`
+    /// hung the toolkit's software renderer past a minute.)
+    #[test]
+    fn an_arc_grown_past_reach_is_refused() {
+        for far in [
+            "M10 10 A1000000 0.001 90 0 0 300 10",
+            "M10 10 A1000000 0.000000000000000000000000001 90 1 0 300 10",
+            "M10 10 a1 1e-9 135 0 1 300 300",
+        ] {
+            let e = svg_segments(far).unwrap_err();
+            assert!(e.contains("past"), "{far}: {e}");
+        }
+        // The same arcs turned so that the long side is along the chord, and
+        // radii grown a little, are drawn.
+        assert_eq!(svg_segments("M10 10 A1000000 0.001 0 0 0 300 10"), Ok(2));
+        assert_eq!(svg_segments("M0 0 A5 5 0 0 0 10 10"), Ok(2));
+        assert_eq!(svg_segments("M10 10 a1 1e-9 45 0 1 300 300"), Ok(2));
+        assert_eq!(svg_segments("M0 0 A1e-30 1e-30 0 0 0 10 10"), Ok(2));
+        assert_eq!(svg_segments("M0 0 A0 1e-30 90 0 0 3e5 10"), Ok(2));
     }
 }
