@@ -49,13 +49,16 @@ const SCALE: [(&str, SoundId, &str); 7] = [
 ];
 
 /// What each set of bands pours in as: notes of the scale, from 0.
-const POURS: [(&str, &[usize]); 6] = [
+const POURS: [(&str, &[usize]); 8] = [
     ("party", &[1, 3, 4, 6]),
     ("lava", &[0, 1, 3, 5]),
     ("lagoon", &[1, 2, 4, 6]),
     ("orchid", &[0, 2, 3, 5]),
     ("absinthe", &[2, 3, 5, 6]),
     ("marble", &[1, 3, 6]),
+    // Fourths, F#5 B5 E6 A6; and D major's chord, D6 F#6 A6.
+    ("system", &[0, 2, 4, 6]),
+    ("custom", &[3, 5, 6]),
 ];
 
 fn swirls() -> Theme {
@@ -532,8 +535,12 @@ fn new_paint_pours_in_on_its_own_notes() {
     assert_eq!(plays.len(), 4);
     assert!(near(plays[1].params.rate, ring(3), 1e-5));
 
-    // The other options make no sound: the pace is a slider, dragged.
+    // The other options make no sound: the pace is a slider, dragged, and
+    // so is a colour in the chooser.
     for (id, value) in [
+        ("paint_first", OptionValue::Text("#ff0000".into())),
+        ("paint_second", OptionValue::Text("#00ffff".into())),
+        ("paint_dark", OptionValue::Text("#000000".into())),
         ("glass", OptionValue::Text("clear".into())),
         ("speed", OptionValue::Number(2.0)),
         ("stir", OptionValue::Bool(false)),

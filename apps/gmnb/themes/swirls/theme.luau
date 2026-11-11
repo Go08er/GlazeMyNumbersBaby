@@ -18,7 +18,7 @@
 --   the keypad    swirls into place
 --
 -- The file reads top to bottom:
---   1. Colours     the six sets of bands
+--   1. Colours     the six sets of bands, and two of your own
 --   2. Inks, glass what keeps text readable over paint that moves
 --   3. Style       how every part of the window looks
 --   4. The field   the swirl itself, and what disturbs it
@@ -63,15 +63,27 @@ local BANDS: { [string]: Bands } = {
 	marble = bands("#f5faff", "#93a1ad", "#020507"),
 }
 
+-- And two sets of one's own. System is worked out from the desktop's
+-- accent colour (this blue on a desktop that shares none), Freestyle from
+-- three colours you pick (until you do, these). Either can start from any
+-- colour at all: section 2 works out bands from them that the glass and
+-- the figures can bear.
+local FALLBACK_ACCENT = "#3584e4"
+local DEFAULT_FIRST, DEFAULT_SECOND, DEFAULT_DARK = "#ffb86b", "#b18cff", "#160a2a"
+
 -- The design's text colour.
 local FG = hex("#f5faff")
 
--- The ramp of each set: its three colours in the design's order, each
+-- The ramp of a set: its three colours in the design's order, each
 -- blending into the next between 8% and 92% of its band, and after the
--- last the first again. (A theme may make eight ramps: these are six.)
+-- last the first again. The six are made once; one's own, whenever its
+-- colours change (the same colours again are the same ramp).
+local function ramp_of(set: Bands): Ramp
+	return gmnb.ramp({ colors = { set.a, set.b, set.ground }, edge = { 0.08, 0.92 }, cycle = true })
+end
 local RAMPS: { [string]: Ramp } = {}
 for id, set in BANDS do
-	RAMPS[id] = gmnb.ramp({ colors = { set.a, set.b, set.ground }, edge = { 0.08, 0.92 }, cycle = true })
+	RAMPS[id] = ramp_of(set)
 end
 
 ---------------------------------------------------------------------------
@@ -164,9 +176,101 @@ local function least_glass(tint: Rgba, backs: { Rgba }, checks: { Check }, margi
 	return step / 64
 end
 
+-- Bands of one's own. The design's own are two bright colours and a
+-- near-black, and the glass and the figures lean on that: the glass is
+-- made of the dark band, the text on it is light, and the figures are
+-- painted in the blends from the first bright band to the second, on a
+-- panel. So whatever the colours given:
+--   the dark band  keeps the hue and some of the strength it was given,
+--                  at the design's own near-black (#010609 is 2% light);
+--   the two bright ones keep theirs, and are lifted (as little as they
+--                  need, toward white) until every blend between them
+--                  reads as a figure on a panel over white paint, the
+--                  brightest thing that can be under one. That also puts
+--                  the dark band's text 4.5 on either of them.
+
+-- A colour option's saved text, or `fallback` if someone edited it into
+-- nonsense. (Paint is solid: an opacity written into it is dropped.)
+local function colour(value: OptionValue?, fallback: string): Rgba
+	if type(value) == "string" and (#value == 7 or #value == 9) and string.match(value, "^#%x+$") then
+		return hex(string.sub(value, 1, 7))
+	end
+	return hex(fallback)
+end
+
+local function dark_of(c: Rgba): Rgba
+	local h, s = gmnb.to_hsl(c)
+	return hsl(h, min(s, 0.8), 0.035)
+end
+
+local function bright_pair(a: Rgba, b: Rgba, ground: Rgba): (Rgba, Rgba)
+	local under = over(alpha(ground, PANEL), white)
+	local target = TEXT * 1.04
+	local function reads(): boolean
+		for i = 0, 8 do
+			if gmnb.contrast(mix(a, b, i / 8), under) < target then
+				return false
+			end
+		end
+		return true
+	end
+	a, b = gmnb.with_contrast(a, under, target), gmnb.with_contrast(b, under, target)
+	-- (Two colours far apart on the wheel are greyer, and darker, half way
+	-- between: then both are lifted a little more.)
+	for _ = 1, 30 do
+		if reads() then
+			break
+		end
+		a, b = mix(a, white, 0.05), mix(b, white, 0.05)
+	end
+	return a, b
+end
+
+-- System's bands: the accent, kept vivid (a grey stays grey), as the
+-- first band; for the second, the colour as far round the wheel from it
+-- as the design's cyan is from its gold; and the dark band in the second's
+-- hue, as the design's is.
+local function system_bands(accent: Rgba): Bands
+	local h, s = gmnb.to_hsl(accent)
+	local v = if s < 0.08 then s else clamp(s, 0.6, 1)
+	local ground = dark_of(hsl(h + 140, v, 0.5))
+	local a, b = bright_pair(hsl(h, v, 0.6), hsl(h + 140, v, 0.6), ground)
+	return { a = a, b = b, ground = ground }
+end
+
+-- Freestyle's: the three colours picked.
+local function custom_bands(o: { [string]: OptionValue }): Bands
+	local ground = dark_of(colour(o.paint_dark, DEFAULT_DARK))
+	local a, b = bright_pair(colour(o.paint_first, DEFAULT_FIRST), colour(o.paint_second, DEFAULT_SECOND), ground)
+	return { a = a, b = b, ground = ground }
+end
+
+-- What the bands of set `id` are made from for `ctx`, as a name: the
+-- same name, the same bands.
+local function bands_name(id: string, ctx: Ctx): string
+	if id == "system" then
+		return "system " .. (if ctx.accent then gmnb.to_hex(ctx.accent) else "-")
+	elseif id == "custom" then
+		local o = ctx.options
+		return "custom " .. tostring(o.paint_first) .. tostring(o.paint_second) .. tostring(o.paint_dark)
+	end
+	return id
+end
+
+local function bands_for(id: string, ctx: Ctx): Bands
+	if id == "system" then
+		return system_bands(ctx.accent or hex(FALLBACK_ACCENT))
+	elseif id == "custom" then
+		return custom_bands(ctx.options)
+	end
+	return BANDS[id]
+end
+
 -- A set of bands, and everything worked out from it.
 type Scheme = {
 	id: string,
+	-- The ramp its paint and its figures are coloured through.
+	ramp: Ramp,
 	a: Rgba,
 	b: Rgba,
 	ground: Rgba,
@@ -285,6 +389,7 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 
 	return {
 		id = id,
+		ramp = RAMPS[id] or ramp_of(set),
 		a = a,
 		b = b,
 		ground = ground,
@@ -312,20 +417,23 @@ local remembered: { [string]: Scheme } = {}
 local remembered_count = 0
 
 local function bands_id(value: OptionValue?): string
-	return if type(value) == "string" and BANDS[value] then value else "party"
+	return if type(value) == "string" and (BANDS[value] or value == "system" or value == "custom")
+		then value
+		else "party"
 end
 
 local function scheme_for(id: string, ctx: Ctx): Scheme
 	local strength = STRENGTH[tostring(ctx.options.glass)] or SMOKED
-	-- (Dragging the opacity slider: a scheme for every 64th.)
+	-- (Dragging the opacity slider: a scheme for every 64th. Dragging
+	-- through the colour chooser: one for every step.)
 	local opacity = ceil(ctx.opacity * 64) / 64
-	local key = id .. "|" .. strength .. "|" .. opacity
+	local key = bands_name(id, ctx) .. "|" .. strength .. "|" .. opacity
 	local s = remembered[key]
 	if not s then
 		if remembered_count >= 96 then
 			remembered, remembered_count = {}, 0
 		end
-		s = finish(id, BANDS[id], strength, opacity)
+		s = finish(id, bands_for(id, ctx), strength, opacity)
 		remembered[key] = s
 		remembered_count += 1
 	end
@@ -1287,6 +1395,7 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 	end
 	k.left, k.right, k.top, k.bottom = 0, -1, 0, -1
 	local alive = false
+	local turned_once = false
 	for i = #events, 1, -1 do
 		local e = events[i]
 		local age = e.age
@@ -1323,8 +1432,11 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 				end
 			end
 		elseif e.kind == "mode" or e.kind == "option" then
-			-- A new page, or new colours: one slow turn of the whole window.
-			if age < STIR_LIFE then
+			-- A new page, or new colours: one slow turn of the whole window,
+			-- for the newest of them only. (A colour or a slider being
+			-- dragged is an option a step; the turns would pile up.)
+			if age < STIR_LIFE and not turned_once then
+				turned_once = true
 				alive = true
 				local reach = sqrt(width * width + height * height) * 0.6
 				add_stir(k, sx, sy, width / 2, height / 2, reach, stir_turn(age * 0.8) * 0.5)
@@ -1350,7 +1462,7 @@ local function background(draw: Draw, frame: Frame): Again
 		return nil
 	end
 	local ctx = frame.ctx
-	local ramp = RAMPS[bands_id(ctx.options.bands)]
+	local ramp = scheme(ctx).ramp
 	local k, fresh = keep(width, height)
 	local cols, rows = k.cols, k.rows
 
@@ -1719,7 +1831,7 @@ local function display(draw: Draw, frame: Frame): Again
 		cols = cols,
 		rows = rows,
 		channels = 1,
-		ramp = RAMPS[s.id],
+		ramp = s.ramp,
 	})
 	if kind == "result" then
 		-- The figures land white-hot, and cool into their paint.
@@ -1761,7 +1873,7 @@ local function bands_tile(draw: Draw, frame: Preview, choice: string)
 	local s = scheme_for(id, frame.ctx)
 	local w, h = frame.width, frame.height
 	draw:push_clip(0, 0, w, h, RADIUS)
-	tile_swirl(draw, w, h, RAMPS[id])
+	tile_swirl(draw, w, h, s.ramp)
 	draw:rounded_rect(w - 40, h - 30, 30, 20, 6, s.a)
 	draw:rect(w - 31, h - 23, 12, 2, s.ground)
 	draw:rect(w - 31, h - 19, 12, 2, s.ground)
@@ -1775,12 +1887,18 @@ local function glass_tile(draw: Draw, frame: Preview, choice: string)
 	-- (As strong as it would be: the strength named, or what the text needs.)
 	local strength = max(STRENGTH[choice] or SMOKED, s.least)
 	draw:push_clip(0, 0, w, h, RADIUS)
-	tile_swirl(draw, w, h, RAMPS[s.id])
+	tile_swirl(draw, w, h, s.ramp)
 	draw:rounded_rect(14, 10, w - 28, h - 20, 8, alpha(s.lift, strength))
 	draw:border(14, 10, w - 28, h - 20, 8, 1, alpha(s.b, 0.5))
 	local tw, th = draw:text_size("7", { size = 20, weight = 500 })
 	draw:text("7", (w - tw) / 2, (h - th) / 2, { size = 20, weight = 500 }, s.fg)
 	draw:pop()
+end
+
+local function is(bands: string)
+	return function(options: { [string]: OptionValue }, _ctx: Ctx): boolean
+		return options.bands == bands
+	end
 end
 
 local options: { Option } = {
@@ -1798,8 +1916,53 @@ local options: { Option } = {
 			{ id = "orchid", label = "Orchid" },
 			{ id = "absinthe", label = "Absinthe" },
 			{ id = "marble", label = "Marble" },
+			{ id = "system", label = "System" },
+			{ id = "custom", label = "Freestyle" },
 		},
 		preview = bands_tile,
+	},
+	{
+		id = "system_note",
+		type = "note",
+		group = "Paint",
+		label = "Worked out from your desktop's accent colour (the freedesktop portal setting your desktop or shell publishes), and follows it live.",
+		visible = is("system"),
+	},
+	{
+		id = "paint_first",
+		type = "color",
+		group = "Paint",
+		label = "First colour",
+		description = "The = key, what is lit and the focus ring. Lightened if the figures need it",
+		default = DEFAULT_FIRST,
+		visible = is("custom"),
+	},
+	{
+		id = "paint_second",
+		type = "color",
+		group = "Paint",
+		label = "Second colour",
+		description = "Lines, links and the operators' signs. Lightened if the figures need it",
+		default = DEFAULT_SECOND,
+		visible = is("custom"),
+		actions = {
+			{
+				label = "Opposite",
+				tooltip = "Use the colour opposite the first on the colour wheel",
+				run = function(o: { [string]: OptionValue }, _ctx: Ctx): { [string]: OptionValue }
+					return { paint_second = gmnb.to_hex(gmnb.complement(colour(o.paint_first, DEFAULT_FIRST))) }
+				end,
+			},
+		},
+	},
+	{
+		id = "paint_dark",
+		type = "color",
+		group = "Paint",
+		label = "Dark colour",
+		description = "What the two flow through, and the glass: its hue, kept near black",
+		default = DEFAULT_DARK,
+		visible = is("custom"),
 	},
 	{
 		id = "glass",
@@ -2075,6 +2238,10 @@ local POURS: { [string]: { number } } = {
 	absinthe = { 3, 4, 6, 7 },
 	-- Three notes, no third among them: stone.
 	marble = { 2, 4, 7 },
+	-- Fourths stacked up from the bottom: plain, as a desktop is.
+	system = { 1, 3, 5, 7 },
+	-- D major, the whole chord up from its root: paint of your own.
+	custom = { 4, 6, 7 },
 }
 
 -- Which sound for which event. This table is the whole of it for most

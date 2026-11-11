@@ -17,7 +17,9 @@ use gmnb_theme::theme::{self, Source, Theme};
 use gmnb_theme::types::*;
 use gmnb_theme::{Ctx, Limits, OptionValue, Style};
 
-const BANDS: [&str; 6] = ["party", "lava", "lagoon", "orchid", "absinthe", "marble"];
+const BANDS: [&str; 8] = [
+    "party", "lava", "lagoon", "orchid", "absinthe", "marble", "system", "custom",
+];
 const GLASS: [&str; 3] = ["clear", "smoked", "panel"];
 
 /// The limits a theme really has when `GMNB_REAL_LIMITS` is set (run so
@@ -487,6 +489,112 @@ fn every_pixel_of_the_paint_is_one_of_its_ramps_colours() {
         let notes = theme.take_draw_notes();
         assert!(notes.is_empty(), "{notes:?}");
     }
+}
+
+/// The sets of one's own paint in the ramp of the bands their style names,
+/// whatever the accent or the colours picked, and follow a new one on the
+/// theme that drew the last: System on a desktop of each of a few accents
+/// and Freestyle from a few picks, one after another on one theme, its
+/// paint, its figures and its tile each in the ramp of the moment. (A
+/// theme holds the colours of eight ramps at once; these are more.)
+#[test]
+fn own_colours_paint_in_their_own_ramp() {
+    let mut theme = swirls();
+    let option = theme
+        .def
+        .options
+        .iter()
+        .find(|o| o.id == "bands")
+        .unwrap()
+        .clone();
+    let mut cases = Vec::new();
+    for accent in [
+        [0.2, 0.4, 0.9],
+        [0.1, 0.8, 0.3],
+        [1.0, 0.9, 0.0],
+        [0.9, 0.1, 0.8],
+        [0.5, 0.5, 0.5],
+    ] {
+        let mut c = ctx(&theme, &[("bands", text("system"))]);
+        c.accent = Some(accent);
+        cases.push((format!("system {accent:?}"), "system", c));
+    }
+    for (first, second, dark) in [
+        ("#ff0000", "#00ffff", "#000000"),
+        ("#000000", "#000000", "#ffffff"),
+        ("#ffff00", "#ff00ff", "#00ff00"),
+        ("#808080", "#7c4dff", "#3a2014"),
+    ] {
+        let c = ctx(
+            &theme,
+            &[
+                ("bands", text("custom")),
+                ("paint_first", text(first)),
+                ("paint_second", text(second)),
+                ("paint_dark", text(dark)),
+            ],
+        );
+        cases.push((format!("freestyle {first} {second} {dark}"), "custom", c));
+    }
+    let mut tables = HashSet::new();
+    // (The clock runs on from case to case: the fields' allowance is kept by it.)
+    for (k, (name, choice, c)) in cases.iter().enumerate() {
+        let table = table(&mut theme, c);
+        tables.insert(table.clone());
+        let all: HashSet<[u8; 4]> = table.iter().copied().collect();
+        let first: HashSet<[u8; 4]> = table[..256].iter().copied().collect();
+        let mut seen = HashSet::new();
+        for i in 0..20 {
+            let f = Frame {
+                time: k as f64 * 10.0 + i as f64 / 6.0,
+                dt: 1.0 / 6.0,
+                ..Frame::sized(360.0, 600.0)
+            };
+            let d = draw_at(&theme, LayerKind::Background, c, &f);
+            seen.extend(field(&d).0.pixels.as_chunks::<4>().0);
+        }
+        let strays: Vec<_> = seen.difference(&all).take(5).collect();
+        assert!(strays.is_empty(), "{name}: not of the ramp: {strays:?}");
+        let (now, old) = (glyphs(9, 80.0), glyphs(4, 250.0));
+        let f = Frame {
+            time: k as f64 * 10.0 + 5.0,
+            value: Some(value(&now, &old, Role::Calculator, false, None)),
+            ..Frame::sized(428.0, 116.0)
+        };
+        let d = draw_at(&theme, LayerKind::Display, c, &f);
+        let figures: HashSet<[u8; 4]> = field(&d)
+            .0
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .copied()
+            .collect();
+        let strays: Vec<_> = figures.difference(&first).take(5).collect();
+        assert!(
+            strays.is_empty(),
+            "{name}: figures not of the first band: {strays:?}"
+        );
+        let tile = theme.preview(&option, choice, c).unwrap();
+        let tiled: HashSet<[u8; 4]> = tile
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Field { picture, .. } => Some(picture.pixels.as_chunks::<4>().0.to_vec()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let strays: Vec<_> = tiled.difference(&all).take(5).collect();
+        assert!(
+            strays.is_empty(),
+            "{name}: the tile not of the ramp: {strays:?}"
+        );
+    }
+    // Every case its own bands.
+    assert_eq!(tables.len(), cases.len());
+    let notes = theme.take_draw_notes();
+    assert!(notes.is_empty(), "{notes:?}");
 }
 
 /// The background at every size a window may have, from the least to a
@@ -976,7 +1084,18 @@ fn the_tiles_are_small_swirls() {
     let ids: Vec<&str> = theme.def.options.iter().map(|o| o.id.as_str()).collect();
     assert_eq!(
         ids,
-        ["bands", "glass", "speed", "stir", "digits", "motion_note"]
+        [
+            "bands",
+            "system_note",
+            "paint_first",
+            "paint_second",
+            "paint_dark",
+            "glass",
+            "speed",
+            "stir",
+            "digits",
+            "motion_note"
+        ]
     );
     let mut pictures = HashSet::new();
     for bands in BANDS {
@@ -999,8 +1118,8 @@ fn the_tiles_are_small_swirls() {
             assert!(tile.ops.iter().any(|op| matches!(op, Op::Text { .. })));
         }
     }
-    // Six sets, six pictures.
-    assert_eq!(pictures.len(), 6);
+    // Eight sets, eight pictures.
+    assert_eq!(pictures.len(), 8);
     let notes = theme.take_draw_notes();
     assert!(notes.is_empty(), "{notes:?}");
 }

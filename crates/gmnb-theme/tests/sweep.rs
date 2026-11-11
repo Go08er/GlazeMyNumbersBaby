@@ -142,7 +142,7 @@ fn values_of(o: &OptionDef) -> Vec<OptionValue> {
 /// Every set of saved options the sweep visits: all of the choices,
 /// toggles and sliders at once (colours at their defaults), then, for each
 /// value of each choice, every colour from the list (two colours: all
-/// pairs).
+/// pairs; three: 36 of the triples).
 fn option_sets(theme: &Theme) -> Vec<BTreeMap<String, OptionValue>> {
     let defs = &theme.def.options;
     let plain: Vec<&OptionDef> = defs
@@ -191,6 +191,12 @@ fn option_sets(theme: &Theme) -> Vec<BTreeMap<String, OptionValue>> {
                 }
             }
             tuples = next;
+        }
+        // Three colours or more (Swirls' Freestyle): 36 of the tuples,
+        // spread through them, as two colours give.
+        if tuples.len() > 36 {
+            let n = tuples.len();
+            tuples = (0..36).map(|i| tuples[i * 37 % n].clone()).collect();
         }
         for (id, v) in pick {
             for t in &tuples {

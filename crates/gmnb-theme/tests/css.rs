@@ -1289,8 +1289,12 @@ fn auroras_palettes_stay_readable() {
 // ---- Swirls: text over paint that moves ------------------------------------------
 
 /// Swirls' sets of bands and strengths of glass: every value of the two
-/// options of its that change a colour.
-const SWIRLS_BANDS: [&str; 6] = ["party", "lava", "lagoon", "orchid", "absinthe", "marble"];
+/// options of its that change a colour (System here on a desktop that
+/// shares no accent, Freestyle in its own colours; `swirls_own_styles`
+/// has them in many more).
+const SWIRLS_BANDS: [&str; 8] = [
+    "party", "lava", "lagoon", "orchid", "absinthe", "marble", "system", "custom",
+];
 const SWIRLS_GLASS: [&str; 3] = ["clear", "smoked", "panel"];
 
 /// Swirls in every set of bands under every glass, at three opacities.
@@ -1305,6 +1309,62 @@ fn swirls_styles() -> Vec<(String, Style)> {
                 let ctx = with(&swirls, true, opacity, &options);
                 let style = swirls.style(&ctx).unwrap().style.clone();
                 out.push((format!("swirls {bands} {glass} {opacity}"), style));
+            }
+        }
+    }
+    out
+}
+
+/// Swirls' System on a desktop of each of `colours`, and Freestyle from
+/// each: with its complement over a dark band of the next colour, and the
+/// colour three times over. Under each of `glasses`, at each of
+/// `opacities`.
+fn swirls_own_styles(
+    colours: &[[f32; 3]],
+    glasses: &[&str],
+    opacities: &[f32],
+) -> Vec<(String, Style)> {
+    let mut out = Vec::new();
+    let mut swirls = built_in("swirls");
+    let hex = |c: [f32; 3]| appcore::color::to_hex(c);
+    for &opacity in opacities {
+        for &glass in glasses {
+            for (i, &c) in colours.iter().enumerate() {
+                let mut ctx = with(
+                    &swirls,
+                    true,
+                    opacity,
+                    &[("bands", text("system")), ("glass", text(glass))],
+                );
+                ctx.accent = Some(c);
+                out.push((
+                    format!("swirls system {} {glass} {opacity}", hex(c)),
+                    swirls.style(&ctx).unwrap().style.clone(),
+                ));
+                let next = colours[(i + 1) % colours.len()];
+                for [first, second, dark] in [[c, appcore::color::complement(c), next], [c, c, c]] {
+                    let ctx = with(
+                        &swirls,
+                        true,
+                        opacity,
+                        &[
+                            ("bands", text("custom")),
+                            ("glass", text(glass)),
+                            ("paint_first", text(&hex(first))),
+                            ("paint_second", text(&hex(second))),
+                            ("paint_dark", text(&hex(dark))),
+                        ],
+                    );
+                    out.push((
+                        format!(
+                            "swirls freestyle {} {} {} {glass} {opacity}",
+                            hex(first),
+                            hex(second),
+                            hex(dark)
+                        ),
+                        swirls.style(&ctx).unwrap().style.clone(),
+                    ));
+                }
             }
         }
     }
@@ -1392,8 +1452,57 @@ fn swirls_field_colours(style: &Style) -> Vec<Rgba> {
 /// result, over every colour of the field.
 #[test]
 fn swirls_texts_read_over_every_colour_of_the_field() {
+    let bad = swirls_unreadable_over_the_field(swirls_styles());
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// The same for System under a desktop of each extreme accent of rule 2,
+/// and Freestyle from each (with its complement over a dark band of the
+/// next, and the colour three times over), under every glass, opaque and
+/// see-through: rules 3, 4 and 5 over the bands worked out from them and
+/// every blend between.
+#[test]
+fn swirls_own_colours_read_over_every_colour_of_the_field() {
+    let extremes = EXTREMES.map(|(_, hex)| appcore::color::hex(hex));
+    let styles = swirls_own_styles(&extremes, &SWIRLS_GLASS, &[1.0, 0.5, 0.1]);
+    let mut bad = swirls_unreadable_over_the_field(styles.clone());
+    bad.extend(unreadable(styles.clone()));
+    bad.extend(swirls_rings_unreadable_over_the_field(styles));
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// And under any desktop accent, and any colours picked: System from
+/// colours all round the wheel (every 15° of hue, light, dark, strong and
+/// grey) and from sixty at random, Freestyle from each with its
+/// complement over a dark band of the next, and three times over; under
+/// the clearest glass, opaque and see-through, rules 3, 4 and 5 over
+/// every colour of the field.
+#[test]
+#[ignore = "a long sweep (a minute or more): cargo test --release -p gmnb-theme --test css -- --ignored"]
+fn swirls_under_any_accent_read_over_every_colour_of_the_field() {
+    let mut colours = Vec::new();
+    for hue in (0..360).step_by(15) {
+        for (s, l) in [(1.0, 0.5), (1.0, 0.3), (1.0, 0.75), (0.45, 0.5), (0.1, 0.4)] {
+            colours.push(appcore::color::from_hsl(hue as f32, s, l));
+        }
+    }
+    // And sixty colours at random.
+    let mut seed = 17u64;
+    for _ in 0..60 {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        colours.push(appcore::color::hex(((seed >> 33) & 0xff_ffff) as u32));
+    }
+    let styles = swirls_own_styles(&colours, &["clear"], &[1.0, 0.1]);
+    let mut bad = swirls_unreadable_over_the_field(styles.clone());
+    bad.extend(swirls_rings_unreadable_over_the_field(styles));
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+fn swirls_unreadable_over_the_field(styles: Vec<(String, Style)>) -> Vec<String> {
     let mut bad = Vec::new();
-    for (name, style) in swirls_styles() {
+    for (name, style) in styles {
         let colours = swirls_field_colours(&style);
         let all = {
             let mut all = page_pairs(&style, true);
@@ -1486,7 +1595,7 @@ fn swirls_texts_read_over_every_colour_of_the_field() {
             }
         }
     }
-    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+    bad
 }
 
 // ---- Rule 5: the keyboard's focus ring ------------------------------------------
@@ -1649,8 +1758,36 @@ fn rings_unreadable(styles: Vec<(String, Style)>) -> Vec<String> {
 /// every glass, opaque and see-through.
 #[test]
 fn swirls_focus_ring_reads_over_every_colour_of_the_field() {
+    let styles = swirls_styles();
+    let bad = swirls_rings_unreadable_over_the_field(styles.clone());
+    // The gold alone vanishes on the gold paint: what reads is its edge.
+    // (So in the design's own sets. In one's own the ring may have been
+    // lifted off the first band, and then it reads alone as well.)
+    for (name, style) in styles {
+        if name.contains("system") || name.contains("custom") {
+            continue;
+        }
+        let Some(Value::FocusRing(ring)) = style.get("focus") else {
+            panic!("{name}: no focus ring");
+        };
+        let bare = FocusRing {
+            edge: None,
+            ..*ring
+        };
+        let got = gmnb_theme::focus::worst(&bare, &swirls_field_colours(&style), false);
+        assert!(
+            got < 1.5,
+            "{name}: the bare ring reads ({got:.2}): the edge isn't tested"
+        );
+    }
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// Rule 5 for each Swirls style over every colour of its field, opaque or
+/// see-through over a black and a white desktop: what fails.
+fn swirls_rings_unreadable_over_the_field(styles: Vec<(String, Style)>) -> Vec<String> {
     let mut bad = Vec::new();
-    for (name, style) in swirls_styles() {
+    for (name, style) in styles {
         let colours = swirls_field_colours(&style);
         let desktops: &[Option<Rgba>] = if style.opacity >= 1.0 {
             &[None]
@@ -1667,21 +1804,8 @@ fn swirls_focus_ring_reads_over_every_colour_of_the_field() {
                 .collect();
             bad.extend(rings_read(&format!("{name} {desktop:?}"), &style, &behind));
         }
-        // The gold alone vanishes on the gold paint: what reads is its edge.
-        let Some(Value::FocusRing(ring)) = style.get("focus") else {
-            panic!("{name}: no focus ring");
-        };
-        let bare = FocusRing {
-            edge: None,
-            ..*ring
-        };
-        let got = gmnb_theme::focus::worst(&bare, &colours, false);
-        assert!(
-            got < 1.5,
-            "{name}: the bare ring reads ({got:.2}): the edge isn't tested"
-        );
     }
-    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+    bad
 }
 
 /// The floor (rule 5's): a ring that would hide the keyboard's focus,
