@@ -517,16 +517,16 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 		-- Nearer the sky always reads better: halve the range five times.
 		-- (At the sky's own lightness, step 0, the text reads as it does
 		-- on the sky.)
-		local reads_at, too_much = 0, 32
-		while too_much - reads_at > 1 do
-			local middle = (reads_at + too_much) // 2
+		local fits, too_much = 0, 32
+		while too_much - fits > 1 do
+			local middle = (fits + too_much) // 2
 			if bearable(at(middle)) then
-				reads_at = middle
+				fits = middle
 			else
 				too_much = middle
 			end
 		end
-		return at(reads_at)
+		return at(fits)
 	end
 	local lights = {}
 	for i, light in p.lights do

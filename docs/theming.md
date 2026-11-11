@@ -1853,20 +1853,21 @@ compositor, the machine under a processor cap and shared with other
 work; Aurora beside it in the same runs; ranges are over five runs, the
 last after the merge with Sprinkles). Aurora's column is the aurora
 0.3 has (three runs, with Swirls and with the Aurora it replaces in the
-same session); the last column is that one, 0.2's four blobs and two
-arcs, as it measured beside it:
+same session; its grid has been made coarser since, and its hook's own
+figures are of that); the last column is that one, 0.2's four blobs and
+two arcs, as it measured beside it:
 
 | | Swirls | Aurora | Aurora as it was |
 |---|---|---|---|
-| The background's hook per frame, flowing (processor time; the app's colouring pass is inside it) | 0.9 to 1.2 ms: 0.55 the pass, 0.3 a fifth of a snapshot. 3.0 ms for the first frame at a window size (a whole snapshot) | 1.0 to 1.5 ms drifting: 0.5 the pass, the rest a quarter of a snapshot's columns and 160 stars. 4.3 to 4.7 ms for the first frame at a window size (a whole snapshot) | 0.23 ms with thirteen pulses (its gradients were rasterised by the toolkit, after the hook) |
-| The same while somebody types (six stirs and a ripple alive at once) | 1.8 to 2.2 ms, 3.3 ms at worst; the limit is 8 | 1.1 ms with eight rays, a result and a new palette at once, 2.5 ms at worst | |
+| The background's hook per frame, flowing (processor time; the app's colouring pass is inside it) | 0.9 to 1.2 ms: 0.55 the pass, 0.3 a fifth of a snapshot. 3.0 ms for the first frame at a window size (a whole snapshot) | 0.8 to 1.1 ms drifting: 0.35 the pass, the rest a quarter of a snapshot's columns and 160 stars. 2.5 to 3 ms for the first frame at a window size (a whole snapshot; 4 to 4.5 for the very first of a theme just loaded) | 0.23 ms with thirteen pulses (its gradients were rasterised by the toolkit, after the hook) |
+| The same while somebody types (six stirs and a ripple alive at once) | 1.8 to 2.2 ms, 3.3 ms at worst; the limit is 8 | 0.9 ms with eight rays, a result and a new palette at once, 2.2 ms at worst | |
 | The readout's hook per frame | 0.15 ms | 0.06 ms mid-result | the same |
 | The keypad's, its keys coming in | 0.04 to 0.09 ms | 0.12 ms with the pointer over it | the same |
 | A core, living, software renderer | 22 to 27% at 30 pictures a second (11% at 300×400, 14% at 360×600, 34% at 1280×800) | 15 to 17% at 15 (10% at 300×400, 13% at 360×600, 20% at 1280×800; 15% in the light; 19 to 20% see-through at 0.5) | 45 to 49% at 15 (44 to 63% when it was first measured) |
 | A core, living, GL on llvmpipe | 82 to 93% | 80 to 82% | 140 to 143% |
 | A core, typing all the while, software renderer | 33 to 41% | 65 to 67% (a key every quarter of a second: its rays are drawn thirty times a second) | 85 to 86% (its blooms every frame) |
 | At rest: reduced motion (the toolkit's animations off), the window not in use, held still, settled | 0 ticks of the clock in 10 s, each | 0, each, on both renderers; and with Living background off | 0 |
-| Resident memory (the base look: 69 MiB) | 78 to 82 MiB | 83 to 84 MiB living, 79 held still (in these runs: the base look 71, Swirls 84) | 79 MiB living, 77 held still |
+| Resident memory (the base look: 69 MiB) | 78 to 82 MiB | 81 to 84 MiB living, 79 held still (in these runs: the base look 71, Swirls 84) | 79 MiB living, 77 held still |
 
 `crates/gmnb-theme/tests/swirls.rs` prints the hook's figures
 (`what_a_frame_costs`) and holds the background inside its limits at

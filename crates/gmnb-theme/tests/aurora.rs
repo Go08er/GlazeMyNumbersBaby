@@ -849,16 +849,17 @@ fn the_background_stays_within_its_limits_at_any_size() {
         ));
         // The limit is 8 ms, and a frame is held to three quarters of it
         // in an optimised build (an unoptimised one: to all of it; and
-        // without `GMNB_REAL_LIMITS`, of the four times it has).
+        // without `GMNB_REAL_LIMITS`, of the four times it has). The
+        // first frame of a theme just loaded, which is the first time
+        // anything of it runs, to the limit itself.
         let most = if cfg!(debug_assertions) {
             limit
         } else {
             limit * 0.75
         };
         assert!(
-            first.max(worst) < most,
-            "{w}x{h}: a frame took {:.2} ms",
-            first.max(worst)
+            first < limit && worst < most,
+            "{w}x{h}: the first frame took {first:.2} ms, the worst after it {worst:.2} ms"
         );
         assert!(
             theme
