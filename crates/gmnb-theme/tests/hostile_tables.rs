@@ -21,7 +21,8 @@ fn load(name: &str, top: &str, body: &str) -> Theme {
         ),
     )
     .unwrap();
-    let t = Theme::load(Source::folder("t", &dir), Limits::default()).unwrap_or_else(|e| panic!("{e}"));
+    let t =
+        Theme::load(Source::folder("t", &dir), Limits::default()).unwrap_or_else(|e| panic!("{e}"));
     let _ = std::fs::remove_dir_all(&dir);
     t
 }
@@ -29,7 +30,11 @@ fn load(name: &str, top: &str, body: &str) -> Theme {
 /// How long a frame of the theme took, and what it said.
 fn frame(theme: &Theme) -> (Duration, String) {
     let t = Instant::now();
-    let r = theme.draw(LayerKind::Background, &Ctx::default(), &Frame::sized(400.0, 300.0));
+    let r = theme.draw(
+        LayerKind::Background,
+        &Ctx::default(),
+        &Frame::sized(400.0, 300.0),
+    );
     let took = t.elapsed();
     (
         took,
