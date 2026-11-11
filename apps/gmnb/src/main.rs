@@ -4,6 +4,7 @@ mod inert;
 mod keymap;
 mod launch;
 mod layers;
+mod paced;
 mod pages;
 mod paste;
 mod prefs;
@@ -223,11 +224,14 @@ fn activate(app: &adw::Application) {
         let w = win.clone();
         glib::timeout_add_local_once(Duration::from_millis(300), move || {
             let start = std::time::Instant::now();
+            // (A span measures this thread's processor time.)
+            let cpu = gmnb_theme::Span::new(Duration::ZERO);
             prefs::show(&w);
             if std::env::var_os("GMNB_THEME_STATS").is_some() {
                 eprintln!(
-                    "theme: Settings built in {:.1} ms",
-                    start.elapsed().as_secs_f64() * 1000.0
+                    "theme: Settings built in {:.1} ms ({:.1} ms of processor time)",
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    cpu.used().as_secs_f64() * 1000.0
                 );
             }
         });
@@ -288,6 +292,17 @@ fn focus_by_class(win: adw::ApplicationWindow, class: String) {
             // (A text field takes it in its text, which grab_focus says.)
             if w.has_css_class(&class) && w.grab_focus() {
                 win.set_focus_visible(true);
+                // Where it is in the window, for the tests that look at
+                // its ring.
+                if let Some(b) = w.compute_bounds(&win) {
+                    eprintln!(
+                        "GMNB_FOCUS: {class} at {} {} {} {}",
+                        b.x(),
+                        b.y(),
+                        b.width(),
+                        b.height()
+                    );
+                }
                 return;
             }
             let mut child = w.last_child();

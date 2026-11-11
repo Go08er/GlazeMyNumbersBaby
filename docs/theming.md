@@ -247,7 +247,7 @@ What `theme.luau` returns:
 | The theme is chosen, at start, or on *Reload* | The file, once, top to bottom. Its return value is the theme. | The theme table; fonts registered; the file's locals live until the theme is unloaded. |
 | Right after, and whenever `ctx` changes: light/dark, the desktop's accent, an option, the Background opacity, reduced motion, the desktop's font | `style(ctx)` | The checked result and the style generated from it. Regenerated only if the result differs. |
 | A layer needs a new picture (see [Drawing](#drawing)) | That layer's `draw` | The picture, until the layer next needs one. |
-| Settings shows the theme's options | `visible`, `preview`, an action's `run` | Each tile's picture until `ctx` changes. |
+| Settings shows the theme's options | `visible`, `preview`, an action's `run` | Each tile's picture until `ctx` changes. `visible` and `preview` are asked in passes of a shared budget ([Limits](#limits-and-what-happens-when-a-theme-fails)), never all at once. |
 | Something happens that may have a sound, and theme sounds are on | `sound(event, ctx)` | Nothing. |
 
 Rules the app keeps:
@@ -255,7 +255,11 @@ Rules the app keeps:
 - **A theme with no draw hooks costs nothing at rest.** No timers, no
   frames. The same holds for a theme whose hooks return `nil`.
 - The Background opacity slider calls `style` at most once per frame while
-  it is dragged.
+  it is dragged: the window follows it on the frame clock, at the value it
+  has when each frame begins, however many steps the toolkit reported
+  since the last one.
+- Settings asks a theme nothing while it is closed: no pass of its calls
+  waits, and nothing is armed for it.
 - Listing themes in Settings runs each theme's file in a throwaway sandbox
   to read its `name`, `description` and `options`, then discards it.
 - Without a theme no Luau machine is created at all.
@@ -405,12 +409,19 @@ on top of the background then in effect.
 grid. `size` is the drawn size and `stroke` the line's width, both in
 pixels. Without `color` an icon takes its control's.
 
-**FocusRing** `{ width, color, offset, radius }`: the ring around what
-holds the keyboard focus. It shows for keyboard use only; a click never
-draws it. `offset` is how far out from the element's edge the ring's
-outer edge is (negative: inside); the ring is `width` wide inside that,
-so DGMNB's `{ width 2, offset 2 }` touches the element. Its corners are
-the element's radius plus `offset`.
+**FocusRing** `{ width, color, offset, radius, edge }`: the ring around
+what holds the keyboard focus. It shows for keyboard use only; a click
+never draws it. `offset` is how far out from the element's edge the
+ring's outer edge is (negative: inside); the ring is `width` wide inside
+that, so DGMNB's `{ width 2, offset 2 }` touches the element. Its corners
+are the element's radius plus `offset`. `edge` (a Border, or `false`) is
+a line along both sides of the ring around a keypad's keys (the outer
+side only where the ring touches the key): keys lie on the window's
+background and whatever the theme draws there, which may be the ring's
+own colour. A ring and an edge 9:1 apart read on anything: on any colour,
+one of the two reaches 3:1. Elsewhere controls lie on the style's own
+surfaces, and the ring is drawn without it. The ring is never hidden: see
+[rule 5](#readability-rules).
 
 ---------------------------------------------------------------------------
 
@@ -632,8 +643,11 @@ only `font` and `radius` still apply. In the stylesheet each family's rules
 sit under a window class (`window.gmnb.own-switch switch { … }`) that the
 app sets for every family *not* listed.
 
-Aurora uses this to keep the toolkit's switches, sliders, menus and focus
-ring exactly as 0.2 had them.
+Aurora uses this to keep the toolkit's switches, sliders and menus
+exactly as 0.2 had them. (Not its focus ring any more: libadwaita's is
+the accent at half opacity, about 2:1 on the page and on a key, and a
+`native` ring is held to [rule 5](#readability-rules) as libadwaita draws
+it.)
 
 ### See-through windows
 
@@ -827,7 +841,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph's equation column and its analysis. (An empty list's text in the History panel lies on the panel, a surface of the style's.) |
 | `plain.radius` | Radius | `shape.card_radius` | same |
 | `scrim` | Color | black at 0.30 | The shade over what the sidebar or a sheet covers |
-| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius |
+| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given); below opacity 1 its colour is moved 9:1 from `bg`, and it has `edge { 1, bg }` (around a key the desktop shows through the backdrop) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius. `edge`: the keypad (Rust, `widgets/keypad.rs`) draws it around its key that holds the focus |
 
 ### Header and window buttons
 
@@ -1399,7 +1413,11 @@ reader hears. If the hook fails, the app paints the value the base way:
 A `choice` option may have `preview(draw, frame, choice)`. It draws one
 tile for one choice with the same draw API; `frame` is
 `{ width = 96, height = 56, ctx }`. Tiles are still pictures, redrawn
-when `ctx` changes.
+when `ctx` changes. Settings draws them in passes of a shared budget
+([Limits](#limits-and-what-happens-when-a-theme-fails)), after whether
+each option is shown: until its picture comes, a tile shows a faint
+blank of its size, and after a change of `ctx` each keeps the picture it
+had until its new one is drawn.
 
 ## Options
 
@@ -1571,6 +1589,7 @@ sounds.
 | Time: `style` | 50 ms |
 | Time: one `draw` call; all `place` calls of one keypad frame | 8 ms; 2 ms |
 | Time: one `preview`, `visible` or action | 10 ms |
+| Time: Settings' `visible` and `preview` calls together | 10 ms a pass. Once a pass's calls have used it, no more start that pass (the one running keeps its own 10 ms, so a pass is never much over 20 ms); the rest wait for the next pass, an idle callback once the window has drawn and taken its input, while Settings is open. Whether options are shown is asked first, then the tiles, in order. Opening Settings, and each change of `ctx` while it is open, runs one pass at once. |
 | One library call's own work, which the time limit can't stop midway: a plain search (`string.find` with `plain` or a pattern of no magic characters, `string.split`); a pattern search (`find`, `match`, `gmatch`, `gsub`); `table.move` | 2^30 bytes (string × pattern); 2^26 (string bytes × the pattern's longest `[set]`); 2^20 elements. Past them the call is an error. |
 | Draw calls per `draw` | 4096 |
 | What a frame costs to draw | 1000 points for each 760 × 640 of what the layer is charged over (a keypad's or a readout's, the window too), and never fewer than 1000 ([Drawing per frame](#drawing-per-frame)) |
@@ -1911,6 +1930,7 @@ Where 0.3's structure changed for the base look, Aurora follows it:
 | The aurora | Four blobs | Four blobs under two veils of light in the palette's hot colours |
 | A pulse | One bloom | A bloom; the equals key's, a result's and a new palette's also send a wavefront ahead |
 | A toggle key that is on (2nd, hyp) | The equals key's gradient at 0.85: its small text fell to 2.5:1 in the light palettes | The gradient solid, deepened until the text reaches 4.5:1 |
+| The keyboard's focus ring | The toolkit's: the accent at half opacity, 2 px inside the control, about 2:1 on the page and 2.2:1 on a key | The accent, solid, 2 px a pixel out from the control (4.5:1 or more on the opaque page, 4.5 to 6 on a number key); round a key a line of the backdrop's colour along each side, and see-through the accent deepened 9:1 from that line, so that it reaches 3:1 or more over any desktop that shows through, at any opacity (rule 5) |
 
 ## Readability rules
 
@@ -1991,6 +2011,38 @@ straight on a page counts wherever the style puts something under it in
 `plain.background`: the base look's scrim, Aurora's frost, Glazed's cards
 (solid at every opacity: only its wall thins).
 
+**5. The focus ring** (new). The keyboard's focus is never hidden. For
+the base look and each built-in theme, each palette, light and dark, at
+opacity 1, 0.5 and 0.1 (see-through over a black and a white desktop, as
+rule 4): every ring (`focus`, `date.calendar.focus`,
+`converter.value.focus`) is at least 1 px wide and reaches **3** on what
+it lies on. Around a key: the window's background (for Swirls each of
+the 768 colours of its field), and the key's own fill where the ring is
+inside it, the ring or its `edge` counting. Around a control on the
+page's surfaces (`plain`, the header, the sidebar, a panel): that
+surface, the ring alone. The calendar's ring: the popover, and a day. A
+converter value's: its pane, and its field. A ring left to the toolkit
+(`native` lists `focus`) is judged as libadwaita draws it: its accent at
+half opacity, 2 px inside the control. The tests are
+`every_focus_ring_reads` (Aurora's System and Freestyle from rule 2's
+colours too), `every_focus_ring_reads_at_every_opacity` (every twentieth
+from 0.1 to 1) and
+`swirls_focus_ring_reads_over_every_colour_of_the_field`
+(`tests/css.rs`), and in the running app `tests/focus.rs`, which looks at
+the pixels around a key. A see-through window's backdrop can be any
+colour between the window's and the desktop's, so a ring round a key
+there is kept [9:1 from its edge](#text-surface-control-state).
+
+The same floor holds for every theme, not only the built-in ones, at the
+window's own colours (`crates/gmnb-theme/src/focus.rs`): a ring under
+1 px, or under 3:1 on what it lies on (with its edge around a key), is
+the base look's ring instead (2 px just outside the control, in the
+theme's `accent_text`, else its `fg`, else black or white, whichever
+reads), and Settings notes why. A `native` ring that doesn't reach 3:1
+is the app's ring instead, held to the same floor. So `width = 0`, a
+transparent colour, or the colour of the keys, can't hide where the
+keyboard is (`a_ring_that_would_hide_the_focus_is_the_base_looks`).
+
 ## For implementers
 
 ### Environment hooks
@@ -2007,13 +2059,13 @@ straight on a page counts wherever the style puts something under it in
 | `GMNB_ACTIVE` | The window counts as the one in use whatever the compositor says. A headless compositor never says so, and layers only animate in a window that is. |
 | `GMNB_POINTER="x,y"` | A pointer position for the first keypad's layer, as now. |
 | `GMNB_BENCH="themes=base,aurora,mono,base;opacity"` | Measure: each theme switch, and an opacity drag from 1 to 0.1 and back, each to the end of the next painted frame; prints the figures and the hub's counters, then quits. |
-| `GMNB_THEME_STATS` | Print the hub's counters once the window has settled, after 1.2 s or after as many milliseconds as its value: Luau machines, `style` calls, provider loads and their property counts; and for the layers the frames drawn by kind, the milliseconds their hooks and their replay took, the timers and frame callbacks ever armed and alive now, and each hook's failures; and for a theme's animations the media threads ever started (0 in the base look), the thread's wake-ups, the frames it decoded and the processor time they took. |
+| `GMNB_THEME_STATS` | Print the hub's counters once the window has settled, after 1.2 s or after as many milliseconds as its value: Luau machines, `style` calls, provider loads and their property counts; and for the layers the frames drawn by kind, the milliseconds their hooks and their replay took, the timers and frame callbacks ever armed and alive now, and each hook's failures; and for a theme's animations the media threads ever started (0 in the base look), the thread's wake-ups, the frames it decoded and the processor time they took; and Settings' calls into the theme (made, the passes they were made in, the longest pass in processor time), with a line `Settings has its answers` whenever it has made them all, and the processor time Settings took to open (`GMNB_PREFS=1`). |
 | `GMNB_SOUND=0` | No sound for the run; nothing sound-related is created. `null`: the mixer runs with no sound server, for tests. |
 | `GMNB_SOUND_DUMP=<folder>` | Every sound the theme makes is written there as a WAV file. |
 | `GMNB_DATE_TO=YYYY-MM-DD` | The date page's "To" date (the comparison's "Date with a result"). |
 | `GMNB_DATE_ADD` | Open the date page on "Add or subtract days". |
 | `GMNB_PREFS=about` | Open About, as `GMNB_PREFS=1` opens Settings. |
-| `GMNB_FOCUS=<css class>` | Give the keyboard's focus, its ring shown, to the first focusable widget with that class (`wc-conv-value`: the converter's first value), as Tab to it would. |
+| `GMNB_FOCUS=<css class>` | Give the keyboard's focus, its ring shown, to the first focusable widget with that class (`wc-conv-value`: the converter's first value; `wc-tile`: Settings' first tile), as Tab to it would, and say where it is in the window (`GMNB_FOCUS: <class> at x y w h`). |
 
 `GMNB_DARK`, `GMNB_OPACITY`, `GMNB_SIZE`, `GMNB_MODE`, `GMNB_KEYS` and the
 rest keep working.
@@ -2179,6 +2231,12 @@ tables, says `library:0:`.
     watching the folder once Settings is closed; and *Open themes folder*
     opening the folder in the app `mimeapps.list` names, on a private bus
     whose stand-in portal GTK would have used and isn't asked.
+12. Settings' calls into a theme (`apps/gmnb/src/paced.rs`, and in the
+    running app `tests/settings.rs`): a theme with 24 options of 16
+    tiles whose hooks each take 6 ms opens Settings in one pass, no pass
+    is much over its budget and one call, every call is made in the end
+    with none failed, none is made once Settings has closed, and the
+    opacity slider moved nine times in one frame calls `style` once.
 
 ### Open points
 
@@ -2246,3 +2304,26 @@ Decided here, and worth a second look by the owner:
     the portal's name can be started and its OpenURI is version 3 or
     later), sandboxed or not, and the portal then looks the handler up in
     its own environment, or asks.
+15. **Settings' theme calls are paced, not capped**: a theme whose hooks
+    all run just under their limits still gets every tile drawn, about
+    a pass a frame, while Settings is open, rather than blanks after a
+    total. Each change of `ctx` starts the tiles again (an opacity drag
+    redraws a pass a frame).
+16. **The focus ring's floor is judged on what the ring lies on**, not
+    on the control it rings ([rule 5](#readability-rules)): a ring outside
+    a key covers the page, not the key. DGMNB's own ring is `accent_text`
+    touching an equals key filled with `accent`: 1.2:1 to that key (1.1
+    in the dark), 4.5:1 and more to the page. Judged against its key, the
+    base look would fail its own floor. A ring the colour of its key's
+    fill, inside it, is caught.
+17. **A ring's `edge` is drawn around a keypad's keys only**: they are
+    the controls that lie straight on the window's background and
+    whatever a theme draws there. Elsewhere a control lies on one of the
+    style's own surfaces, where a ring of one colour can be checked (the
+    toolkit draws an outline in one colour; a second line there would
+    need every control's own shadows rewritten). On a see-through window
+    the base look's ring has an edge of `bg`, and its colour is moved
+    9:1 from it (rule 5 over a black desktop: 1.15:1 without them in the
+    light palette at 0.5, and an edge alone left 2.15:1 at 0.7), which
+    Mono and Glazed, whose rings start from it, keep. At opacity 1 the
+    ring is DGMNB's.

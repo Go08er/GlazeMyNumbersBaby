@@ -80,6 +80,7 @@ mod engine;
 mod error;
 pub mod events;
 pub mod field;
+pub mod focus;
 pub mod install;
 pub mod layer;
 pub mod library;
@@ -138,6 +139,10 @@ pub struct Limits {
     pub action: Duration,
     /// All `place` calls of one keypad frame together (a [`Span`]).
     pub place: Duration,
+    /// Settings' `visible` and `preview` calls of one pass together (a
+    /// [`Span`] the app checks between calls): once they have used it, no
+    /// more start until the next pass. Each keeps its own limit.
+    pub settings: Duration,
     /// Failures after which a hook is disabled.
     pub strikes: u32,
     /// Size of a chunk's source, in bytes (Luau's compiler can't be
@@ -176,6 +181,7 @@ impl Default for Limits {
             visible: Duration::from_millis(10),
             action: Duration::from_millis(10),
             place: Duration::from_millis(2),
+            settings: Duration::from_millis(10),
             strikes: 3,
             source_bytes: 512 << 10,
             log_lines: 200,

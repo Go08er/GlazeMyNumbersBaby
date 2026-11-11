@@ -210,6 +210,7 @@ pub fn resolve(ctx: &Ctx, theme: &ThemeValue) -> Resolved {
         }
     }
     unknown(schema::tree(), theme, "", &mut notes);
+    crate::focus::floor(&tokens, &mut values, &mut notes);
     Resolved {
         style: Style {
             dark: ctx.dark,

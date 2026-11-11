@@ -13,6 +13,7 @@ use gmnb_theme::layer::PREVIEW_SIZE;
 use gmnb_theme::theme::{OptionDef, OptionKind};
 
 use crate::layers::tile::Tile;
+use crate::paced::{self, Ask};
 use crate::pages::Ctx;
 use crate::settings::Persist;
 use crate::theme::{parse_hex, rgba, to_hex};
@@ -37,7 +38,16 @@ pub fn show(win: &Rc<Window>) {
     let theme = adw::ToggleGroup::new();
     // In DGMNB's order (its Settings page's "Style").
     for (name, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-        theme.add(adw::Toggle::builder().name(name).label(label).build());
+        // Never cut short: a label of its own that doesn't ellipsize (the
+        // toggle's would, to "S…", and the row's text took the room).
+        let shown = gtk::Label::new(Some(label));
+        theme.add(
+            adw::Toggle::builder()
+                .name(name)
+                .label(label)
+                .child(&shown)
+                .build(),
+        );
     }
     theme.set_active_name(Some(&ctx.store.data.borrow().theme));
     // Its parts equal, as DGMNB's.
@@ -49,6 +59,18 @@ pub fn show(win: &Rc<Window>) {
         .build();
     row.add_suffix(&theme);
     group.add(&row);
+    {
+        // In the least window the three toggles and the row's text don't
+        // fit side by side: the toggles take only the room their labels
+        // need, and the row says only its title (the toggles say the
+        // rest).
+        let narrow = adw::Breakpoint::new(
+            adw::BreakpointCondition::parse("max-width: 330sp").expect("a condition"),
+        );
+        narrow.add_setter(&theme, "homogeneous", Some(&false.to_value()));
+        narrow.add_setter(&row, "subtitle", Some(&"".to_value()));
+        dialog.add_breakpoint(narrow);
+    }
     {
         let ctx = ctx.clone();
         theme.connect_active_name_notify(move |t| {
@@ -140,6 +162,8 @@ pub fn show(win: &Rc<Window>) {
         scale.set_hexpand(true);
         scale.set_valign(gtk::Align::Center);
         scale.set_width_request(160);
+        // (GMNB_STEPS' `slide:` finds it by this.)
+        scale.add_css_class("wc-opacity-slider");
         // The range reports its value as a fraction (0.1); say it as shown.
         scale.update_property(&[
             gtk::accessible::Property::Label("Background opacity"),
@@ -156,11 +180,29 @@ pub fn show(win: &Rc<Window>) {
         opacity.add_suffix(&scale);
         opacity.add_suffix(&shown);
         {
+            // The window follows the slider once a frame, at the value it
+            // has then: the toolkit sends a step for every move it is told
+            // of, and each step calls the theme's `style`
+            // (docs/theming.md, "When a theme runs").
+            let follow = {
+                let ctx = ctx.clone();
+                let pending = Rc::default();
+                paced::OnceAFrame::new(&scale, move |v: f64| {
+                    let alpha = crate::settings::backdrop_alpha(v);
+                    apply_backdrop(&ctx.backdrop, alpha);
+                    // One step of a drag: only the properties that change
+                    // with the opacity are rewritten (the live provider).
+                    ctx.hub.set_opacity(alpha, true);
+                    ctx.store.data.borrow_mut().background_opacity = v;
+                    persist_at_rest(&ctx, &pending);
+                })
+            };
             let (ctx, shown) = (ctx.clone(), shown.clone());
-            let pending = Rc::default();
             scale.connect_value_changed(move |s| {
                 if ctx.layers.covers(s) {
-                    // Covered, Settings changes nothing (R15-M-02).
+                    // Covered, Settings changes nothing (R15-M-02): what
+                    // was moved before it was covered stands.
+                    follow.flush();
                     let saved = ctx.store.data.borrow().background_opacity;
                     let saved = f64::from(crate::settings::backdrop_alpha(saved));
                     if s.value() != saved {
@@ -171,13 +213,7 @@ pub fn show(win: &Rc<Window>) {
                 let v = s.value();
                 shown.set_text(&percent(v));
                 s.update_property(&[gtk::accessible::Property::ValueText(&percent(v))]);
-                let alpha = crate::settings::backdrop_alpha(v);
-                apply_backdrop(&ctx.backdrop, alpha);
-                // One step of a drag: only the properties that change
-                // with the opacity are rewritten (the live provider).
-                ctx.hub.set_opacity(alpha, true);
-                ctx.store.data.borrow_mut().background_opacity = v;
-                persist_at_rest(&ctx, &pending);
+                follow.set(s, v);
             });
         }
         group.add(&opacity);
@@ -226,16 +262,49 @@ pub fn show(win: &Rc<Window>) {
     page.add(&group);
 
     dialog.add(&page);
-    // The theme rows' handlers live as long as the dialog does; the watch
-    // on the themes folder ends as it closes, and the hub tells the window
-    // again.
+    // The theme rows' handlers live as long as the dialog does; once it
+    // has closed, nothing more is asked of the theme for it, the watch on
+    // the themes folder ends, and the hub tells the window again.
     dialog.connect_closed(move |_| {
+        themes.stop();
         themes.unwatch();
         themes.ctx.hub.set_front_tell(None);
     });
     // A dialog's keys never reach the window's controllers.
     crate::window::own_keys(&dialog);
     dialog.present(Some(&win.widget()));
+    fit_least_window(&dialog);
+}
+
+/// What libadwaita's bottom sheet, which Settings is shown in when the
+/// window is narrow, puts around a dialog: 6 px each side (measured, 1.9).
+const SHEET_EDGES: i32 = 12;
+
+/// libadwaita's preferences dialog asks for 360 px however narrow its
+/// page could be (the width request of the breakpoint bin in its
+/// template). In a bottom sheet that is 372 px, more than a new window
+/// (360 px) or the least one (300 px) has: the sheet was cut off at the
+/// window's edge and its rows squeezed. Settings asks for what the least
+/// window leaves instead, and its rows for no more than that; wider, it
+/// is laid out as before.
+fn fit_least_window(dialog: &adw::PreferencesDialog) {
+    let least = appcore::metrics::window::MIN_SIZE.0 as i32 - SHEET_EDGES;
+    // As high as it asked to be (150 px in libadwaita 1.9).
+    let mut height = -1;
+    let mut todo = vec![dialog.clone().upcast::<gtk::Widget>()];
+    while let Some(w) = todo.pop() {
+        if w.is::<adw::BreakpointBin>() && w.width_request() > least {
+            w.set_width_request(least);
+            height = height.max(w.height_request());
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            todo.push(c);
+        }
+    }
+    // A dialog with breakpoints of its own (`show`) needs a least size.
+    dialog.set_size_request(least, height.max(150));
 }
 
 /// Settings' Theme group and the chosen theme's options under it.
@@ -258,11 +327,14 @@ struct ThemeSettings {
     options_box: gtk::Box,
     /// Each option row and its option, to show or hide as `visible` says.
     rows: RefCell<Vec<(gtk::Widget, OptionDef)>>,
-    /// Each tile a `preview` drew, with its option and its choice: they
+    /// Each tile a `preview` draws, with its option and its choice: they
     /// are drawn again when `ctx` changes.
     tiles: RefCell<Vec<(Tile, OptionDef, String)>>,
-    /// The `ctx` the tiles were drawn for: each is drawn once for each.
+    /// The `ctx` the tiles are drawn for: each is drawn once for each.
     tiles_ctx: RefCell<Option<gmnb_theme::Ctx>>,
+    /// The calls into the theme still to make (`visible`, `preview`), in
+    /// passes that never hold the window.
+    turns: Rc<paced::Turns>,
     /// The theme's load the tiles' options are of ([`Hub::epoch`]): after
     /// another, they are the options of a theme that isn't loaded, and
     /// are built again, not drawn.
@@ -270,6 +342,8 @@ struct ThemeSettings {
     /// Set while the list or the options are being built: their widgets'
     /// signals then change nothing.
     building: std::cell::Cell<bool>,
+    /// Settings has closed.
+    closed: std::cell::Cell<bool>,
     pending: Rc<RefCell<Option<gtk::glib::SourceId>>>,
 }
 
@@ -347,8 +421,10 @@ impl ThemeSettings {
             rows: RefCell::default(),
             tiles: RefCell::default(),
             tiles_ctx: RefCell::default(),
+            turns: paced::Turns::new(),
             tiles_epoch: std::cell::Cell::new(0),
             building: std::cell::Cell::new(false),
+            closed: std::cell::Cell::new(false),
             pending: Rc::default(),
         });
         {
@@ -614,6 +690,10 @@ impl ThemeSettings {
     /// options as their `visible` now says.
     fn changed(self: &Rc<Self>, id: &str, value: OptionValue, drag: bool) {
         let theme = self.ctx.hub.active();
+        // Whether each row is shown is asked again, before the option is
+        // set: a style that changes with it asks for the tiles, and the
+        // rows go first in that same pass, not in one of their own.
+        self.want_visible();
         self.ctx.hub.set_option(id, value.clone(), drag);
         self.ctx
             .store
@@ -625,15 +705,25 @@ impl ThemeSettings {
         } else {
             self.ctx.store.persist();
         }
-        self.sync_visible();
-        self.draw_tiles();
+        self.want_tiles();
+        self.ask();
         self.sync_report();
     }
 
     /// Has the theme draw every tile again (still pictures, for the
     /// `ctx` there is now), once for each `ctx`; not while the options
     /// are being built or changed in a batch (they are drawn after).
-    fn draw_tiles(&self) {
+    fn draw_tiles(self: &Rc<Self>) {
+        if self.building.get() {
+            return;
+        }
+        self.want_tiles();
+        self.ask();
+    }
+
+    /// Every tile, to be drawn for the `ctx` there is now, if it hasn't
+    /// been asked for that one. Each keeps the picture it has until then.
+    fn want_tiles(&self) {
         if self.building.get() || self.tiles_epoch.get() != self.ctx.hub.epoch() {
             return;
         }
@@ -641,16 +731,63 @@ impl ThemeSettings {
         if self.tiles_ctx.borrow().as_ref() == Some(&ctx) {
             return;
         }
-        for (tile, option, choice) in self.tiles.borrow().iter() {
-            tile.set_list(self.ctx.hub.preview(option, choice));
+        for n in 0..self.tiles.borrow().len() {
+            self.turns.ask(Ask::Tile(n));
         }
         self.tiles_ctx.replace(Some(ctx));
     }
 
-    fn sync_visible(&self) {
-        for (row, option) in self.rows.borrow().iter() {
-            row.set_visible(self.ctx.hub.option_visible(option));
+    /// Every row with a `visible`, to be asked again.
+    fn want_visible(&self) {
+        for (n, (_, option)) in self.rows.borrow().iter().enumerate() {
+            if option.visible.is_some() {
+                self.turns.ask(Ask::Visible(n));
+            }
         }
+    }
+
+    /// Asks the theme what is waiting: as much as one pass's budget allows
+    /// now, the rest in passes to come while Settings is open.
+    fn ask(self: &Rc<Self>) {
+        // Closed, Settings asks nothing (a change of style after it closed
+        // still reaches its subscriber until the dialog has gone).
+        if self.closed.get() {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        self.turns.go(Rc::new(move |ask| {
+            if let Some(t) = weak.upgrade() {
+                t.answer(ask);
+            }
+        }));
+    }
+
+    /// One call into the theme, and its answer shown.
+    fn answer(&self, ask: Ask) {
+        // Asked of a theme that has been replaced since: its rows are gone.
+        if self.tiles_epoch.get() != self.ctx.hub.epoch() {
+            return;
+        }
+        match ask {
+            Ask::Visible(n) => {
+                let row = self.rows.borrow().get(n).cloned();
+                if let Some((row, option)) = row {
+                    row.set_visible(self.ctx.hub.option_visible(&option));
+                }
+            }
+            Ask::Tile(n) => {
+                let tile = self.tiles.borrow().get(n).cloned();
+                if let Some((tile, option, choice)) = tile {
+                    tile.set_list(self.ctx.hub.preview(&option, &choice));
+                }
+            }
+        }
+    }
+
+    /// Settings has closed: nothing more is asked.
+    fn stop(&self) {
+        self.closed.set(true);
+        self.turns.stop();
     }
 
     /// The chosen theme's options, rendered from its option list: one
@@ -662,8 +799,9 @@ impl ThemeSettings {
         }
         self.rows.borrow_mut().clear();
         self.tiles.borrow_mut().clear();
-        // Each tile is drawn as it is made, for this `ctx`.
-        self.tiles_ctx.replace(Some(self.ctx.hub.frame_ctx()));
+        // What was asked of the rows that were is forgotten.
+        self.turns.stop();
+        self.tiles_ctx.replace(None);
         self.tiles_epoch.set(self.ctx.hub.epoch());
         let defs = self.ctx.hub.option_defs();
         let values = self.ctx.hub.option_values();
@@ -688,7 +826,12 @@ impl ThemeSettings {
             self.rows.borrow_mut().push((row, def));
         }
         self.building.set(false);
-        self.sync_visible();
+        // Whether each row is shown, then each tile's picture: the first
+        // pass now, so a theme whose hooks are quick shows them all at
+        // once; until its picture comes, a tile shows its place.
+        self.want_visible();
+        self.want_tiles();
+        self.ask();
         self.sync_report();
     }
 
@@ -750,7 +893,9 @@ impl ThemeSettings {
                 let flow = gtk::FlowBox::builder()
                     .selection_mode(gtk::SelectionMode::Single)
                     .max_children_per_line(5)
-                    .min_children_per_line(3)
+                    // Two in the least window, where three don't fit;
+                    // three or more wherever they do.
+                    .min_children_per_line(2)
                     .homogeneous(true)
                     .row_spacing(10)
                     .column_spacing(10)
@@ -759,9 +904,9 @@ impl ThemeSettings {
                 flow.update_property(&[gtk::accessible::Property::Label(&def.label)]);
                 let (w, h) = PREVIEW_SIZE;
                 for choice in choices {
+                    // Drawn in the passes that follow (`want_tiles`).
                     let tile = Tile::new(w, h);
                     tile.set_halign(gtk::Align::Center);
-                    tile.set_list(self.ctx.hub.preview(def, &choice.id));
                     self.tiles
                         .borrow_mut()
                         .push((tile.clone(), def.clone(), choice.id.clone()));
@@ -770,7 +915,11 @@ impl ThemeSettings {
                     let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
                     b.append(&tile);
                     b.append(&label);
-                    let child = gtk::FlowBoxChild::builder().child(&b).build();
+                    // (GMNB_FOCUS=wc-tile: Settings scrolled to the tiles.)
+                    let child = gtk::FlowBoxChild::builder()
+                        .child(&b)
+                        .css_classes(["wc-tile"])
+                        .build();
                     child.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
                     flow.append(&child);
                     if matches!(value, Some(OptionValue::Text(v)) if *v == choice.id) {
@@ -926,6 +1075,8 @@ impl ThemeSettings {
                     }
                 };
                 let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step);
+                // (GMNB_STEPS' `slide:` finds it by this.)
+                scale.add_css_class("wc-option-slider");
                 scale.set_value(now);
                 scale.set_draw_value(false);
                 scale.set_hexpand(true);

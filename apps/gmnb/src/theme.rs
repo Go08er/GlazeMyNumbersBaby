@@ -120,6 +120,21 @@ pub struct Stats {
     pub sound_thread: bool,
     /// Connections to a sound server this process has attempted.
     pub sound_connections: u64,
+    /// What Settings has asked of the theme (`visible`, `preview`), in its
+    /// passes (`paced::Turns`).
+    pub settings: SettingsStats,
+}
+
+/// Settings' passes of calls into the theme.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SettingsStats {
+    /// Calls made, and the passes they were made in.
+    pub asked: u32,
+    pub passes: u32,
+    /// The longest pass, in milliseconds of processor time.
+    pub longest_ms: f64,
+    /// Times everything asked was answered.
+    pub done: u32,
 }
 
 pub struct Hub {
@@ -1131,6 +1146,25 @@ impl Hub {
         }
     }
 
+    /// Counts one of Settings' passes of calls into the theme; `done`:
+    /// nothing is left to ask. With `GMNB_THEME_STATS`, everything having
+    /// been answered is said on stderr.
+    pub fn settings_pass(&self, pass: crate::paced::Pass, done: bool) {
+        let mut stats = self.stats.get();
+        let s = &mut stats.settings;
+        s.asked += pass.asked;
+        s.passes += 1;
+        s.longest_ms = s.longest_ms.max(pass.used.as_secs_f64() * 1000.0);
+        s.done += u32::from(done);
+        if done && std::env::var_os("GMNB_THEME_STATS").is_some() {
+            eprintln!(
+                "theme: Settings has its answers: {} calls in {} passes, the longest {:.1} ms",
+                s.asked, s.passes, s.longest_ms
+            );
+        }
+        self.stats.set(stats);
+    }
+
     fn note(&self, path: &str, message: String) {
         let note = Note {
             path: path.into(),
@@ -1516,6 +1550,10 @@ mod tests {
     /// is open (`watch.rs`: its monitors made in `sync`, and its one timer
     /// the moment it lets the folder settle after a change, in `changed`);
     /// nothing else watches a folder.
+    /// Settings paces its own work in one idle, `go`, which runs
+    /// only while Settings has calls into the theme left to make and is
+    /// removed when it closes, and in one frame callback, `set`, for one
+    /// frame after its opacity slider moved.
     #[test]
     fn theming_installs_no_sources() {
         const CALLS: [&str; 7] = [
@@ -1561,6 +1599,11 @@ mod tests {
                 "watch.rs",
                 include_str!("watch.rs"),
                 &[("monitor_directory", "sync"), ("timeout_add", "changed")],
+            ),
+            (
+                "paced.rs",
+                include_str!("paced.rs"),
+                &[("idle_add", "go"), ("add_tick_callback", "set")],
             ),
         ] {
             let code = source.split("#[cfg(test)]").next().unwrap_or("");

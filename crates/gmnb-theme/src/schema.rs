@@ -606,11 +606,30 @@ pub static ROWS: &[Row] = &[
         color(alpha(BLACK, metrics::shape::SCRIM_ALPHA))
     }),
     row("focus", Kind::FocusRing, |s| {
+        let (accent, bg) = (s.t.colors.accent_text, s.t.colors.bg);
+        // See-through, a key lies on whatever the desktop is, anything
+        // from the background's colour to black or white: a line of the
+        // background's colour outside the ring, and the ring moved 9:1
+        // from it, keep one of the two reading on any of those (DGMNB,
+        // always opaque, has neither).
+        let see = s.ctx.opacity() < 1.0;
+        let color = if see {
+            let rgb = |c: Rgba| [c[0], c[1], c[2]];
+            let apart = crate::focus::EDGE_APART * 1.01;
+            let [r, g, b] = appcore::color::with_contrast(rgb(accent), rgb(bg), apart);
+            [r, g, b, accent[3]]
+        } else {
+            accent
+        };
         Value::FocusRing(FocusRing {
             width: metrics::focus::WIDTH,
-            color: s.t.colors.accent_text,
+            color,
             offset: metrics::focus::OFFSET,
             radius: None,
+            edge: see.then_some(Border {
+                width: 1.0,
+                color: bg,
+            }),
         })
     }),
     // -- Header and window buttons.
@@ -1653,6 +1672,7 @@ pub fn neutral(kind: &Kind) -> Value {
             color: TRANSPARENT,
             offset: 0.0,
             radius: None,
+            edge: None,
         }),
         Kind::Text => Value::Text(Text {
             color: TRANSPARENT,

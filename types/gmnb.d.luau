@@ -104,13 +104,19 @@ export type Transition = {
 	opacity: Duration?,
 }
 
--- The ring around what holds the keyboard focus.
+-- The ring around what holds the keyboard focus. It is never hidden: one
+-- under 1 px, or under 3:1 (with its edge) on what it lies on, is the base
+-- look's ring instead, with a note.
 export type FocusRing = {
 	width: number?,
 	color: Color?,
 	-- Pixels between the element's edge and the ring (negative: inside).
 	offset: number?,
 	radius: number?,
+	-- A line along both sides of the ring around a keypad's keys, which lie
+	-- on the window's background: a ring in a colour of what is under it
+	-- stays seen. false: none.
+	edge: (Border | false)?,
 }
 
 export type Icon = {
@@ -1159,6 +1165,9 @@ export type Option = {
 	-- choice
 	choices: { { id: string, label: string } }?,
 	-- choice: draw a tile for one choice; the choices then show as a grid of tiles.
+	-- 10 ms each. Settings asks `visible` and `preview` in passes that share
+	-- 10 ms: what doesn't fit is asked in the next pass, after the window has
+	-- drawn, and a tile shows a blank until its picture comes.
 	preview: ((draw: Draw, frame: Preview, choice: string) -> ())?,
 	-- slider
 	min: number?,
@@ -1167,6 +1176,7 @@ export type Option = {
 	-- slider: how the value is shown.
 	format: ("number" | "percent")?,
 	-- Hidden when this returns false; shown otherwise (also if it fails).
+	-- 10 ms, in Settings' passes (see `preview`), asked before the tiles.
 	visible: ((options: { [string]: OptionValue }, ctx: Ctx) -> boolean)?,
 	-- Buttons beside the option.
 	actions: { OptionAction }?,

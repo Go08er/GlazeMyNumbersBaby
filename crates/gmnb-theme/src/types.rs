@@ -347,6 +347,9 @@ pub struct FocusRing {
     pub offset: f32,
     /// `None`: the ring's corners follow the control's.
     pub radius: Option<f32>,
+    /// A line along both sides of the ring, around a keypad's keys: a
+    /// ring that may lie on its own colour stays seen.
+    pub edge: Option<Border>,
 }
 
 /// How a control differs while in a state. What is `None` stays as it is

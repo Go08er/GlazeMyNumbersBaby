@@ -408,7 +408,10 @@ fn thread_cpu() -> Option<Duration> {
 }
 
 impl Span {
-    fn new(limit: Duration) -> Span {
+    /// A span of `limit`, from now. (An engine's own calls take theirs
+    /// from [`Engine::span`]; this is for a host that paces calls of its
+    /// own, as Settings paces a theme's `visible` and `preview`.)
+    pub fn new(limit: Duration) -> Span {
         Span {
             start: Instant::now(),
             cpu: thread_cpu(),
@@ -416,8 +419,9 @@ impl Span {
         }
     }
 
-    /// How much of the limit has been used.
-    fn used(&self) -> Duration {
+    /// How much of the limit has been used: this thread's processor time
+    /// since the span was made.
+    pub fn used(&self) -> Duration {
         match (self.cpu, thread_cpu()) {
             (Some(then), Some(now)) => now.saturating_sub(then),
             _ => self.start.elapsed(),

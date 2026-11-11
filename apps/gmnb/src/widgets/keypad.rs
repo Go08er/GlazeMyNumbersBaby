@@ -1002,6 +1002,7 @@ impl Keypad {
             let mut child = self.first_child();
             while let Some(c) = child {
                 self.snapshot_child(&c, s);
+                self.focus_edge(s, &c);
                 child = c.next_sibling();
             }
             return;
@@ -1038,6 +1039,7 @@ impl Keypad {
             let place = places.as_ref().and_then(|p| p.get(i).copied().flatten());
             let Some(place) = place else {
                 self.snapshot_child(widget, s);
+                self.focus_edge(s, widget);
                 continue;
             };
             if place.opacity <= 0.0 || place.scale <= 0.0 {
@@ -1055,6 +1057,7 @@ impl Keypad {
                 s.push_opacity(f64::from(place.opacity));
             }
             self.snapshot_child(widget, s);
+            self.focus_edge(s, widget);
             if place.opacity < 1.0 {
                 s.pop();
             }
@@ -1062,6 +1065,59 @@ impl Keypad {
         }
         if let Some(picture) = picture {
             layers::paint(s, self, &picture.list, [&[], &[]]);
+        }
+    }
+
+    /// The focus ring's `edge` (docs/theming.md, "FocusRing"), around the
+    /// key holding the keyboard's focus with its ring shown: a line along
+    /// each side of the ring the stylesheet draws round it, so that the
+    /// ring is seen whatever it lies on. A key lies straight on the
+    /// window's background and whatever the theme draws there, paint that
+    /// may be the ring's own colour.
+    fn focus_edge(&self, s: &gtk::Snapshot, key: &gtk::Widget) {
+        // As the stylesheet's ring is drawn (`:focus:focus-visible`), the
+        // window in use or not.
+        let shown = gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE;
+        if !key.state_flags().contains(shown) {
+            return;
+        }
+        let Some(hub) = Hub::current() else {
+            return;
+        };
+        let style = hub.style();
+        // The toolkit's own ring has no edge.
+        if style.native().contains(&"focus") {
+            return;
+        }
+        let Some(gmnb_theme::types::Value::FocusRing(ring)) = style.get("focus") else {
+            return;
+        };
+        let Some(edge) = ring.edge.filter(|e| e.width > 0.0) else {
+            return;
+        };
+        let Some(b) = key.compute_bounds(self) else {
+            return;
+        };
+        let radius = self.imp().radius.get().min(b.width().min(b.height()) / 2.0);
+        let [r, g, bl, a] = edge.color;
+        let color = gtk::gdk::RGBA::new(r, g, bl, a);
+        // The ring is `width` wide inside `offset` out from the key, its
+        // corners the key's grown as much (the toolkit's outline): one
+        // line just outside it, and one just inside it where it stands
+        // off the key (none over the key itself).
+        let gap = ring.offset - ring.width;
+        let lines = [
+            (ring.offset + edge.width, edge.width),
+            (gap, edge.width.min(gap)),
+        ];
+        for (out, line) in lines {
+            let (w, h) = (b.width() + 2.0 * out, b.height() + 2.0 * out);
+            if line <= 0.0 || w <= 2.0 * line || h <= 2.0 * line {
+                continue;
+            }
+            let rect = graphene::Rect::new(b.x() - out, b.y() - out, w, h);
+            let rounded = gtk::gsk::RoundedRect::from_rect(rect, (radius + out).max(0.0));
+            s.append_border(&rounded, &[line; 4], &[color; 4]);
         }
     }
 }

@@ -14,14 +14,19 @@
 //! - `wait:<ms>`: a longer pause;
 //! - `theme:<id>`: that theme chosen, as Settings' list chooses it (`base`:
 //!   the base look), without saving the choice;
-//! - `settings`: Settings opened, as the menu opens it; `close`: the dialog
-//!   on top (Settings) closed;
+//! - `settings`: Settings opened, as its menu item opens it; `close`: the
+//!   dialog showing (Settings, About) closed, then a line
+//!   `GMNB_STEPS: closed`;
 //! - `press:<css class>`: the first button with that class in the window
 //!   or its dialog pressed (activated, as a key on it would: Settings'
 //!   `wc-open-themes`, `wc-restore-themes`);
 //! - `themes`: what Settings lists, a line on stderr: `themes: ` and each
 //!   row's theme (`base` for the base look), `*` after one marked "Comes
 //!   with GMNB"; then `restore shown` or `restore hidden`;
+//! - `slide:<class>:<v>,<v>,...`: the slider with that CSS class (in
+//!   Settings: `wc-opacity-slider`) set to each value in turn, all at once,
+//!   as a drag the toolkit reports faster than the screen shows it,
+//!   between a line `GMNB_STEPS: sliding` and a line `GMNB_STEPS: slid`;
 //! - `quit`: what sound has done, a line on stderr (as `GMNB_THEME_STATS`
 //!   writes it), then a line `note: ...` for each of the theme's notes
 //!   (what Settings lists under the themes), and the window closed (its
@@ -47,6 +52,7 @@ enum Step {
     Close,
     Press(String),
     Themes,
+    Slide(String, Vec<f64>),
     Quit,
 }
 
@@ -68,6 +74,12 @@ fn parse(spec: &str) -> VecDeque<Step> {
                 "wait" => Step::Wait(arg.trim().parse().ok()?),
                 "theme" => Step::Theme(arg.trim().to_string()),
                 "press" => Step::Press(arg.trim().to_string()),
+                "slide" => {
+                    let (class, values) = arg.split_once(':')?;
+                    let values: Option<Vec<f64>> =
+                        values.split(',').map(|v| v.trim().parse().ok()).collect();
+                    Step::Slide(class.trim().to_string(), values?)
+                }
                 _ => {
                     eprintln!("GMNB_STEPS: what is {part:?}?");
                     return None;
@@ -130,9 +142,11 @@ fn next(win: Rc<Window>, steps: std::cell::RefCell<VecDeque<Step>>, gap: u64) {
         Step::Theme(id) => win.ctx().hub.set_theme(&id),
         Step::Settings => crate::prefs::show(&win),
         Step::Close => {
+            use adw::prelude::*;
             if let Some(dialog) = win.widget().visible_dialog() {
-                dialog.close();
+                let _ = dialog.close();
             }
+            eprintln!("GMNB_STEPS: closed");
         }
         Step::Press(class) => {
             let found = widgets(&win.widget().upcast())
@@ -172,6 +186,20 @@ fn next(win: Rc<Window>, steps: std::cell::RefCell<VecDeque<Step>>, gap: u64) {
                 if restore { "shown" } else { "hidden" }
             );
         }
+        Step::Slide(class, values) => {
+            let scale = find(&win.widget().upcast(), |w| w.has_css_class(&class))
+                .and_then(|w| w.downcast::<gtk::Range>().ok());
+            match scale {
+                Some(scale) => {
+                    eprintln!("GMNB_STEPS: sliding");
+                    for v in values {
+                        scale.set_value(v);
+                    }
+                    eprintln!("GMNB_STEPS: slid");
+                }
+                None => eprintln!("GMNB_STEPS: no slider with class {class}"),
+            }
+        }
         Step::Quit => {
             eprintln!("sound: {}", win.ctx().hub.sound_report());
             for note in win.ctx().hub.notes() {
@@ -201,6 +229,23 @@ fn widgets(root: &gtk::Widget) -> Vec<gtk::Widget> {
         out.push(w);
     }
     out
+}
+
+/// The first widget in `root` (itself included) that `wanted` says is it,
+/// depth first.
+fn find(root: &gtk::Widget, wanted: impl Fn(&gtk::Widget) -> bool) -> Option<gtk::Widget> {
+    let mut todo = vec![root.clone()];
+    while let Some(w) = todo.pop() {
+        if wanted(&w) {
+            return Some(w);
+        }
+        let mut child = w.last_child();
+        while let Some(c) = child {
+            child = c.prev_sibling();
+            todo.push(c);
+        }
+    }
+    None
 }
 
 /// The keypads drawn in `root`.

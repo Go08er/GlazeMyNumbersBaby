@@ -781,12 +781,18 @@ pub fn focus_ring(v: &ThemeValue, base: FocusRing, path: &str, notes: &mut Notes
     let Some(m) = map(
         v,
         path,
-        "a focus ring { width, color, offset, radius }",
+        "a focus ring { width, color, offset, radius, edge }",
         notes,
     ) else {
         return ring;
     };
-    unknown_keys(m, path, &["width", "color", "offset", "radius"], &[], notes);
+    unknown_keys(
+        m,
+        path,
+        &["width", "color", "offset", "radius", "edge"],
+        &[],
+        notes,
+    );
     if let Some(v) = m.get("width")
         && let Some(n) = num32(v, &join(path, "width"), 0.0, 64.0, notes)
     {
@@ -806,6 +812,11 @@ pub fn focus_ring(v: &ThemeValue, base: FocusRing, path: &str, notes: &mut Notes
         && let Some(n) = num32(v, &join(path, "radius"), 0.0, MAX_RADIUS, notes)
     {
         ring.radius = Some(n);
+    }
+    if let Some(v) = m.get("edge")
+        && let Some(edge) = border(v, &join(path, "edge"), notes)
+    {
+        ring.edge = edge;
     }
     ring
 }
