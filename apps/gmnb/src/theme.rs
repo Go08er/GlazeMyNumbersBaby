@@ -1358,7 +1358,10 @@ fn credits(sources: &[Source]) -> Vec<(String, String)> {
     // does; GMNB's own copies are always read.)
     let mut started = None;
     let users = users.take_while(move |_| {
-        started.get_or_insert_with(std::time::Instant::now).elapsed() < themes::LIST_BUDGET
+        started
+            .get_or_insert_with(std::time::Instant::now)
+            .elapsed()
+            < themes::LIST_BUDGET
     });
     for theme in built_in
         .chain(users)
