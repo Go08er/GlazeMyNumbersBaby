@@ -1763,7 +1763,7 @@ noise.
 
 | Effect | How | Why |
 |---|---|---|
-| The five flavours | **Scripted** (`style`): a flavour is two colours, and every ink and surface is worked out from them against what it lies on | No colour option, so no generated palette to guard: ten schemes, each checked. |
+| The five flavours, and System and Freestyle | **Scripted** (`style`): a flavour is two colours, and every ink and surface is worked out from them against what it lies on. System's icing is the desktop's accent (`ctx.accent`, GNOME's blue when there is none) and its second colour the one most of the way round the wheel from it; Freestyle's are two colour options, shown only while it is chosen. Either keeps its hue and strength at a lightness icing has | Any colour at all can be an icing, so the readability tables are run for the extreme colours of rule 2 (`sprinkles_own_flavours_read`), all round the accent wheel and for random picks (`sweep.rs`); what the layers paint, in colours from both (`what_glazed_paints_reads`). Schemes are kept by flavour, colours and mode, a few dozen at most. |
 | Keys as blocks: a line, a glint, a lip, a hard shadow; pressed, the lip is gone | **Declared** (borders and shadow lists with no blur; no transitions at all) | A state that changes at once is the look. |
 | Short keys, in a window near its least (300×400, where Scientific's keys are fourteen pixels high and Programmer's twelve): a thin line, the lip under the key instead of inside it, the sign one Jersey pixel to the pixel | **Declared** (`keys.short`, below 24 pixels: where a number's capitals no longer fit between its key's lines), its gap 3 | The keys shrink with the window instead of holding it open; what has room at forty pixels has none at fourteen. |
 | The tiled wall | A **still** the theme's script draws (`gmnb.image`, `draw:tile`, hard pixels at scale 2 too) | Four colours, 200 bytes; tiling it costs one node. |
@@ -1775,7 +1775,7 @@ noise.
 | The fountain of sprinkles from the = key; a new flavour's shower | **Scripted** (`overlay` layer): thirty rectangles a frame for a second | Over the keys, never over the number: the throw is worked out from where the readout ends. |
 | The same burst from frame to frame | **Scripted**: events carry no name, so the theme knows one again by its place and its growing age | A burst seeded by the frame would flicker. |
 | The equals key's icing and sprinkles; crumbs under a press | **Scripted** (`keypad` layer) | |
-| A scale to each flavour, a jingle timed to the icing | **Scripted** (`sound`, `gmnb.synth`): thirteen recipes; a key's note is one sound at another speed | Sound that follows the look needs the same options the look has. |
+| A scale to each flavour, a jingle timed to the icing | **Scripted** (`sound`, `gmnb.synth`): thirteen recipes; a key's note is one sound at another speed. System plays in G major's five notes; Freestyle in the key of the flavour whose icing is nearest its own round the wheel (a grey icing, in System's) | Sound that follows the look needs the same options the look has. |
 | Jersey 10 | A font file in the theme's folder, set at whole multiples of its own pixel where it has to be sharp (the readout, the number keys), and at one and a half for words | The app sets text unhinted, to a quarter of a pixel: a pixel face is only crisp where its pixels are whole ones. |
 | The flavours' tiles in Settings | **Scripted** (`preview`) | |
 
@@ -1808,11 +1808,12 @@ picture the theme computes, and everything in it is built on that.
 | Glass keys and panes; the design's hairline, hover and focus ring | **Declared** (style values) | Box drawing is the toolkit's. |
 | How strong the glass is | **Scripted** (`style`): the least strength at which every ink reads over every band, for this set of bands at this window opacity; the glass chosen is never thinner | White on the design's gold is 1.4 to 1. See [the readability rules](#readability-rules). |
 | A pressed key clears | **Declared** (`keys.active` with a thinner background, and a slow `transition` back) | The toolkit animates it. |
-| Figures made of paint | **Scripted** (`display` layer): the glyphs as a mask (`draw:push_mask`), and behind them a second, small field: a slice of the swirl as one number a point, kept inside the ramp's first band | With one channel and values between 0 and 1 a three-colour cyclic ramp gives only its first two colours and the blend between them, so no figure is ever dark. One ramp serves both layers (a theme may make eight). |
+| Figures made of paint | **Scripted** (`display` layer): the glyphs as a mask (`draw:push_mask`), and behind them a second, small field: a slice of the swirl as one number a point, kept inside the ramp's first band | With one channel and values between 0 and 1 a three-colour cyclic ramp gives only its first two colours and the blend between them, so no figure is ever dark. One ramp serves both layers. |
+| System and Freestyle | **Scripted** (`style`, `gmnb.ramp`): System's bands from the desktop's accent (the accent, kept vivid; the colour as far round the wheel from it as the design's cyan is from its gold; a near-black in the second's hue), Freestyle's from three colour options shown only while it is chosen. Whatever they are, the dark band keeps their hue at the design's near-black and the bright ones are lifted only as far as every blend between them needs to read as a figure on a panel over white paint. A new ramp each time the colours change | The glass is made of the dark band and the figures of the bright ones: any colour can be given, so the bands are made fit for both before anything else is worked out. A theme may make any number of ramps (eight are held at once). |
 | Every page in the least window, a long figure in its readout | **Declared**: keys and bits with no least size of their own; the readouts' figures name their optical size | The window may be 300×400; a readout shrunk in Inter's smaller cuts would run past its end ([Font](#font)). |
 | The panel's hairline round the readout | **Scripted** (`display` layer, `draw:border`) | The readout's own style has a background and a radius, no border. |
 | Keys swirling into place | **Scripted** (`place`): each key turned about the keypad's middle and brought in, the nearest first | |
-| The tiles in Settings | **Scripted** (`preview`): a 17 × 11 field through each set's ramp | A tile is drawn once and stands. |
+| The tiles in Settings | **Scripted** (`preview`): a 17 × 11 field through each set's ramp (System's and Freestyle's as their colours are now) | A tile is drawn once and stands. |
 | The sounds | **Recipes** (`gmnb.synth`) and a **scripted** choice (`sound`): number keys fall on seven notes of one scale, and a result rings the last three that were typed | |
 | One look in light and in dark | **Scripted**: `style` doesn't read `ctx.dark` | The page it comes from has one look. |
 
@@ -1976,7 +1977,12 @@ container); the readout's value, its error colour and its expression on
 the readout's own scrim; a card's heading. For Aurora the whole table is
 `auroras_page_texts_read`, and `auroras_generated_palettes_read` runs it
 again for System and Freestyle generated from rule 2's colours. For
-Sprinkles it is `sprinkles_page_texts_read`, in each of its five flavours.
+Sprinkles it is `sprinkles_page_texts_read`, in each of its seven flavours,
+and `sprinkles_own_flavours_read` runs it again for System and Freestyle
+iced in rule 2's colours (with the complement, and with the colour twice);
+`sweep.rs` runs it for both all round the accent wheel
+(`sprinkles_under_any_accent_reads`) and for random picks
+(`sprinkles_freestyle_random_colours_read`), as it does for Aurora's.
 The table sees a style's fills, not what a layer draws, so a theme whose
 layers paint under text, or paint the text, owes a test of its own:
 Sprinkles' is `what_glazed_paints_reads` (`tests/sprinkles.rs`), which runs
@@ -1984,7 +1990,8 @@ the layers and holds the header's title and buttons to 4.5 on both
 stripes of the awning its background layer draws, and every colour of
 a glazed number, read out of the icing's picture pixel by pixel, to 3
 on the readout's fill (and digits under 28 px, which are not large
-text, wear no icing). The
+text, wear no icing), in every flavour and in System and Freestyle in
+colours from rule 2's and round the wheel. The
 bits' indexes need 2.45, as the placeholder does (open point 9):
 `the_bits_indexes_read`.
 
@@ -1994,10 +2001,16 @@ picture of its own must read over the picture: its `window.background`
 names the picture's colours, and the table is run once more with every
 colour the layer can draw under the window in turn. For Swirls those are
 the 768 entries of its ramp (three bands and every blend between two):
-`swirls_texts_read_over_every_colour_of_the_field`, for each of its six
-sets of bands under each of its three strengths of glass; and
-`tests/swirls.rs` holds its layers to that table: every pixel they draw,
-stirred or still, is one of those entries. The figures its `display`
+`swirls_texts_read_over_every_colour_of_the_field`, for each of its eight
+sets of bands under each of its three strengths of glass;
+`swirls_own_colours_read_over_every_colour_of_the_field` for System and
+Freestyle worked out from rule 2's colours, and (a long sweep, run with
+`--release -- --ignored`)
+`swirls_under_any_accent_read_over_every_colour_of_the_field` from
+colours all round the wheel and sixty at random; and `tests/swirls.rs`
+holds its layers to that table: every pixel they draw, stirred or still,
+is one of those entries, for System and Freestyle as their colours
+change too (`own_colours_paint_in_their_own_ramp`). The figures its `display`
 layer paints are checked the same way, on what they lie on. The plain
 table for Swirls is `swirls_page_texts_read`.
 
@@ -2023,11 +2036,12 @@ surface, the ring alone. The calendar's ring: the popover, and a day. A
 converter value's: its pane, and its field. A ring left to the toolkit
 (`native` lists `focus`) is judged as libadwaita draws it: its accent at
 half opacity, 2 px inside the control. The tests are
-`every_focus_ring_reads` (Aurora's System and Freestyle from rule 2's
-colours too), `every_focus_ring_reads_at_every_opacity` (every twentieth
-from 0.1 to 1) and
-`swirls_focus_ring_reads_over_every_colour_of_the_field`
-(`tests/css.rs`), and in the running app `tests/focus.rs`, which looks at
+`every_focus_ring_reads` (Aurora's and Sprinkles' System and Freestyle
+from rule 2's colours too), `every_focus_ring_reads_at_every_opacity`
+(every twentieth from 0.1 to 1) and
+`swirls_focus_ring_reads_over_every_colour_of_the_field` (Swirls' System
+and Freestyle from rule 2's colours, round the wheel and at random in the
+field tests above) (`tests/css.rs`), and in the running app `tests/focus.rs`, which looks at
 the pixels around a key. A see-through window's backdrop can be any
 colour between the window's and the desktop's, so a ring round a key
 there is kept [9:1 from its edge](#text-surface-control-state).

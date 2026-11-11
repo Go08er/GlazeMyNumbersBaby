@@ -11,7 +11,7 @@ The contract they are written against is
 | Folder | What it is |
 |---|---|
 | `aurora/` | The look GMNB had up to 0.2, grown since: an aurora behind glass keys, in seven palettes. It uses every part of the API (style, three draw layers, options with drawn previews, its own font, sounds), and works its colours out from each palette so that all of them stay readable. Its sounds are glass and breath, synthesised from two recipes, with a chord for each palette. |
-| `sprinkles/` | An 8-bit doughnut shop that takes the app's name at its word: press = and the number comes out glazed, with sprinkles. Where Aurora is computed light, this one is pictures and matter: stills drawn by a script (`make_assets.py`: a tiled wall, the hem of an awning cut out of masks and filled with the flavour's colours), a GIF loop that repeats in space as well as in time (sprinkles falling), two pictures the theme works out pixel by pixel (`gmnb.pixels`: the icing shown through the digits' own shapes, and the doughnut that lives on the readout's shelf), keys moved by `place` (they sink, hop and stack themselves), an overlay (a fountain of sprinkles from the = key), a pixel typeface (Jersey 10) and chip-tune sounds in which every flavour has its own scale. Nothing eases: things step and land, thirty times a second at most. Five flavours. |
+| `sprinkles/` | An 8-bit doughnut shop that takes the app's name at its word: press = and the number comes out glazed, with sprinkles. Where Aurora is computed light, this one is pictures and matter: stills drawn by a script (`make_assets.py`: a tiled wall, the hem of an awning cut out of masks and filled with the flavour's colours), a GIF loop that repeats in space as well as in time (sprinkles falling), two pictures the theme works out pixel by pixel (`gmnb.pixels`: the icing shown through the digits' own shapes, and the doughnut that lives on the readout's shelf), keys moved by `place` (they sink, hop and stack themselves), an overlay (a fountain of sprinkles from the = key), a pixel typeface (Jersey 10) and chip-tune sounds in which every flavour has its own scale. Nothing eases: things step and land, thirty times a second at most. Five flavours, and two of your own: System, iced in the desktop's accent colour, and Freestyle, in an icing and a second colour you pick; any colour works, and the shop's inks are worked out to read on it. |
 | `swirls/` | Flowing paint inspired by ly's ColorMix, with a calculator of dark glass standing in it. The worked example of `draw:field`: see below. |
 
 Sprinkles' typeface, Jersey 10, is `fonts/ttf/Jersey10-Regular.ttf` of its
@@ -50,8 +50,11 @@ Everything else in the theme is built on that one picture.
 | The keypad | Its keys come round into their places whenever it comes into view (`place`). Nothing is drawn over the keys. |
 | The sounds | Drops. Number keys fall on seven notes of one five-note scale, each key always its own, and a result rings the last three notes that were typed, lowest first. An error goes down the drain. |
 
-Its options: six sets of bands (the design's own first), three strengths of
-glass, the pace from 0 (still) to 4 times the design's, and switches for
+Its options: six sets of bands (the design's own first) and two of your
+own (System, worked out from the desktop's accent colour, and Freestyle,
+from three colours you pick: the dark one is kept near black, as the
+glass is made of it, and the bright ones are lightened only as far as
+the figures painted from them need), three strengths of glass, the pace from 0 (still) to 4 times the design's, and switches for
 the stirring and for the painted figures. The two choices show tiles the
 theme draws with small fields. It is one look in light and in dark, as
 the page it comes from has one.
