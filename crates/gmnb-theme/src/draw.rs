@@ -729,7 +729,12 @@ fn gradient(keys: &Keys, what: &str, t: &Table, kind: &Value) -> mlua::Result<Gr
                     let Value::Table(list) = &v else {
                         return Err(bad(what, "a gradient's stops are a list of numbers"));
                     };
-                    for i in 1..=list.raw_len() {
+                    // One for each colour, at most: more are not read.
+                    let n = list.raw_len();
+                    if n > 16 {
+                        return Err(bad(what, format!("{n} stops; a gradient takes 2 to 16")));
+                    }
+                    for i in 1..=n {
                         let s = unit(what, &list.raw_get::<Value>(i)?)?;
                         if g.stops.last().is_some_and(|last| s < *last) {
                             return Err(bad(what, "a gradient's stops must never decrease"));

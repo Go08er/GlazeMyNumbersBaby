@@ -187,7 +187,10 @@ fn ramp_of(shared: &Shared, what: &str, id: u64, t: &Table) -> mlua::Result<Rc<R
         return Ok(held.1.clone());
     }
     let colors = match t.raw_get::<Value>("colors")? {
-        Value::Table(list) => (1..=list.raw_len())
+        // The table is the theme's to forge (it need only carry a ramp's
+        // number): what it holds is read only if it is a ramp's size.
+        Value::Table(list) if (MIN_COLORS..=MAX_COLORS).contains(&list.raw_len()) => (1
+            ..=list.raw_len())
             .map(|i| color_arg("ramp", &list.raw_get::<Value>(i)?))
             .collect::<mlua::Result<Vec<_>>>()?,
         _ => return Err(not_one()),
