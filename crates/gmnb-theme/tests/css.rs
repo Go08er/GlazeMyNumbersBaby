@@ -21,8 +21,17 @@ const PALETTES: [&str; 7] = [
     "aurora", "ember", "abyss", "orchard", "graphite", "system", "custom",
 ];
 
-/// Sprinkles' flavours.
-const FLAVOURS: [&str; 5] = ["strawberry", "blueberry", "matcha", "lemon", "caramel"];
+/// Sprinkles' flavours: System (here on a desktop that shares no accent) and
+/// Freestyle (in its own colours) too.
+const FLAVOURS: [&str; 7] = [
+    "strawberry",
+    "blueberry",
+    "matcha",
+    "lemon",
+    "caramel",
+    "system",
+    "custom",
+];
 
 fn built_in(id: &str) -> Theme {
     Theme::load(Source::built_in(id).unwrap(), common::limits()).unwrap()
@@ -1106,6 +1115,56 @@ fn auroras_extreme_styles() -> Vec<(String, Style)> {
     out
 }
 
+/// Sprinkles' System flavour on a desktop of each extreme accent, and
+/// Freestyle iced in each (its second colour the complement, and the
+/// icing again), light and dark, at three opacities.
+fn sprinkles_extreme_styles() -> Vec<(String, Style)> {
+    let mut out = Vec::new();
+    let mut sprinkles = built_in("sprinkles");
+    for dark in [false, true] {
+        for opacity in [1.0, 0.5, 0.1] {
+            for (name, hex) in EXTREMES {
+                let colour = appcore::color::hex(hex);
+                let as_text = |c: [f32; 3]| text(&appcore::color::to_hex(c));
+                let mut ctx = with(&sprinkles, dark, opacity, &[("flavour", text("system"))]);
+                ctx.accent = Some(colour);
+                out.push((
+                    format!("sprinkles system {name} dark={dark} {opacity}"),
+                    sprinkles.style(&ctx).unwrap().style.clone(),
+                ));
+                for (kind, second) in [
+                    ("complement", appcore::color::complement(colour)),
+                    ("twice", colour),
+                ] {
+                    let ctx = with(
+                        &sprinkles,
+                        dark,
+                        opacity,
+                        &[
+                            ("flavour", text("custom")),
+                            ("icing", as_text(colour)),
+                            ("second", as_text(second)),
+                        ],
+                    );
+                    out.push((
+                        format!("sprinkles freestyle {name} {kind} dark={dark} {opacity}"),
+                        sprinkles.style(&ctx).unwrap().style.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Rules 3 and 4 for Sprinkles' System and Freestyle flavours iced in the
+/// extreme colours of rule 2, light and dark, at the three opacities.
+#[test]
+fn sprinkles_own_flavours_read() {
+    let bad = unreadable(sprinkles_extreme_styles());
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
 /// Every pair of the fixed table that reads too faintly, for each of
 /// `styles`.
 ///
@@ -1502,8 +1561,10 @@ fn rings_read(name: &str, style: &Style, behind: &[Rgba]) -> Vec<String> {
 #[test]
 fn every_focus_ring_reads() {
     let mut styles = every_style();
-    // Aurora's System and Freestyle from the extreme colours too.
+    // Aurora's System and Freestyle from the extreme colours too, and
+    // Sprinkles' and Swirls'.
     styles.extend(auroras_extreme_styles());
+    styles.extend(sprinkles_extreme_styles());
     let mut bad = rings_unreadable(styles);
     for id in ["aurora", "sprinkles", "swirls"] {
         let mut theme = built_in(id);

@@ -49,7 +49,7 @@ struct Flavour {
     home: &'static str,
 }
 
-const FLAVOURS: [Flavour; 5] = [
+const FLAVOURS: [Flavour; 7] = [
     Flavour {
         id: "strawberry",
         keys: ["C5", "D5", "E5", "G5", "A5"],
@@ -84,6 +84,23 @@ const FLAVOURS: [Flavour; 5] = [
         jingle: ["F4", "A4", "C5", "F5"],
         low: "F4",
         home: "F4",
+    },
+    // G major's: the desktop's own, whatever its colour.
+    Flavour {
+        id: "system",
+        keys: ["G4", "A4", "B4", "D5", "E5"],
+        jingle: ["G4", "B4", "D5", "G5"],
+        low: "D4",
+        home: "G4",
+    },
+    // Freestyle in its own colours, a grape icing: blueberry's is the
+    // nearest round the wheel, and so is its key.
+    Flavour {
+        id: "custom",
+        keys: ["A4", "C5", "D5", "E5", "G5"],
+        jingle: ["A4", "C5", "E5", "A5"],
+        low: "E4",
+        home: "A4",
     },
 ];
 
@@ -501,12 +518,44 @@ fn a_new_flavour_plays_its_jingle() {
     let (plays, _) = choose(&mut app, "nonsense");
     assert!(near(plays[1].params.rate, speed("E5", "E5"), 1e-5));
 
-    // The other options make no sound.
-    for id in ["buddy", "living", "fountain"] {
-        let value = OptionValue::Bool(false);
+    // The other options make no sound, the colours picked neither.
+    for (id, value) in [
+        ("buddy", OptionValue::Bool(false)),
+        ("living", OptionValue::Bool(false)),
+        ("fountain", OptionValue::Bool(false)),
+        ("icing", OptionValue::Text("#ff0040".into())),
+        ("second", OptionValue::Text("#00ff00".into())),
+    ] {
         app.set_option(id, value.clone());
         let (plays, by) = app.decide(&stand_in::option(id, value));
         assert_eq!((plays.len(), by), (0, By::Nobody), "{id}");
+    }
+    assert!(app.notes.is_empty(), "{:?}", app.notes);
+}
+
+/// Freestyle sings in the key of the flavour whose icing is nearest its
+/// own round the wheel, and a grey icing in System's.
+#[test]
+fn freestyle_takes_the_key_of_the_nearest_icing() {
+    let theme = sprinkles();
+    let mut app = StandIn::new(&theme);
+    let key_of = |id: &str| FLAVOURS.iter().find(|f| f.id == id).unwrap();
+    for (icing, like) in [
+        ("#ff0040", "strawberry"),
+        ("#3584e4", "blueberry"),
+        ("#00cc4c", "matcha"),
+        ("#ffee00", "lemon"),
+        ("#e8701a", "caramel"),
+        ("#808080", "system"),
+        ("#ffffff", "system"),
+    ] {
+        app.set_option("icing", OptionValue::Text(icing.into()));
+        let (plays, _) = choose(&mut app, "custom");
+        let jingle = &key_of(like).jingle;
+        assert_eq!(plays.len(), 4, "{icing}");
+        for (play, note) in plays.iter().zip(jingle) {
+            assert!(near(play.params.rate, speed(note, "E5"), 1e-5), "{icing}: not {like}'s");
+        }
     }
     assert!(app.notes.is_empty(), "{:?}", app.notes);
 }

@@ -8,7 +8,9 @@
 -- for a readout. Type a sum and the digits are plain dough. Press = and
 -- icing runs down them and sprinkles land on it, to a jingle in the
 -- flavour's own scale, while the doughnut that lives on the shelf jumps
--- for joy. (Its mouth is its hole: it is always impressed.) Five flavours.
+-- for joy. (Its mouth is its hole: it is always impressed.) Five flavours,
+-- and two of your own: System, iced in the desktop's accent colour, and
+-- Freestyle, in colours you pick.
 --
 -- Where Aurora is light behind glass and all of it computed, Sprinkles is
 -- made of pictures and of matter: stills drawn by a script (the wall, the
@@ -28,7 +30,7 @@
 --   8. Options      what Settings offers, and the flavours' tiles
 --   9. Sound        chip-tune: a note under every key, a jingle for a result
 
-local hex, mix, alpha = gmnb.hex, gmnb.mix, gmnb.alpha
+local hex, hsl, mix, alpha = gmnb.hex, gmnb.hsl, gmnb.mix, gmnb.alpha
 local white, black = gmnb.white, gmnb.black
 -- 4.5 and 3: what WCAG asks of text, and of large text and lines.
 local TEXT, UI = gmnb.TEXT_CONTRAST, gmnb.UI_CONTRAST
@@ -50,6 +52,57 @@ local FLAVOURS: { [string]: Flavour } = {
 	caramel = { icing = "#ffa94d", second = "#b79bff" },
 }
 
+-- And two flavours of your own. System is iced in the desktop's accent
+-- colour (this blue on a desktop that shares none), Freestyle in the
+-- colours you pick (grape and lime until you do). Either can be any
+-- colour at all, so everything below is worked out to read whatever it is.
+local FALLBACK_ACCENT = "#3584e4"
+local DEFAULT_ICING = "#c58cff"
+local DEFAULT_SECOND = "#9be36a"
+
+-- A colour option's saved text, or `fallback` if someone edited it into
+-- nonsense. (Icing is solid: an opacity written into it is dropped.)
+local function colour(value: OptionValue?, fallback: string): Rgba
+	if type(value) == "string" and (#value == 7 or #value == 9) and string.match(value, "^#%x+$") then
+		return hex(string.sub(value, 1, 7))
+	end
+	return hex(fallback)
+end
+
+-- Any colour as icing: its hue and its strength as they were given, at a
+-- lightness icing has. (Black icing would hide the doughnut's line, white
+-- its shine.)
+local function iced(c: Rgba): Rgba
+	local h, s, l = gmnb.to_hsl(c)
+	return hsl(h, s, math.clamp(l, 0.34, 0.82))
+end
+
+-- What goes with an icing: a colour most of the way round the wheel from
+-- it, as mint goes with strawberry and lemon with blueberry, as light as
+-- theirs. A grey icing gets a lighter grey.
+local function second_for(icing: Rgba): Rgba
+	local h, s = gmnb.to_hsl(icing)
+	if s < 0.08 then
+		return hsl(h, s, 0.74)
+	end
+	return hsl(h + 160, math.clamp(s, 0.55, 0.9), 0.7)
+end
+
+-- A flavour's two colours for `ctx`, and a name that is the same exactly
+-- when they are.
+local function flavour_colours(id: string, ctx: Ctx): (Rgba, Rgba, string)
+	if id == "system" then
+		local icing = iced(ctx.accent or hex(FALLBACK_ACCENT))
+		return icing, second_for(icing), "system " .. gmnb.to_hex(icing)
+	elseif id == "custom" then
+		local icing = iced(colour(ctx.options.icing, DEFAULT_ICING))
+		local second = iced(colour(ctx.options.second, DEFAULT_SECOND))
+		return icing, second, "custom " .. gmnb.to_hex(icing) .. " " .. gmnb.to_hex(second)
+	end
+	local flavour = FLAVOURS[id] or FLAVOURS.strawberry
+	return hex(flavour.icing), hex(flavour.second), id
+end
+
 -- Sprinkles, wherever they are only decoration: the loop's own colours
 -- (make_assets.py, SPRINKLE_COLOURS).
 local SPRINKLES: { Rgba } = {
@@ -63,6 +116,9 @@ local SPRINKLES: { Rgba } = {
 
 -- A flavour in one mode, and everything worked out from it.
 type Scheme = {
+	-- Which flavour, in which colours and mode: the same text exactly when
+	-- the scheme is the same (the pictures worked out from it are kept by it).
+	key: string,
 	dark: boolean,
 	-- The wall, what stands on it (panels, the display case), and what
 	-- stands on that (buttons, chips).
@@ -149,9 +205,11 @@ end
 local CHOCOLATE = hex("#3a2014")
 local CREAM = hex("#fff1dc")
 
-local function build(id: string, dark: boolean): Scheme
-	local flavour = FLAVOURS[id] or FLAVOURS.strawberry
-	local second = hex(flavour.second)
+-- `spare`: how far over 4.5 the awning's stripes are taken. A colour of
+-- one's own can be anything, and one taken to 4.5 exactly can come out
+-- under it once rounded to eight bits on its way to the screen; the
+-- built-in flavours' stripes stand as they were drawn.
+local function build(key: string, raw_icing: Rgba, second: Rgba, dark: boolean, spare: number): Scheme
 	local wall, card, card2, line, soft, ink
 	local number, number_edge, func, func_edge
 	if dark then
@@ -170,7 +228,7 @@ local function build(id: string, dark: boolean): Scheme
 
 	-- The icing carries small text (a lit button's): chocolate or cream on
 	-- it, whichever reads better, and the icing moved until it does.
-	local icing = hex(flavour.icing)
+	local icing = raw_icing
 	local on_icing = if gmnb.contrast(CHOCOLATE, icing) >= gmnb.contrast(CREAM, icing) then CHOCOLATE else CREAM
 	icing = gmnb.with_contrast(icing, on_icing, TEXT)
 	local icing_edge = mix(icing, if dark then black else CHOCOLATE, 0.36)
@@ -199,11 +257,11 @@ local function build(id: string, dark: boolean): Scheme
 	local stripe, stripe_other, awning_ink
 	if dark then
 		awning_ink = CREAM
-		stripe = legible(mix(icing, black, 0.45), { awning_ink }, TEXT)
+		stripe = legible(mix(icing, black, 0.45), { awning_ink }, TEXT * spare)
 		stripe_other = card
 	else
 		awning_ink = CHOCOLATE
-		stripe = legible(hex(flavour.icing), { awning_ink }, TEXT)
+		stripe = legible(raw_icing, { awning_ink }, TEXT * spare)
 		stripe_other = card
 	end
 
@@ -239,6 +297,7 @@ local function build(id: string, dark: boolean): Scheme
 	end
 
 	return {
+		key = key,
 		dark = dark,
 		wall = wall,
 		card = card,
@@ -280,21 +339,28 @@ local function build(id: string, dark: boolean): Scheme
 end
 
 -- A scheme takes a few hundred contrast checks, and the draw hooks ask for
--- it every frame: remember the ten there are.
+-- it every frame: remember what was built. (Dragging through the colour
+-- chooser makes a new one each step: a few dozen at most are kept.)
 local schemes: { [string]: Scheme } = {}
+local scheme_count = 0
 
-local function scheme_for(id: string, dark: boolean): Scheme
-	local key = id .. (if dark then "|dark" else "|light")
+local function scheme_for(id: string, ctx: Ctx): Scheme
+	local icing, second, name = flavour_colours(id, ctx)
+	local key = name .. (if ctx.dark then "|dark" else "|light")
 	local s = schemes[key]
 	if not s then
-		s = build(id, dark)
+		if scheme_count >= 32 then
+			schemes, scheme_count = {}, 0
+		end
+		s = build(key, icing, second, ctx.dark, if FLAVOURS[id] then 1 else 1.02)
 		schemes[key] = s
+		scheme_count += 1
 	end
 	return s
 end
 
 local function scheme(ctx: Ctx): Scheme
-	return scheme_for(tostring(ctx.options.flavour), ctx.dark)
+	return scheme_for(tostring(ctx.options.flavour), ctx)
 end
 
 ---------------------------------------------------------------------------
@@ -1279,7 +1345,8 @@ local function display(draw: Draw, frame: Frame): Again
 	end
 	local s = scheme(frame.ctx)
 	local w, h = frame.width, frame.height
-	local key = tostring(frame.ctx.options.flavour) .. (if s.dark then "|d" else "|l")
+	-- (What its pictures are kept by: the flavour, its colours and the mode.)
+	local key = s.key
 	local change = v.change
 	local kind = if change then change.kind else "none"
 	local age = if change then change.age else 0
@@ -1474,7 +1541,7 @@ end
 -- A flavour's tile in Settings: the wall, the awning, and the doughnut in
 -- that flavour's icing, drawn square by square.
 local function tile(draw: Draw, frame: Preview, choice: string)
-	local s = scheme_for(choice, frame.ctx.dark)
+	local s = scheme_for(choice, frame.ctx)
 	local w, h = frame.width, frame.height
 	draw:push_clip(0, 0, w, h, 6)
 	draw:rect(0, 0, w, h, s.wall)
@@ -1500,6 +1567,12 @@ local function tile(draw: Draw, frame: Preview, choice: string)
 	draw:pop()
 end
 
+local function is(flavour: string)
+	return function(options: { [string]: OptionValue }, _ctx: Ctx): boolean
+		return options.flavour == flavour
+	end
+end
+
 local options: { Option } = {
 	{
 		id = "flavour",
@@ -1514,8 +1587,44 @@ local options: { Option } = {
 			{ id = "matcha", label = "Matcha" },
 			{ id = "lemon", label = "Lemon" },
 			{ id = "caramel", label = "Caramel" },
+			{ id = "system", label = "System" },
+			{ id = "custom", label = "Freestyle" },
 		},
 		preview = tile,
+	},
+	{
+		id = "system_note",
+		type = "note",
+		group = "Flavour",
+		label = "Iced in your desktop's accent colour (the freedesktop portal setting your desktop or shell publishes), with a colour that goes with it, and follows it live.",
+		visible = is("system"),
+	},
+	{
+		id = "icing",
+		type = "color",
+		group = "Flavour",
+		label = "Icing",
+		description = "The equals key, what is switched on, the awning and your results",
+		default = DEFAULT_ICING,
+		visible = is("custom"),
+	},
+	{
+		id = "second",
+		type = "color",
+		group = "Flavour",
+		label = "Second colour",
+		description = "The operator keys",
+		default = DEFAULT_SECOND,
+		visible = is("custom"),
+		actions = {
+			{
+				label = "Go with the icing",
+				tooltip = "A colour most of the way round the wheel from the icing, as mint goes with strawberry",
+				run = function(o: { [string]: OptionValue }, _ctx: Ctx): { [string]: OptionValue }
+					return { second = gmnb.to_hex(second_for(iced(colour(o.icing, DEFAULT_ICING)))) }
+				end,
+			},
+		},
 	},
 	{
 		id = "buddy",
@@ -1792,9 +1901,37 @@ local VOICES: { [string]: Voice } = {
 	lemon = voice({ "D5", "E5", "F#5", "A5", "B5" }, { "D5", "F#5", "A5", "D6" }, "A4", "D5"),
 	-- F major's five, the lowest: slow and warm.
 	caramel = voice({ "F4", "G4", "A4", "C5", "D5" }, { "F4", "A4", "C5", "F5" }, "F4", "F4"),
+	-- G major's five, between the rest: the desktop's own, plain as it.
+	system = voice({ "G4", "A4", "B4", "D5", "E5" }, { "G4", "B4", "D5", "G5" }, "D4", "G4"),
 }
 
-local function voice_for(id: OptionValue?): Voice
+-- Freestyle sings in the key of the flavour whose icing is nearest its
+-- own round the wheel (a grey icing, in System's).
+local HUES: { { id: string, hue: number } } = {}
+for _, id in { "strawberry", "blueberry", "matcha", "lemon", "caramel" } do
+	table.insert(HUES, { id = id, hue = (gmnb.to_hsl(hex(FLAVOURS[id].icing))) })
+end
+
+local function nearest_voice(icing: Rgba): Voice
+	local h, s = gmnb.to_hsl(icing)
+	if s < 0.08 then
+		return VOICES.system
+	end
+	local best, apart = VOICES.strawberry, math.huge
+	for _, f in HUES do
+		local d = math.abs(h - f.hue) % 360
+		d = math.min(d, 360 - d)
+		if d < apart then
+			best, apart = VOICES[f.id], d
+		end
+	end
+	return best
+end
+
+local function voice_for(id: OptionValue?, ctx: Ctx): Voice
+	if id == "custom" then
+		return nearest_voice(iced(colour(ctx.options.icing, DEFAULT_ICING)))
+	end
 	return (if type(id) == "string" then VOICES[id] else nil) or VOICES.strawberry
 end
 
@@ -1822,7 +1959,7 @@ local turn = 0
 local repeats = 0
 
 local function sound(event: SoundEvent, ctx: Ctx): SoundChoice
-	local v = voice_for(ctx.options.flavour)
+	local v = voice_for(ctx.options.flavour, ctx)
 	if event.kind == "press" then
 		local key = event.key
 		if not key or event.action then
@@ -1884,7 +2021,7 @@ local function sound(event: SoundEvent, ctx: Ctx): SoundChoice
 	elseif event.kind == "option" and event.id == "flavour" then
 		-- A new flavour plays its jingle through, where the sprinkles
 		-- shake out from under the awning.
-		local fresh = voice_for(event.value)
+		local fresh = voice_for(event.value, ctx)
 		local run: { Play } = {}
 		for i, speed in fresh.jingle do
 			run[i] = { sound = note, rate = speed, volume = 0.7, pan = (i - 2.5) * 0.24, delay = 0.08 * (i - 1) }
