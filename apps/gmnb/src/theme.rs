@@ -833,10 +833,33 @@ impl Hub {
     /// Adds the theme's font files to the app's font map (they are known
     /// by the family names inside them). A built-in theme's are written to
     /// the cache directory first.
+    ///
+    /// A font stays in the map until the app quits, and is picked by its
+    /// family name wherever that is asked for: one named like a font the
+    /// app already has (the base look's, the desktop's) would take its
+    /// place in the base look and in Settings, whichever theme is chosen
+    /// after it (R3-E-1). A theme's font whose family is already in the
+    /// map, or that isn't a TrueType or OpenType font whose names can be
+    /// read, is left out, with a note. (A theme's own fonts may share a
+    /// family: the names are those the map had before this theme's fonts.)
     fn register_fonts(&self, theme: &Theme) {
+        let mut taken: Option<HashSet<String>> = None;
         for file in theme.font_files() {
             let path = match file {
-                FontFile::Path(path) => path,
+                FontFile::Path(path) => {
+                    if self.fonts.borrow().contains(&path) {
+                        continue;
+                    }
+                    let taken = taken.get_or_insert_with(known_families);
+                    if let Err(why) = font_allowed(&path, taken) {
+                        let name = path
+                            .file_name()
+                            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                        self.note(&name, why);
+                        continue;
+                    }
+                    path
+                }
                 FontFile::Bytes(name, bytes) => {
                     let name = name.rsplit('/').next().unwrap_or(name);
                     match crate::cache_font(&format!("{}-{name}", theme.source.id), bytes) {
@@ -1479,9 +1502,43 @@ fn tell_and_prune(subscribers: &RefCell<Vec<SoundSubscriber>>, text: &str) {
     *subscribers.borrow_mut() = keep;
 }
 
+/// The family names the app's font map has now, as fontconfig compares
+/// them ([`gmnb_theme::fontname::normal`]).
+pub(crate) fn known_families() -> HashSet<String> {
+    use pango::prelude::*;
+    pangocairo::FontMap::default()
+        .list_families()
+        .iter()
+        .map(|f| gmnb_theme::fontname::normal(&f.name()))
+        .collect()
+}
+
+/// Whether a theme's font file may join the font map: a TrueType or
+/// OpenType font whose family names are not among those `taken`. (A
+/// built-in theme's own file is its own, whatever the system has.)
+pub(crate) fn font_allowed(path: &std::path::Path, taken: &HashSet<String>) -> Result<(), String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take(themes::MAX_FONT_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|e| format!("the font can't be read: {e}"))?;
+    if themes::is_built_in_file(&bytes) {
+        return Ok(());
+    }
+    let Some(families) = gmnb_theme::fontname::families(&bytes) else {
+        return Err("not a TrueType or OpenType font whose names can be read; left out".into());
+    };
+    match gmnb_theme::fontname::clash(&families, taken) {
+        Some(name) => Err(format!(
+            "its family “{name}” is already a font of this app or the desktop, and would take \
+             its place; left out"
+        )),
+        None => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-
     /// Settings' sound row subscribes each time Settings opens; a closed
     /// Settings' row is let go the next time one subscribes, not only when
     /// sound changes (the list grew by one an opening).
