@@ -3,6 +3,7 @@
 //! actions that fail, run long or return a table of a million entries,
 //! colour and slider options given any value.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use gmnb_theme::layer::{Frame, LayerKind};
@@ -11,7 +12,11 @@ use gmnb_theme::tokens::OptionValue;
 use gmnb_theme::{Ctx, Limits};
 
 fn load_source(name: &str, source: &str) -> Theme {
-    let dir = std::env::temp_dir().join(format!("gmnb-hs-{}-{name}", std::process::id()));
+    // A folder of its own for each call: the tests run at once, and
+    // several load the same theme (one's clean-up took another's folder).
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("gmnb-hs-{}-{name}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("theme.luau"), source).unwrap();
