@@ -4,7 +4,7 @@ accesskit_unix and accesskit_winit
 These crates are published without licence files. The copyrights and
 licences below are from their source files' headers; the licence files
 those headers name are reproduced from https://github.com/AccessKit/accesskit
-at commit ce8164ba92995cfa86005b6259115e08c8244253, from which all five
+at commit f3026222559c7f5f46d8f25cb7404de68eb149f0, from which all five
 were published.
 
 accesskit:
