@@ -1699,9 +1699,10 @@ mod tests {
 
     /// Every credit a built-in theme carries (About → Legal shows it) is
     /// in every package: its file among GMNB's licences (Flatpak, Arch,
-    /// Fedora), a stanza of debian/copyright for its folder, and the
-    /// licence it names in each package's licence list. Swirls' (ly's
-    /// ColorMix, under the WTFPL) was in none.
+    /// Fedora, Nix), a stanza of debian/copyright for its folder, and the
+    /// licence it names in each package's licence list (and the metainfo's).
+    /// Swirls' (ly's ColorMix, under the WTFPL) was in none; later still
+    /// missing from the Nix package and the metainfo.
     #[test]
     fn every_built_in_credit_is_in_every_package() {
         use gmnb_theme::theme::{BUILT_IN, Source, Theme};
@@ -1710,6 +1711,14 @@ mod tests {
         let arch = include_str!("../../../packaging/arch/PKGBUILD");
         let fedora = include_str!("../../../packaging/fedora/gmnb.spec");
         let debian = include_str!("../../../packaging/debian/copyright");
+        let nix = include_str!("../../../nix/package.nix");
+        let metainfo =
+            include_str!("../../../packaging/io.github.Go08er.GlazeMyNumbersBaby.metainfo.xml");
+        let metainfo_license = metainfo
+            .split("<project_license>")
+            .nth(1)
+            .and_then(|s| s.split("</project_license>").next())
+            .unwrap();
         // GMNB's own parts: Arch's package_gmnb, Fedora's main package.
         let arch_gmnb = arch.split("package_gmnb()").nth(1).unwrap();
         let arch_gmnb = arch_gmnb.split("package_dgmnb()").next().unwrap();
@@ -1717,8 +1726,10 @@ mod tests {
         let fedora_files = fedora.split("%files\n").nth(1).unwrap();
         let fedora_files = fedora_files.split("%files -n").next().unwrap();
         // The licences a credit can name, by the words that name them.
-        const LICENCES: [(&str, &str); 2] =
-            [("SIL Open Font License", "OFL-1.1"), ("WTFPL", "WTFPL")];
+        const LICENCES: [(&str, &str, &str); 2] = [
+            ("SIL Open Font License", "OFL-1.1", "ofl"),
+            ("WTFPL", "WTFPL", "wtfpl"),
+        ];
         let limits = gmnb_theme::Limits {
             load: std::time::Duration::from_secs(20),
             ..Default::default()
@@ -1732,6 +1743,7 @@ mod tests {
                     ("Flatpak", flatpak),
                     ("Arch", arch_gmnb),
                     ("Fedora", fedora_files),
+                    ("Nix", nix),
                 ] {
                     if !list.contains(&path) {
                         missing.push(format!("{package} doesn't install {path} ({title})"));
@@ -1745,7 +1757,13 @@ mod tests {
                             .is_some_and(|folder| !folder.is_empty() && path.starts_with(folder))
                     })
                 });
-                for (words, spdx) in LICENCES.iter().filter(|(w, _)| text.contains(w)) {
+                for (words, spdx, nix_name) in LICENCES.iter().filter(|(w, ..)| text.contains(w)) {
+                    if !metainfo_license.split_whitespace().any(|w| w == *spdx) {
+                        missing.push(format!("the metainfo's licence has no {spdx} ({title})"));
+                    }
+                    if !nix.contains(&format!("\n      {nix_name}\n")) {
+                        missing.push(format!("Nix's meta.license has no {nix_name} ({title})"));
+                    }
                     // (DEP-5: "License: MIT and WTFPL", and the text of
                     // each in a paragraph of its own.)
                     let names = |s: &str| {
@@ -1768,6 +1786,47 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "{}", missing.join("\n"));
+    }
+
+    /// THIRD-PARTY-LICENSES.txt names the crates at the versions Cargo.lock
+    /// has: it is generated from the lock (`packaging/licences/generate.sh`),
+    /// and a dependency update that doesn't regenerate it leaves it naming
+    /// versions that no longer ship (0.3's did: rustls 0.23.45, ureq 3.4.2).
+    #[test]
+    fn third_party_licences_name_the_locked_versions() {
+        let lock = include_str!("../../../Cargo.lock");
+        let licences = include_str!("../../../THIRD-PARTY-LICENSES.txt");
+        let mut locked = std::collections::HashSet::new();
+        let mut name = "";
+        let mut version = "";
+        for line in lock.lines() {
+            if let Some(n) = line.strip_prefix("name = \"") {
+                name = n.trim_end_matches('"');
+            } else if let Some(v) = line.strip_prefix("version = \"") {
+                version = v.trim_end_matches('"');
+            } else if line.starts_with("source = ") {
+                locked.insert(format!("{name} {version}"));
+            }
+        }
+        assert!(locked.len() > 300, "{} locked crates?", locked.len());
+        let mut stale = Vec::new();
+        let mut listed = 0;
+        for paragraph in licences.split("\n\n") {
+            // (After the licence's title; a long list wraps onto lines
+            // indented by two spaces.)
+            let Some((_, used)) = paragraph.split_once("\nUsed by: ") else {
+                continue;
+            };
+            for entry in used.split(',') {
+                let entry = entry.split_whitespace().collect::<Vec<_>>().join(" ");
+                listed += 1;
+                if !locked.contains(&entry) {
+                    stale.push(entry);
+                }
+            }
+        }
+        assert!(listed > 200, "{listed} crates listed?");
+        assert!(stale.is_empty(), "not in Cargo.lock: {stale:?}");
     }
 
     /// Every typeface GMNB bundles has its licence in About → Legal:

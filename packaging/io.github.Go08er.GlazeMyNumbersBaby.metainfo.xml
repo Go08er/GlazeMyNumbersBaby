@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>io.github.Go08er.GlazeMyNumbersBaby</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT AND OFL-1.1</project_license>
+  <project_license>MIT AND OFL-1.1 AND WTFPL</project_license>
   <name>GMNB</name>
   <summary>GlazeMyNumbers,Baby — a pointlessly beautiful calculator</summary>
   <description>
