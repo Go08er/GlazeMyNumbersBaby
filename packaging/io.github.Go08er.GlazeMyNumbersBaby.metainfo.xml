@@ -16,7 +16,7 @@
       <li>Standard, Scientific and Programmer calculators with history and memory</li>
       <li>Graphing with variables, tracing and function analysis</li>
       <li>Date calculation and unit conversion for 13 categories, including live currency rates</li>
-      <li>Seven colour palettes in light and dark — including one that follows your desktop's accent colour and one you design yourself — and a background that blooms when you type</li>
+      <li>Themes written as small scripts, three built in: Aurora (seven palettes in light and dark, including one that follows your desktop's accent colour and one you design yourself, under an aurora that rises where you press), Sprinkles and Swirls</li>
     </ul>
     <p>
       On x86-64 PCs GMNB needs a CPU with AVX2 (x86-64-v3): Intel Core from
