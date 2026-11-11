@@ -5,6 +5,8 @@
 //! readability tests have been through (`tests/css.rs`,
 //! `swirls_texts_read_over_every_colour_of_the_field`).
 
+mod common;
+
 use std::collections::HashSet;
 
 use gmnb_theme::draw::{MaskMode, Op};
@@ -17,7 +19,9 @@ use gmnb_theme::theme::{self, Source, Theme};
 use gmnb_theme::types::*;
 use gmnb_theme::{Ctx, Limits, OptionValue, Style};
 
-const BANDS: [&str; 6] = ["party", "lava", "lagoon", "orchid", "absinthe", "marble"];
+const BANDS: [&str; 8] = [
+    "party", "lava", "lagoon", "orchid", "absinthe", "marble", "system", "custom",
+];
 const GLASS: [&str; 3] = ["clear", "smoked", "panel"];
 
 /// The limits a theme really has when `GMNB_REAL_LIMITS` is set (run so
@@ -487,6 +491,246 @@ fn every_pixel_of_the_paint_is_one_of_its_ramps_colours() {
         let notes = theme.take_draw_notes();
         assert!(notes.is_empty(), "{notes:?}");
     }
+}
+
+/// The sets of one's own paint in the ramp of the bands their style names,
+/// whatever the accent or the colours picked, and follow a new one on the
+/// theme that drew the last: System on a desktop of each of a few accents
+/// and Freestyle from a few picks, one after another on one theme, its
+/// paint, its figures and its tile each in the ramp of the moment. (A
+/// theme holds the colours of eight ramps at once; these are more.)
+#[test]
+fn own_colours_paint_in_their_own_ramp() {
+    let mut theme = swirls();
+    let option = theme
+        .def
+        .options
+        .iter()
+        .find(|o| o.id == "bands")
+        .unwrap()
+        .clone();
+    let mut cases = Vec::new();
+    for accent in [
+        [0.2, 0.4, 0.9],
+        [0.1, 0.8, 0.3],
+        [1.0, 0.9, 0.0],
+        [0.9, 0.1, 0.8],
+        [0.5, 0.5, 0.5],
+    ] {
+        let mut c = ctx(&theme, &[("bands", text("system"))]);
+        c.accent = Some(accent);
+        cases.push((format!("system {accent:?}"), "system", c));
+    }
+    for (first, second, dark) in [
+        ("#ff0000", "#00ffff", "#000000"),
+        ("#000000", "#000000", "#ffffff"),
+        ("#ffff00", "#ff00ff", "#00ff00"),
+        ("#808080", "#7c4dff", "#3a2014"),
+    ] {
+        let c = ctx(
+            &theme,
+            &[
+                ("bands", text("custom")),
+                ("paint_first", text(first)),
+                ("paint_second", text(second)),
+                ("paint_dark", text(dark)),
+            ],
+        );
+        cases.push((format!("freestyle {first} {second} {dark}"), "custom", c));
+    }
+    let mut tables = HashSet::new();
+    // (The clock runs on from case to case: the fields' allowance is kept by it.)
+    for (k, (name, choice, c)) in cases.iter().enumerate() {
+        let table = table(&mut theme, c);
+        tables.insert(table.clone());
+        let all: HashSet<[u8; 4]> = table.iter().copied().collect();
+        let first: HashSet<[u8; 4]> = table[..256].iter().copied().collect();
+        let mut seen = HashSet::new();
+        for i in 0..20 {
+            let f = Frame {
+                time: k as f64 * 10.0 + i as f64 / 6.0,
+                dt: 1.0 / 6.0,
+                ..Frame::sized(360.0, 600.0)
+            };
+            let d = draw_at(&theme, LayerKind::Background, c, &f);
+            seen.extend(field(&d).0.pixels.as_chunks::<4>().0);
+        }
+        let strays: Vec<_> = seen.difference(&all).take(5).collect();
+        assert!(strays.is_empty(), "{name}: not of the ramp: {strays:?}");
+        let (now, old) = (glyphs(9, 80.0), glyphs(4, 250.0));
+        let f = Frame {
+            time: k as f64 * 10.0 + 5.0,
+            value: Some(value(&now, &old, Role::Calculator, false, None)),
+            ..Frame::sized(428.0, 116.0)
+        };
+        let d = draw_at(&theme, LayerKind::Display, c, &f);
+        let figures: HashSet<[u8; 4]> = field(&d)
+            .0
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .copied()
+            .collect();
+        let strays: Vec<_> = figures.difference(&first).take(5).collect();
+        assert!(
+            strays.is_empty(),
+            "{name}: figures not of the first band: {strays:?}"
+        );
+        let tile = theme.preview(&option, choice, c).unwrap();
+        let tiled: HashSet<[u8; 4]> = tile
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Field { picture, .. } => Some(picture.pixels.as_chunks::<4>().0.to_vec()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let strays: Vec<_> = tiled.difference(&all).take(5).collect();
+        assert!(
+            strays.is_empty(),
+            "{name}: the tile not of the ramp: {strays:?}"
+        );
+    }
+    // Every case its own bands.
+    assert_eq!(tables.len(), cases.len());
+    let notes = theme.take_draw_notes();
+    assert!(notes.is_empty(), "{notes:?}");
+}
+
+/// On a see-through window the paint thins itself: the layer is drawn at
+/// full strength (`fade = false`), in no group, through a ramp whose dark
+/// band clears first (gone from 0.5 down) while the bright ones keep two
+/// fifths of their colour at 0.1; every pixel it draws is of that ramp.
+/// At full opacity it is the bands' own ramp. The figures stay solid, in
+/// the bands' own first band. And each twentieth is a little further on
+/// than the one before: the slider moves through the looks smoothly.
+#[test]
+fn the_paint_thins_itself_on_a_see_through_window() {
+    let theme = swirls();
+    assert!(theme.def.layers["background"].unfaded);
+    let mut c = ctx(&theme, &[]);
+    let solid = table(&mut swirls(), &c);
+    let first: HashSet<[u8; 4]> = solid[..256].iter().copied().collect();
+    let mut last: Option<(f32, f32)> = None;
+    for step in (2..=20).rev() {
+        c.opacity = step as f32 / 20.0;
+        let k = 20 - step;
+        let f = Frame {
+            time: k as f64,
+            ..Frame::sized(360.0, 600.0)
+        };
+        let d = draw_at(&theme, LayerKind::Background, &c, &f);
+        assert!(!d.list.ops.iter().any(|op| matches!(op, Op::PushOpacity(_))));
+        let (picture, _) = field(&d);
+        let ramp = &picture.ramp;
+        let table: HashSet<[u8; 4]> = (0..3 * 256)
+            .map(|k| ramp.at((k as f32 + 0.5) / 256.0))
+            .collect();
+        let strays: Vec<_> = picture
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| !table.contains(*p))
+            .take(5)
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "{}: not of its ramp: {strays:?}",
+            c.opacity
+        );
+        // The bands' own opacity: the first's, and the dark one's, each where
+        // it is alone.
+        let bright = ramp.at(0.5 / 256.0)[3] as f32 / 255.0;
+        let dark = ramp.at(2.0 + 0.5 / 256.0)[3] as f32 / 255.0;
+        if c.opacity == 1.0 {
+            let own: Vec<[u8; 4]> = (0..3 * 256)
+                .map(|k| ramp.at((k as f32 + 0.5) / 256.0))
+                .collect();
+            assert_eq!(own, solid);
+        }
+        if c.opacity <= 0.5 {
+            assert_eq!(dark, 0.0, "{}", c.opacity);
+        }
+        assert!(bright >= 0.39, "{}: {bright}", c.opacity);
+        if let Some((was_bright, was_dark)) = last {
+            assert!(bright <= was_bright && dark <= was_dark, "{}", c.opacity);
+        }
+        last = Some((bright, dark));
+        // The figures: solid, of the bands' own first band.
+        let (now, old) = (glyphs(9, 80.0), glyphs(4, 250.0));
+        let f = Frame {
+            time: k as f64 + 0.5,
+            value: Some(value(&now, &old, Role::Calculator, false, None)),
+            ..Frame::sized(428.0, 116.0)
+        };
+        let d = draw_at(&theme, LayerKind::Display, &c, &f);
+        let figures: HashSet<[u8; 4]> = field(&d)
+            .0
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .copied()
+            .collect();
+        let strays: Vec<_> = figures.difference(&first).take(5).collect();
+        assert!(strays.is_empty(), "{}: figures {strays:?}", c.opacity);
+    }
+    // What the thinned paint costs to draw on a 4K screen: within what a
+    // frame may, as the paint at full opacity.
+    for (k, opacity) in [0.5, 0.15].into_iter().enumerate() {
+        c.opacity = opacity;
+        let f = Frame {
+            time: 40.0 + k as f64,
+            ..Frame::sized(3840.0, 2160.0)
+        };
+        draw_at(&theme, LayerKind::Background, &c, &f);
+    }
+    let busiest = theme.api().busiest_frame();
+    assert!(busiest > 0.0 && busiest < 0.25, "{busiest}");
+    let notes = theme.take_draw_notes();
+    assert!(notes.is_empty(), "{notes:?}");
+}
+
+/// The glass goes from an opaque window's to a see-through one's over a
+/// short range (the veil, from 1 to 0.7), not at once: in every set of
+/// bands under every glass, the panes' strength at each 64th of opacity
+/// (a scheme is made for each) is within a little of the one before.
+#[test]
+fn the_glass_moves_smoothly_with_the_slider() {
+    // (What a style costs is the app's budget, held in the running app
+    // and measured here; this test runs wherever the code is built, with
+    // four times the time.)
+    let mut theme = Theme::load(Source::built_in("swirls").unwrap(), common::limits()).unwrap();
+    let mut worst = (0.0f32, String::new());
+    let mut slowest = 0.0f64;
+    for bands in BANDS {
+        for glass in GLASS {
+            let mut c = ctx(&theme, &[("bands", text(bands)), ("glass", text(glass))]);
+            let mut last: Option<f32> = None;
+            for step in (7..=64).rev() {
+                c.opacity = step as f32 / 64.0;
+                let started = cpu_ms();
+                let style = theme.style(&c).unwrap().style.clone();
+                slowest = slowest.max(cpu_ms() - started);
+                let pane = style.fill("plain.background").samples_over([0.0; 4])[0][3];
+                if let Some(was) = last {
+                    let jump = (pane - was).abs();
+                    if jump > worst.0 {
+                        worst = (jump, format!("{bands} {glass} at {step}/64"));
+                    }
+                }
+                last = Some(pane);
+            }
+        }
+    }
+    println!(
+        "swirls: the glass's biggest step between 64ths: {:.3} ({}); the most processor time a style took {slowest:.1} ms",
+        worst.0, worst.1
+    );
+    assert!(worst.0 <= 0.05, "{} jumps {:.3}", worst.1, worst.0);
 }
 
 /// The background at every size a window may have, from the least to a
@@ -976,7 +1220,18 @@ fn the_tiles_are_small_swirls() {
     let ids: Vec<&str> = theme.def.options.iter().map(|o| o.id.as_str()).collect();
     assert_eq!(
         ids,
-        ["bands", "glass", "speed", "stir", "digits", "motion_note"]
+        [
+            "bands",
+            "system_note",
+            "paint_first",
+            "paint_second",
+            "paint_dark",
+            "glass",
+            "speed",
+            "stir",
+            "digits",
+            "motion_note"
+        ]
     );
     let mut pictures = HashSet::new();
     for bands in BANDS {
@@ -999,8 +1254,8 @@ fn the_tiles_are_small_swirls() {
             assert!(tile.ops.iter().any(|op| matches!(op, Op::Text { .. })));
         }
     }
-    // Six sets, six pictures.
-    assert_eq!(pictures.len(), 6);
+    // Eight sets, eight pictures.
+    assert_eq!(pictures.len(), 8);
     let notes = theme.take_draw_notes();
     assert!(notes.is_empty(), "{notes:?}");
 }

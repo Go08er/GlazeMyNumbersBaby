@@ -26,6 +26,49 @@ use gmnb_theme::{Ctx, Limits, OptionValue, Style};
 
 const FLAVOURS: [&str; 5] = ["strawberry", "blueberry", "matcha", "lemon", "caramel"];
 
+/// The two of one's own: System, in the desktop's accent, and Freestyle,
+/// in the colours picked.
+const OWN: [&str; 2] = ["system", "custom"];
+
+/// Colours a desktop's accent or a pick may be: rule 2's extremes, and a
+/// few from round the wheel.
+const PICKS: [&str; 10] = [
+    "#ffffff", "#000000", "#808080", "#ffff00", "#0000ff", "#00ff00", "#7c4dff", "#ff0040",
+    "#3a2014", "#fff1dc",
+];
+
+/// The flavours of one's own in colours a desktop or a person might
+/// choose, light and dark: System on no accent and on each pick,
+/// Freestyle iced in each with the complement, the icing twice and the
+/// next pick. Each with its name.
+fn own_ctxs(theme: &Theme) -> Vec<(String, Ctx)> {
+    let mut out = Vec::new();
+    for dark in [false, true] {
+        let mut none = ctx(theme, dark, "system", &[]);
+        none.accent = None;
+        out.push((format!("system none dark={dark}"), none));
+        for (i, pick) in PICKS.iter().enumerate() {
+            let c = appcore::color::hex(u32::from_str_radix(&pick[1..], 16).unwrap());
+            let mut system = ctx(theme, dark, "system", &[]);
+            system.accent = Some(c);
+            out.push((format!("system {pick} dark={dark}"), system));
+            for second in [
+                appcore::color::to_hex(appcore::color::complement(c)),
+                pick.to_string(),
+                PICKS[(i + 1) % PICKS.len()].to_string(),
+            ] {
+                let mut own = ctx(theme, dark, "custom", &[]);
+                own.options
+                    .insert("icing".into(), OptionValue::Text(pick.to_string()));
+                own.options
+                    .insert("second".into(), OptionValue::Text(second.clone()));
+                out.push((format!("freestyle {pick}+{second} dark={dark}"), own));
+            }
+        }
+    }
+    out
+}
+
 /// The header's height, and how much of it is the awning's stripes
 /// (theme.luau, `HEADER` and `AWNING`).
 const HEADER: f32 = 52.0;
@@ -260,14 +303,44 @@ fn sprinkles_loads_and_returns_only_known_keys() {
     let ids: Vec<&str> = theme.def.options.iter().map(|o| o.id.as_str()).collect();
     assert_eq!(
         ids,
-        ["flavour", "buddy", "living", "fountain", "motion_note"]
+        [
+            "flavour",
+            "system_note",
+            "icing",
+            "second",
+            "buddy",
+            "living",
+            "fountain",
+            "motion_note"
+        ]
     );
+    // The colours are picked only for Freestyle, and shown only then; the
+    // note says what System is made of.
+    for (flavour, shown) in [
+        ("strawberry", &[][..]),
+        ("system", &["system_note"][..]),
+        ("custom", &["icing", "second"][..]),
+    ] {
+        let c = ctx(&theme, false, flavour, &[]);
+        let defs = theme.def.options.clone();
+        for o in &defs {
+            if ["system_note", "icing", "second"].contains(&o.id.as_str()) {
+                let visible = theme.visible(o, &c);
+                assert_eq!(
+                    visible,
+                    shown.contains(&o.id.as_str()),
+                    "{flavour}: {}",
+                    o.id
+                );
+            }
+        }
+    }
     for name in ["background", "keypad", "display", "overlay"] {
         assert!(theme.def.layers[name].draw.is_some(), "{name}");
     }
     assert!(theme.def.layers["keypad"].place.is_some());
     assert!(!theme.def.layers["keypad"].pointer);
-    for flavour in FLAVOURS {
+    for flavour in FLAVOURS.iter().chain(&OWN) {
         for dark in [false, true] {
             for opacity in [1.0, 0.5, 0.1] {
                 let mut c = ctx(&theme, dark, flavour, &[]);
@@ -297,8 +370,8 @@ fn sprinkles_loads_and_returns_only_known_keys() {
                         "{path}"
                     );
                 }
-                // The awning is the wall's picture and thins with it; on
-                // a see-through window the header has a card of its own.
+                // The awning is the background layer's at full opacity; on a
+                // see-through window (0.5, 0.1) the header is the awning itself.
                 let header = s.fill("header.background");
                 let shows = header.samples_over([0.0, 0.0, 0.0, 0.0])[0][3];
                 assert_eq!(shows, if opacity < 1.0 { 1.0 } else { 0.0 });
@@ -989,7 +1062,7 @@ fn sprinkles_layers_draw_within_their_limits() {
         .iter()
         .find(|o| o.id == "flavour")
         .unwrap();
-    for choice in FLAVOURS {
+    for choice in FLAVOURS.iter().chain(&OWN) {
         let tile = theme.preview(option, choice, &living).unwrap();
         assert!(tile.ops.len() > 100 && tile.ops.len() < 400, "{choice}");
     }
@@ -1030,7 +1103,8 @@ fn style_of(theme: &mut Theme, c: &Ctx) -> Style {
 }
 
 /// Readability rule 3 for what the layers paint, which the style's own
-/// tables can't see. In every flavour, light and dark:
+/// tables can't see. In every flavour, and System and Freestyle in
+/// colours from rule 2's extremes and round the wheel, light and dark:
 ///
 /// - the header's title and buttons on both of the awning's stripes
 ///   (the background layer draws them under a header with no fill);
@@ -1053,135 +1127,268 @@ fn what_glazed_paints_reads() {
         version += 1;
         version
     };
+    let mut cases = Vec::new();
     for flavour in FLAVOURS {
         for dark in [false, true] {
-            let name = format!("{flavour} dark={dark}");
-            let c = ctx(&theme, dark, flavour, &[]);
-            let style = style_of(&mut theme, &c);
+            cases.push((
+                format!("{flavour} dark={dark}"),
+                ctx(&theme, dark, flavour, &[]),
+            ));
+        }
+    }
+    // And the flavours of one's own, iced in colours from the extremes
+    // and round the wheel.
+    cases.extend(own_ctxs(&theme));
+    for (name, c) in cases {
+        let style = style_of(&mut theme, &c);
 
-            // The awning: every rectangle the background layer paints
-            // across the header, under the title and the buttons.
-            let drawn = ok(theme.draw(LayerKind::Background, &c, &Frame::sized(760.0, 640.0)));
-            let stripes: BTreeSet<[u8; 4]> = drawn
-                .list
-                .ops
-                .iter()
-                .filter_map(|op| match op {
-                    Op::Rect { rect, paint } if rect[1] == 0.0 && rect[3] == AWNING => {
-                        let c = solid(paint);
-                        assert_eq!(c[3], 1.0);
-                        Some(c.map(|v| (v * 255.0).round() as u8))
-                    }
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(stripes.len(), 2, "{name}");
-            let Some(Value::Text(title)) = style.get("header.title") else {
-                panic!()
-            };
-            let button = style.control("header.button").unwrap().finished(&[]);
-            let controls = style.control("header.controls").unwrap().finished(&[]);
-            for stripe in &stripes {
-                for (what, ink) in [
-                    ("title", title.color),
-                    ("button", button.icon_color),
-                    ("controls", controls.icon_color),
-                ] {
-                    let got = on(ink, rgba(*stripe));
-                    worst_awning = worst_awning.min(got);
-                    assert!(got >= TEXT_CONTRAST, "{name}: {what} on a stripe {got:.2}");
+        // The awning: every rectangle the background layer paints
+        // across the header, under the title and the buttons.
+        let drawn = ok(theme.draw(LayerKind::Background, &c, &Frame::sized(760.0, 640.0)));
+        let stripes: BTreeSet<[u8; 4]> = drawn
+            .list
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Rect { rect, paint } if rect[1] == 0.0 && rect[3] == AWNING => {
+                    let c = solid(paint);
+                    assert_eq!(c[3], 1.0);
+                    Some(c.map(|v| (v * 255.0).round() as u8))
                 }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stripes.len(), 2, "{name}");
+        let Some(Value::Text(title)) = style.get("header.title") else {
+            panic!()
+        };
+        let button = style.control("header.button").unwrap().finished(&[]);
+        let controls = style.control("header.controls").unwrap().finished(&[]);
+        for stripe in &stripes {
+            for (what, ink) in [
+                ("title", title.color),
+                ("button", button.icon_color),
+                ("controls", controls.icon_color),
+            ] {
+                let got = on(ink, rgba(*stripe));
+                worst_awning = worst_awning.min(got);
+                assert!(got >= TEXT_CONTRAST, "{name}: {what} on a stripe {got:.2}");
             }
+        }
 
-            // A glazed number, in a frame without motion (every number
-            // is then glazed), at the sizes a readout has, down to the
-            // least at which digits are iced.
-            let case = style.fill("display.background").samples_over([0.0; 4])[0];
-            assert_eq!(case[3], 1.0);
-            for size in [74.667, 56.0, 28.0] {
-                tick();
-                let now = digits(5, 344.0, size);
-                let f = Frame {
-                    value: Some(value(&now, next(), false, None, Role::Calculator)),
-                    motion: false,
-                    ..Frame::sized(344.0, 122.0)
-                };
-                let d = ok(theme.draw(LayerKind::Display, &c, &f));
-                // Outside the mask the digits are painted once, in the
-                // dough's colour: the window's own text colour.
-                let at = d
-                    .list
-                    .ops
-                    .iter()
-                    .position(|op| matches!(op, Op::PushMask(_)))
-                    .unwrap();
-                for op in &d.list.ops[..at] {
-                    if let Op::Glyph { paint, .. } = op {
-                        let got = on(solid(paint), case);
-                        assert_eq!(solid(paint), style.color("window.color"));
-                        assert!(got >= TEXT_CONTRAST, "{name}: dough {got:.2}");
-                    }
-                }
-                // What shows through them: the icing's picture, every
-                // pixel of it.
-                let colours = colours_of(&theme, pics.icing);
-                assert!(colours.len() >= 3, "{name}: {colours:?}");
-                for p in colours {
-                    assert_eq!(p[3], 255);
-                    let got = on(rgba(p), case);
-                    worst_glaze = worst_glaze.min(got);
-                    assert!(got >= UI_CONTRAST, "{name} at {size}: icing {p:?} {got:.2}");
-                }
-            }
-            // Smaller digits are not large text, and 3 is not enough for
-            // them: they wear no icing, and are the text colour alone.
-            for size in [27.0, 20.0] {
-                tick();
-                let small = digits(5, 344.0, size);
-                let f = Frame {
-                    value: Some(value(&small, next(), false, None, Role::Calculator)),
-                    motion: false,
-                    ..Frame::sized(344.0, 122.0)
-                };
-                let d = ok(theme.draw(LayerKind::Display, &c, &f));
-                for op in &d.list.ops {
-                    assert!(!matches!(op, Op::PushMask(_)), "{name} at {size}");
-                    if let Op::Glyph { paint, .. } = op {
-                        assert_eq!(solid(paint), style.color("window.color"));
-                    }
-                }
-            }
-            // An error, and a page's line.
+        // A glazed number, in a frame without motion (every number
+        // is then glazed), at the sizes a readout has, down to the
+        // least at which digits are iced.
+        let case = style.fill("display.background").samples_over([0.0; 4])[0];
+        assert_eq!(case[3], 1.0);
+        for size in [74.667, 56.0, 28.0] {
             tick();
-            let now = digits(5, 344.0, 37.3);
+            let now = digits(5, 344.0, size);
             let f = Frame {
-                value: Some(value(&now, next(), true, None, Role::Calculator)),
+                value: Some(value(&now, next(), false, None, Role::Calculator)),
+                motion: false,
                 ..Frame::sized(344.0, 122.0)
             };
             let d = ok(theme.draw(LayerKind::Display, &c, &f));
-            assert!(!d.list.ops.iter().any(|op| matches!(op, Op::PushMask(_))));
-            for op in &d.list.ops {
+            // Outside the mask the digits are painted once, in the
+            // dough's colour: the window's own text colour.
+            let at = d
+                .list
+                .ops
+                .iter()
+                .position(|op| matches!(op, Op::PushMask(_)))
+                .unwrap();
+            for op in &d.list.ops[..at] {
                 if let Op::Glyph { paint, .. } = op {
                     let got = on(solid(paint), case);
-                    assert!(got >= TEXT_CONTRAST, "{name}: error {got:.2}");
+                    assert_eq!(solid(paint), style.color("window.color"));
+                    assert!(got >= TEXT_CONTRAST, "{name}: dough {got:.2}");
                 }
             }
-            let plain = style.fill("plain.background").samples_over([0.0; 4])[0];
-            let f = Frame {
-                value: Some(value(&now, next(), false, None, Role::Converter)),
-                ..Frame::sized(344.0, 60.0)
-            };
-            for op in &ok(theme.draw(LayerKind::Display, &c, &f)).list.ops {
-                let Op::Glyph { paint, .. } = op else {
-                    panic!("{op:?}")
-                };
-                assert!(on(solid(paint), plain) >= TEXT_CONTRAST, "{name}: a line");
+            // What shows through them: the icing's picture, every
+            // pixel of it.
+            let colours = colours_of(&theme, pics.icing);
+            assert!(colours.len() >= 3, "{name}: {colours:?}");
+            for p in colours {
+                assert_eq!(p[3], 255);
+                let got = on(rgba(p), case);
+                worst_glaze = worst_glaze.min(got);
+                assert!(got >= UI_CONTRAST, "{name} at {size}: icing {p:?} {got:.2}");
             }
+        }
+        // Smaller digits are not large text, and 3 is not enough for
+        // them: they wear no icing, and are the text colour alone.
+        for size in [27.0, 20.0] {
+            tick();
+            let small = digits(5, 344.0, size);
+            let f = Frame {
+                value: Some(value(&small, next(), false, None, Role::Calculator)),
+                motion: false,
+                ..Frame::sized(344.0, 122.0)
+            };
+            let d = ok(theme.draw(LayerKind::Display, &c, &f));
+            for op in &d.list.ops {
+                assert!(!matches!(op, Op::PushMask(_)), "{name} at {size}");
+                if let Op::Glyph { paint, .. } = op {
+                    assert_eq!(solid(paint), style.color("window.color"));
+                }
+            }
+        }
+        // An error, and a page's line.
+        tick();
+        let now = digits(5, 344.0, 37.3);
+        let f = Frame {
+            value: Some(value(&now, next(), true, None, Role::Calculator)),
+            ..Frame::sized(344.0, 122.0)
+        };
+        let d = ok(theme.draw(LayerKind::Display, &c, &f));
+        assert!(!d.list.ops.iter().any(|op| matches!(op, Op::PushMask(_))));
+        for op in &d.list.ops {
+            if let Op::Glyph { paint, .. } = op {
+                let got = on(solid(paint), case);
+                assert!(got >= TEXT_CONTRAST, "{name}: error {got:.2}");
+            }
+        }
+        let plain = style.fill("plain.background").samples_over([0.0; 4])[0];
+        let f = Frame {
+            value: Some(value(&now, next(), false, None, Role::Converter)),
+            ..Frame::sized(344.0, 60.0)
+        };
+        for op in &ok(theme.draw(LayerKind::Display, &c, &f)).list.ops {
+            let Op::Glyph { paint, .. } = op else {
+                panic!("{op:?}")
+            };
+            assert!(on(solid(paint), plain) >= TEXT_CONTRAST, "{name}: a line");
         }
     }
     println!(
         "sprinkles: the least contrast on the awning {worst_awning:.2}, of a glazed number {worst_glaze:.2}"
     );
+}
+
+/// The pictures worked out from a flavour (the icing on the digits, the
+/// doughnut) follow its colours: a new accent, or a new pick, on the
+/// theme that drew the last ones, makes them anew in the new colours.
+#[test]
+fn the_icing_follows_the_colours() {
+    let theme = sprinkles();
+    let tick = clock(&theme);
+    let pics = pictures(&theme);
+    let now = digits(5, 344.0, 56.0);
+    let mut version = 0;
+    let mut glazed = |c: &Ctx| {
+        tick();
+        version += 1;
+        let f = Frame {
+            value: Some(value(&now, version, false, None, Role::Calculator)),
+            motion: false,
+            ..Frame::sized(344.0, 122.0)
+        };
+        ok(theme.draw(LayerKind::Display, c, &f));
+        (
+            colours_of(&theme, pics.icing),
+            colours_of(&theme, pics.buddy),
+        )
+    };
+    let mut system = ctx(&theme, false, "system", &[]);
+    system.accent = Some([1.0, 0.0, 0.25]);
+    let red = glazed(&system);
+    system.accent = Some([0.0, 0.8, 0.3]);
+    let green = glazed(&system);
+    assert_ne!(red.0, green.0, "the icing on the digits");
+    assert_ne!(red.1, green.1, "the doughnut");
+    let mut own = ctx(&theme, false, "custom", &[]);
+    own.options
+        .insert("icing".into(), OptionValue::Text("#ff0040".into()));
+    let picked = glazed(&own);
+    own.options
+        .insert("icing".into(), OptionValue::Text("#00cc4c".into()));
+    let picked_again = glazed(&own);
+    assert_ne!(picked.0, picked_again.0, "the icing on the digits");
+    assert_ne!(picked.1, picked_again.1, "the doughnut");
+    // The same colours, the same pictures.
+    assert_eq!(glazed(&own), picked_again);
+}
+
+/// On a see-through window the shop's front is its window. The layer is
+/// drawn at full strength (`fade = false`) and thins the wall itself: the
+/// tiles and the falling sprinkles under the window's opacity, and
+/// nothing else. As the wall goes, the glass comes in, its frame and its
+/// shine, from none at 0.95 to all of it at 0.6; the awning it paints
+/// stays solid until the header, which is the awning there, covers it
+/// (from 0.95 down); and `window.background`, what the header's title
+/// lies on until then, goes once the header is all awning (0.95 to 0.9).
+/// Each step is a little further than the one before: a drag of the
+/// slider moves smoothly. And it costs little to draw.
+#[test]
+fn the_shop_window_comes_in_as_the_wall_goes() {
+    let mut theme = sprinkles();
+    assert!(theme.def.layers["background"].unfaded);
+    for dark in [false, true] {
+        let mut last: Option<(f32, f32, f32, f32)> = None;
+        // Every twentieth, and every hundredth from 1 to 0.95, where the
+        // header becomes the awning; highest first.
+        let mut opacities: Vec<f32> = (2..=20).map(|step| step as f32 / 20.0).collect();
+        opacities.extend([0.99, 0.98, 0.97, 0.96]);
+        opacities.sort_by(|a, b| b.total_cmp(a));
+        for opacity in opacities {
+            let mut c = ctx(&theme, dark, "strawberry", &[]);
+            c.opacity = opacity;
+            let style = style_of(&mut theme, &c);
+            let ops = ok(theme.draw(LayerKind::Background, &c, &Frame::sized(360.0, 600.0)))
+                .list
+                .ops;
+            // The wall, thinned, and nothing but the wall in that group.
+            let thinned =
+                matches!(ops.first(), Some(Op::PushOpacity(o)) if (o - opacity).abs() < 1e-6);
+            assert_eq!(thinned, opacity < 1.0, "{opacity}");
+            // The glass: the shine (white) and the frame.
+            let shine = ops
+                .iter()
+                .filter_map(|op| match op {
+                    Op::Rect { paint, .. } => {
+                        let p = solid(paint);
+                        (p[0] == 1.0 && p[1] == 1.0 && p[2] == 1.0).then_some(p[3])
+                    }
+                    _ => None,
+                })
+                .fold(0.0f32, f32::max);
+            let awning_drawn = ops.iter().any(
+                |op| matches!(op, Op::Rect { rect, .. } if rect[1] == 0.0 && rect[3] == AWNING),
+            );
+            let header = style.fill("header.background").samples_over([0.0; 4])[0][3];
+            let wall = style.fill("window.background").samples_over([0.0; 4])[0][3];
+            assert_eq!(shine > 0.0, opacity < 0.95, "{opacity}: shine {shine}");
+            assert_eq!(awning_drawn, opacity > 0.95, "{opacity}");
+            // The window's own colour stays until the header is all
+            // awning, and goes from 0.95 to 0.9.
+            assert_eq!(wall == 1.0, opacity >= 0.95, "{opacity}: {wall}");
+            assert_eq!(wall == 0.0, opacity <= 0.9, "{opacity}: {wall}");
+            assert_eq!(header == 1.0, opacity <= 0.95, "{opacity}: {header}");
+            if opacity <= 0.6 {
+                assert!(shine > 0.15, "{opacity}: shine {shine}");
+            }
+            if let Some((was_shine, was_header, was_wall, was_opacity)) = last {
+                assert!(
+                    shine >= was_shine && header >= was_header && wall <= was_wall,
+                    "{opacity} after {was_opacity}"
+                );
+            }
+            last = Some((shine, header, wall, opacity));
+        }
+    }
+    // What the shop window costs to draw, in a new window and on a 4K
+    // screen: well within what a frame may.
+    for (w, h) in [(760.0, 640.0), (3840.0, 2160.0)] {
+        for opacity in [0.5, 0.15] {
+            let mut c = ctx(&theme, false, "strawberry", &[]);
+            c.opacity = opacity;
+            ok(theme.draw(LayerKind::Background, &c, &Frame::sized(w, h)));
+        }
+    }
+    let busiest = theme.api().busiest_frame();
+    assert!(busiest > 0.0 && busiest < 0.25, "{busiest}");
+    assert!(theme.take_draw_notes().is_empty());
 }
 
 /// What stands behind the page is the wall's still and nothing brighter

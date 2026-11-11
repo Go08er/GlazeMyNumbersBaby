@@ -142,7 +142,7 @@ fn values_of(o: &OptionDef) -> Vec<OptionValue> {
 /// Every set of saved options the sweep visits: all of the choices,
 /// toggles and sliders at once (colours at their defaults), then, for each
 /// value of each choice, every colour from the list (two colours: all
-/// pairs).
+/// pairs; three: 36 of the triples).
 fn option_sets(theme: &Theme) -> Vec<BTreeMap<String, OptionValue>> {
     let defs = &theme.def.options;
     let plain: Vec<&OptionDef> = defs
@@ -191,6 +191,12 @@ fn option_sets(theme: &Theme) -> Vec<BTreeMap<String, OptionValue>> {
                 }
             }
             tuples = next;
+        }
+        // Three colours or more (Swirls' Freestyle): 36 of the tuples,
+        // spread through them, as two colours give.
+        if tuples.len() > 36 {
+            let n = tuples.len();
+            tuples = (0..36).map(|i| tuples[i * 37 % n].clone()).collect();
         }
         for (id, v) in pick {
             for t in &tuples {
@@ -978,6 +984,21 @@ fn aurora_freestyle_random_colours_read() {
     report(sweep_styles("aurora", sets));
 }
 
+/// Sprinkles' Freestyle iced in random colours: rules 3 and 4.
+#[test]
+fn sprinkles_freestyle_random_colours_read() {
+    let mut rng = Lcg(13);
+    let mut sets = Vec::new();
+    for _ in 0..60 {
+        sets.push(BTreeMap::from([
+            ("flavour".to_string(), text("custom")),
+            ("icing".to_string(), text(&rng.hex())),
+            ("second".to_string(), text(&rng.hex())),
+        ]));
+    }
+    report(sweep_styles("sprinkles", sets));
+}
+
 // ---- Layers ------------------------------------------------------------------------
 
 use gmnb_theme::events::{Action, Cause, Event, EventKind, KeyKind, Page, Source as From, Via};
@@ -1591,6 +1612,48 @@ fn aurora_under_any_accent_reads() {
                     let style = aurora.style(&ctx).unwrap().style.clone();
                     bad.extend(unreadable_over_the_aurora(&aurora, &ctx, &name, &style));
                     styles.push((name, style));
+                }
+                bad.extend(unreadable(styles));
+            }
+        }
+    }
+    report(bad);
+}
+
+/// Sprinkles' System flavour under any desktop accent, and Freestyle iced
+/// in colours all round the wheel (with its own second colour, and with
+/// another from the wheel), light and dark, opaque and see-through: rules
+/// 3 and 4.
+#[test]
+fn sprinkles_under_any_accent_reads() {
+    let mut sprinkles = built_in("sprinkles");
+    let mut bad = Vec::new();
+    let wheel = wheel();
+    for (i, accent) in wheel.iter().enumerate() {
+        for dark in [false, true] {
+            for opacity in [1.0, 0.1] {
+                let mut styles = Vec::new();
+                let hex = appcore::color::to_hex(*accent);
+                let system = BTreeMap::from([("flavour".to_string(), text("system"))]);
+                let ctx = ctx_of(&sprinkles, dark, opacity, Some(*accent), true, &system);
+                styles.push((
+                    format!("sprinkles system {hex} dark={dark} {opacity}"),
+                    sprinkles.style(&ctx).unwrap().style.clone(),
+                ));
+                let other = appcore::color::to_hex(wheel[(i * 7 + 11) % wheel.len()]);
+                for second in [None, Some(other)] {
+                    let mut saved = BTreeMap::from([
+                        ("flavour".to_string(), text("custom")),
+                        ("icing".to_string(), text(&hex)),
+                    ]);
+                    if let Some(second) = &second {
+                        saved.insert("second".to_string(), text(second));
+                    }
+                    let ctx = ctx_of(&sprinkles, dark, opacity, None, true, &saved);
+                    styles.push((
+                        format!("sprinkles freestyle {hex}+{second:?} dark={dark} {opacity}"),
+                        sprinkles.style(&ctx).unwrap().style.clone(),
+                    ));
                 }
                 bad.extend(unreadable(styles));
             }

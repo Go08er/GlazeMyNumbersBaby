@@ -8,7 +8,9 @@
 -- for a readout. Type a sum and the digits are plain dough. Press = and
 -- icing runs down them and sprinkles land on it, to a jingle in the
 -- flavour's own scale, while the doughnut that lives on the shelf jumps
--- for joy. (Its mouth is its hole: it is always impressed.) Five flavours.
+-- for joy. (Its mouth is its hole: it is always impressed.) Five flavours,
+-- and two of your own: System, iced in the desktop's accent colour, and
+-- Freestyle, in colours you pick.
 --
 -- Where Aurora is light behind glass and all of it computed, Sprinkles is
 -- made of pictures and of matter: stills drawn by a script (the wall, the
@@ -28,7 +30,7 @@
 --   8. Options      what Settings offers, and the flavours' tiles
 --   9. Sound        chip-tune: a note under every key, a jingle for a result
 
-local hex, mix, alpha = gmnb.hex, gmnb.mix, gmnb.alpha
+local hex, hsl, mix, alpha = gmnb.hex, gmnb.hsl, gmnb.mix, gmnb.alpha
 local white, black = gmnb.white, gmnb.black
 -- 4.5 and 3: what WCAG asks of text, and of large text and lines.
 local TEXT, UI = gmnb.TEXT_CONTRAST, gmnb.UI_CONTRAST
@@ -50,6 +52,57 @@ local FLAVOURS: { [string]: Flavour } = {
 	caramel = { icing = "#ffa94d", second = "#b79bff" },
 }
 
+-- And two flavours of your own. System is iced in the desktop's accent
+-- colour (this blue on a desktop that shares none), Freestyle in the
+-- colours you pick (grape and lime until you do). Either can be any
+-- colour at all, so everything below is worked out to read whatever it is.
+local FALLBACK_ACCENT = "#3584e4"
+local DEFAULT_ICING = "#c58cff"
+local DEFAULT_SECOND = "#9be36a"
+
+-- A colour option's saved text, or `fallback` if someone edited it into
+-- nonsense. (Icing is solid: an opacity written into it is dropped.)
+local function colour(value: OptionValue?, fallback: string): Rgba
+	if type(value) == "string" and (#value == 7 or #value == 9) and string.match(value, "^#%x+$") then
+		return hex(string.sub(value, 1, 7))
+	end
+	return hex(fallback)
+end
+
+-- Any colour as icing: its hue and its strength as they were given, at a
+-- lightness icing has. (Black icing would hide the doughnut's line, white
+-- its shine.)
+local function iced(c: Rgba): Rgba
+	local h, s, l = gmnb.to_hsl(c)
+	return hsl(h, s, math.clamp(l, 0.34, 0.82))
+end
+
+-- What goes with an icing: a colour most of the way round the wheel from
+-- it, as mint goes with strawberry and lemon with blueberry, as light as
+-- theirs. A grey icing gets a lighter grey.
+local function second_for(icing: Rgba): Rgba
+	local h, s = gmnb.to_hsl(icing)
+	if s < 0.08 then
+		return hsl(h, s, 0.74)
+	end
+	return hsl(h + 160, math.clamp(s, 0.55, 0.9), 0.7)
+end
+
+-- A flavour's two colours for `ctx`, and a name that is the same exactly
+-- when they are.
+local function flavour_colours(id: string, ctx: Ctx): (Rgba, Rgba, string)
+	if id == "system" then
+		local icing = iced(ctx.accent or hex(FALLBACK_ACCENT))
+		return icing, second_for(icing), "system " .. gmnb.to_hex(icing)
+	elseif id == "custom" then
+		local icing = iced(colour(ctx.options.icing, DEFAULT_ICING))
+		local second = iced(colour(ctx.options.second, DEFAULT_SECOND))
+		return icing, second, "custom " .. gmnb.to_hex(icing) .. " " .. gmnb.to_hex(second)
+	end
+	local flavour = FLAVOURS[id] or FLAVOURS.strawberry
+	return hex(flavour.icing), hex(flavour.second), id
+end
+
 -- Sprinkles, wherever they are only decoration: the loop's own colours
 -- (make_assets.py, SPRINKLE_COLOURS).
 local SPRINKLES: { Rgba } = {
@@ -63,6 +116,9 @@ local SPRINKLES: { Rgba } = {
 
 -- A flavour in one mode, and everything worked out from it.
 type Scheme = {
+	-- Which flavour, in which colours and mode: the same text exactly when
+	-- the scheme is the same (the pictures worked out from it are kept by it).
+	key: string,
 	dark: boolean,
 	-- The wall, what stands on it (panels, the display case), and what
 	-- stands on that (buttons, chips).
@@ -149,9 +205,11 @@ end
 local CHOCOLATE = hex("#3a2014")
 local CREAM = hex("#fff1dc")
 
-local function build(id: string, dark: boolean): Scheme
-	local flavour = FLAVOURS[id] or FLAVOURS.strawberry
-	local second = hex(flavour.second)
+-- `spare`: how far over 4.5 the awning's stripes are taken. A colour of
+-- one's own can be anything, and one taken to 4.5 exactly can come out
+-- under it once rounded to eight bits on its way to the screen; the
+-- built-in flavours' stripes stand as they were drawn.
+local function build(key: string, raw_icing: Rgba, second: Rgba, dark: boolean, spare: number): Scheme
 	local wall, card, card2, line, soft, ink
 	local number, number_edge, func, func_edge
 	if dark then
@@ -170,7 +228,7 @@ local function build(id: string, dark: boolean): Scheme
 
 	-- The icing carries small text (a lit button's): chocolate or cream on
 	-- it, whichever reads better, and the icing moved until it does.
-	local icing = hex(flavour.icing)
+	local icing = raw_icing
 	local on_icing = if gmnb.contrast(CHOCOLATE, icing) >= gmnb.contrast(CREAM, icing) then CHOCOLATE else CREAM
 	icing = gmnb.with_contrast(icing, on_icing, TEXT)
 	local icing_edge = mix(icing, if dark then black else CHOCOLATE, 0.36)
@@ -199,11 +257,11 @@ local function build(id: string, dark: boolean): Scheme
 	local stripe, stripe_other, awning_ink
 	if dark then
 		awning_ink = CREAM
-		stripe = legible(mix(icing, black, 0.45), { awning_ink }, TEXT)
+		stripe = legible(mix(icing, black, 0.45), { awning_ink }, TEXT * spare)
 		stripe_other = card
 	else
 		awning_ink = CHOCOLATE
-		stripe = legible(hex(flavour.icing), { awning_ink }, TEXT)
+		stripe = legible(raw_icing, { awning_ink }, TEXT * spare)
 		stripe_other = card
 	end
 
@@ -239,6 +297,7 @@ local function build(id: string, dark: boolean): Scheme
 	end
 
 	return {
+		key = key,
 		dark = dark,
 		wall = wall,
 		card = card,
@@ -280,21 +339,28 @@ local function build(id: string, dark: boolean): Scheme
 end
 
 -- A scheme takes a few hundred contrast checks, and the draw hooks ask for
--- it every frame: remember the ten there are.
+-- it every frame: remember what was built. (Dragging through the colour
+-- chooser makes a new one each step: a few dozen at most are kept.)
 local schemes: { [string]: Scheme } = {}
+local scheme_count = 0
 
-local function scheme_for(id: string, dark: boolean): Scheme
-	local key = id .. (if dark then "|dark" else "|light")
+local function scheme_for(id: string, ctx: Ctx): Scheme
+	local icing, second, name = flavour_colours(id, ctx)
+	local key = name .. (if ctx.dark then "|dark" else "|light")
 	local s = schemes[key]
 	if not s then
-		s = build(id, dark)
+		if scheme_count >= 32 then
+			schemes, scheme_count = {}, 0
+		end
+		s = build(key, icing, second, ctx.dark, if FLAVOURS[id] then 1 else 1.02)
 		schemes[key] = s
+		scheme_count += 1
 	end
 	return s
 end
 
 local function scheme(ctx: Ctx): Scheme
-	return scheme_for(tostring(ctx.options.flavour), ctx.dark)
+	return scheme_for(tostring(ctx.options.flavour), ctx)
 end
 
 ---------------------------------------------------------------------------
@@ -329,14 +395,80 @@ local SHORT_KEY = 24
 -- The display case's shelf: how much of the readout's foot it takes.
 local SHELF = 10
 
+-- A see-through window is the shop window. The wall thins with the
+-- window's opacity, and as it goes the glass of the shop's front comes in:
+-- its frame and a shine across it (section 4, which draws them at full
+-- strength, `fade = false`). The awning stays, solid at any opacity: the
+-- header itself is the awning there. The counter (the display case on its
+-- shelf, the keys) was always solid. All of it moves smoothly with the
+-- opacity slider.
+
+local function smooth(t: number): number
+	t = math.clamp(t, 0, 1)
+	return t * t * (3 - 2 * t)
+end
+
+-- How far the header has become the awning: none of it at full opacity,
+-- all of it from 0.95 down. (Only there do the stripes the background
+-- layer paints and the header's own show together.)
+local function awning_shown(opacity: number): number
+	return 1 - smooth((opacity - 0.95) / 0.05)
+end
+
+-- How much of the window's own colour is kept under the wall the layer
+-- paints: all of it from 0.95 up, none from 0.9 down.
+local function wall_kept(opacity: number): number
+	return smooth((opacity - 0.9) / 0.05)
+end
+
+-- How far the shop's glass has come in: none of it from 0.95 up, all of it
+-- from 0.6 down.
+local function glazing(opacity: number): number
+	return smooth((0.95 - opacity) / 0.35)
+end
+
+-- The awning as the header's own fill, at `shown`: sixteen stripes across
+-- the header, starting as the drawn awning does. (A style knows no width,
+-- so they are sixteenths of it; a gradient holds sixteen colours, so the
+-- stripes are three gradients' runs, each clear outside its own.)
+local AWNING_STRIPES = 16
+local function awning_fill(s: Scheme, shown: number): Fill
+	local n = AWNING_STRIPES
+	local stripe, other = alpha(s.stripe, shown), alpha(s.stripe_other, shown)
+	local clear = alpha(s.stripe_other, 0)
+	local layers: { Paint } = {}
+	for _, run in { { 0, 5 }, { 6, 10 }, { 11, n - 1 } } do
+		local first, last = run[1], run[2]
+		local colors: { Color }, stops: { number } = {}, {}
+		local function stop(c: Rgba, at: number)
+			table.insert(colors, c)
+			table.insert(stops, at)
+		end
+		if first > 0 then
+			stop(clear, 0)
+			stop(clear, first / n)
+		end
+		for i = first, last do
+			local c = if i % 2 == 0 then stripe else other
+			stop(c, i / n)
+			stop(c, (i + 1) / n)
+		end
+		if last < n - 1 then
+			stop(clear, (last + 1) / n)
+			stop(clear, 1)
+		end
+		table.insert(layers, gmnb.linear({ angle = 90, colors = colors, stops = stops }))
+	end
+	return layers
+end
+
 local function style(ctx: Ctx): Style
 	local s = scheme(ctx)
 	local ink, dim, line = s.ink, s.dim, s.line
 	-- On a see-through window the wall thins and the desktop shows between
 	-- the keys. Everything that carries text stands on something solid at
-	-- any opacity, so only the header needs help: the awning is part of
-	-- the wall's picture and thins with it.
-	local see = ctx.opacity < 1
+	-- any opacity, and the header is the awning (above).
+	local awning = awning_shown(ctx.opacity)
 
 	-- Raised things: a line around, a glint under its top, a lip along the
 	-- foot and a hard shadow beneath. Pressed, the lip is gone.
@@ -457,22 +589,28 @@ local function style(ctx: Ctx): Style
 			graph = { margin = { 6, 8, 6, 8 } },
 		},
 
-		window = { background = s.wall, color = ink },
+		-- The wall's own colour. On a see-through window the background
+		-- layer paints the wall at the window's opacity itself, and this
+		-- goes once the header is all awning (until then it is what the
+		-- header's title lies on): from 0.95 to 0.9.
+		window = { background = alpha(s.wall, wall_kept(ctx.opacity)), color = ink },
 		-- Whatever holds text straight on the page (the memory row, the
 		-- number bases, a converter's values, a date's fields) is a card
 		-- on the wall.
 		plain = { background = s.card, radius = 6 },
 		header = {
-			background = if see then s.card else gmnb.transparent,
+			-- Clear over the awning the background layer paints; on a
+			-- see-through window, the awning.
+			background = if awning > 0 then awning_fill(s, awning) else gmnb.transparent,
 			height = HEADER,
 			-- (At one and a half the longest page's name, "Weight and mass",
 			-- fits a new window's 360 pixels beside the buttons.)
-			title = { font = jersey(1.5), color = if see then ink else s.awning_ink },
+			title = { font = jersey(1.5), color = s.awning_ink },
 			button = {
 				min_width = 32,
 				min_height = 32,
 				radius = 4,
-				color = if see then ink else s.awning_ink,
+				color = s.awning_ink,
 				icon = { size = 18 },
 				hover = { background = alpha(s.awning_ink, 0.12) },
 				active = { background = alpha(s.awning_ink, 0.22) },
@@ -482,7 +620,7 @@ local function style(ctx: Ctx): Style
 				min_width = 28,
 				min_height = 28,
 				radius = 4,
-				color = if see then ink else s.awning_ink,
+				color = s.awning_ink,
 				icon = { size = 16 },
 				hover = { background = alpha(s.awning_ink, 0.12) },
 				active = { background = alpha(s.awning_ink, 0.22) },
@@ -813,7 +951,10 @@ end
 -- Bottom to top: the tiled wall (a still, repeated), the sprinkles (a GIF
 -- loop that repeats in space as well as in time, drawn side by side), and
 -- the awning: stripes, and a hem of scallops cut out of three masks and
--- filled with the flavour's colours.
+-- filled with the flavour's colours. On a see-through window the wall and
+-- the sprinkles thin with the window (the layer thins them itself), the
+-- shop's glass comes in where the wall was (a frame, a shine), and the
+-- awning stays solid until the header, which is the awning there, covers it.
 
 local wall_light = gmnb.image("images/wall-light.png")
 local wall_dark = gmnb.image("images/wall-dark.png")
@@ -844,9 +985,42 @@ local function awning(draw: Draw, w: number, s: Scheme)
 	cut_out(draw, hem_line, 0, AWNING, w, HEM, s.line)
 end
 
+-- The shop's glass, as far as it has come in (`glass`, 0 to 1), over the
+-- whole window: a frame round it in the line's colour, and two streaks of
+-- shine across it, stepped as everything here is.
+local SHINE_STEP = 2 * PX
+local function glazed_front(draw: Draw, w: number, h: number, s: Scheme, glass: number)
+	local shine = alpha(white, glass * (if s.dark then 0.22 else 0.4))
+	for _, streak in { { 0.3, 6 }, { 0.42, 2 } } do
+		-- A band rising to the right, `streak[2]` art pixels across.
+		local from, wide = streak[1] * (w + h), streak[2] * SHINE_STEP
+		for y = HEADER, h, SHINE_STEP do
+			local x = snap(from - y)
+			if x < w and x + wide > 0 then
+				draw:rect(x, y, wide, SHINE_STEP, shine)
+			end
+		end
+	end
+	-- The frame, in the margin round the counter: its sides, its sill, and
+	-- the lintel under the awning.
+	local frame_line = alpha(s.line, glass)
+	local thick = 3 * PX
+	draw:rect(0, HEADER, thick, h - HEADER, frame_line)
+	draw:rect(w - thick, HEADER, thick, h - HEADER, frame_line)
+	draw:rect(0, h - thick, w, thick, frame_line)
+	draw:rect(0, HEADER, w, PX, frame_line)
+end
+
 local function background(draw: Draw, frame: Frame): Again
 	local s = scheme(frame.ctx)
 	local w, h = frame.width, frame.height
+	local opacity = frame.ctx.opacity
+	-- The wall and what falls down it thin with the window (this layer is
+	-- drawn at full strength: it says `fade = false`).
+	local thin = opacity < 1
+	if thin then
+		draw:push_opacity(opacity)
+	end
 	draw:tile(if s.dark then wall_dark else wall_light, 0, 0, w, h, NEAREST)
 	if frame.ctx.options.living == true then
 		-- The loop plays on this layer's clock, and the app draws the layer
@@ -861,7 +1035,18 @@ local function background(draw: Draw, frame: Frame): Again
 			end
 		end
 	end
-	awning(draw, w, s)
+	if thin then
+		draw:pop()
+	end
+	-- The shop's glass where the wall was, and the awning, solid: until the
+	-- header is the awning, the awning it lies on.
+	local glass = glazing(opacity)
+	if glass >= 1 / 255 then
+		glazed_front(draw, w, h, s, glass)
+	end
+	if awning_shown(opacity) < 1 then
+		awning(draw, w, s)
+	end
 	return nil
 end
 
@@ -1279,7 +1464,8 @@ local function display(draw: Draw, frame: Frame): Again
 	end
 	local s = scheme(frame.ctx)
 	local w, h = frame.width, frame.height
-	local key = tostring(frame.ctx.options.flavour) .. (if s.dark then "|d" else "|l")
+	-- (What its pictures are kept by: the flavour, its colours and the mode.)
+	local key = s.key
 	local change = v.change
 	local kind = if change then change.kind else "none"
 	local age = if change then change.age else 0
@@ -1474,7 +1660,7 @@ end
 -- A flavour's tile in Settings: the wall, the awning, and the doughnut in
 -- that flavour's icing, drawn square by square.
 local function tile(draw: Draw, frame: Preview, choice: string)
-	local s = scheme_for(choice, frame.ctx.dark)
+	local s = scheme_for(choice, frame.ctx)
 	local w, h = frame.width, frame.height
 	draw:push_clip(0, 0, w, h, 6)
 	draw:rect(0, 0, w, h, s.wall)
@@ -1500,6 +1686,12 @@ local function tile(draw: Draw, frame: Preview, choice: string)
 	draw:pop()
 end
 
+local function is(flavour: string)
+	return function(options: { [string]: OptionValue }, _ctx: Ctx): boolean
+		return options.flavour == flavour
+	end
+end
+
 local options: { Option } = {
 	{
 		id = "flavour",
@@ -1514,8 +1706,44 @@ local options: { Option } = {
 			{ id = "matcha", label = "Matcha" },
 			{ id = "lemon", label = "Lemon" },
 			{ id = "caramel", label = "Caramel" },
+			{ id = "system", label = "System" },
+			{ id = "custom", label = "Freestyle" },
 		},
 		preview = tile,
+	},
+	{
+		id = "system_note",
+		type = "note",
+		group = "Flavour",
+		label = "Iced in your desktop's accent colour (the freedesktop portal setting your desktop or shell publishes), with a colour that goes with it, and follows it live.",
+		visible = is("system"),
+	},
+	{
+		id = "icing",
+		type = "color",
+		group = "Flavour",
+		label = "Icing",
+		description = "The equals key, what is switched on, the awning and your results",
+		default = DEFAULT_ICING,
+		visible = is("custom"),
+	},
+	{
+		id = "second",
+		type = "color",
+		group = "Flavour",
+		label = "Second colour",
+		description = "The operator keys",
+		default = DEFAULT_SECOND,
+		visible = is("custom"),
+		actions = {
+			{
+				label = "Go with the icing",
+				tooltip = "A colour most of the way round the wheel from the icing, as mint goes with strawberry",
+				run = function(o: { [string]: OptionValue }, _ctx: Ctx): { [string]: OptionValue }
+					return { second = gmnb.to_hex(second_for(iced(colour(o.icing, DEFAULT_ICING)))) }
+				end,
+			},
+		},
 	},
 	{
 		id = "buddy",
@@ -1792,9 +2020,37 @@ local VOICES: { [string]: Voice } = {
 	lemon = voice({ "D5", "E5", "F#5", "A5", "B5" }, { "D5", "F#5", "A5", "D6" }, "A4", "D5"),
 	-- F major's five, the lowest: slow and warm.
 	caramel = voice({ "F4", "G4", "A4", "C5", "D5" }, { "F4", "A4", "C5", "F5" }, "F4", "F4"),
+	-- G major's five, between the rest: the desktop's own, plain as it.
+	system = voice({ "G4", "A4", "B4", "D5", "E5" }, { "G4", "B4", "D5", "G5" }, "D4", "G4"),
 }
 
-local function voice_for(id: OptionValue?): Voice
+-- Freestyle sings in the key of the flavour whose icing is nearest its
+-- own round the wheel (a grey icing, in System's).
+local HUES: { { id: string, hue: number } } = {}
+for _, id in { "strawberry", "blueberry", "matcha", "lemon", "caramel" } do
+	table.insert(HUES, { id = id, hue = (gmnb.to_hsl(hex(FLAVOURS[id].icing))) })
+end
+
+local function nearest_voice(icing: Rgba): Voice
+	local h, s = gmnb.to_hsl(icing)
+	if s < 0.08 then
+		return VOICES.system
+	end
+	local best, apart = VOICES.strawberry, math.huge
+	for _, f in HUES do
+		local d = math.abs(h - f.hue) % 360
+		d = math.min(d, 360 - d)
+		if d < apart then
+			best, apart = VOICES[f.id], d
+		end
+	end
+	return best
+end
+
+local function voice_for(id: OptionValue?, ctx: Ctx): Voice
+	if id == "custom" then
+		return nearest_voice(iced(colour(ctx.options.icing, DEFAULT_ICING)))
+	end
 	return (if type(id) == "string" then VOICES[id] else nil) or VOICES.strawberry
 end
 
@@ -1822,7 +2078,7 @@ local turn = 0
 local repeats = 0
 
 local function sound(event: SoundEvent, ctx: Ctx): SoundChoice
-	local v = voice_for(ctx.options.flavour)
+	local v = voice_for(ctx.options.flavour, ctx)
 	if event.kind == "press" then
 		local key = event.key
 		if not key or event.action then
@@ -1884,7 +2140,7 @@ local function sound(event: SoundEvent, ctx: Ctx): SoundChoice
 	elseif event.kind == "option" and event.id == "flavour" then
 		-- A new flavour plays its jingle through, where the sprinkles
 		-- shake out from under the awning.
-		local fresh = voice_for(event.value)
+		local fresh = voice_for(event.value, ctx)
 		local run: { Play } = {}
 		for i, speed in fresh.jingle do
 			run[i] = { sound = note, rate = speed, volume = 0.7, pan = (i - 2.5) * 0.24, delay = 0.08 * (i - 1) }
@@ -1907,7 +2163,7 @@ local theme: Theme = {
 	sounds = sounds,
 	sound = sound,
 	layers = {
-		background = { draw = background },
+		background = { draw = background, fade = false },
 		overlay = { draw = fountain, events = { press = FOUNTAIN_LIFE + 0.3, result = FOUNTAIN_LIFE, option = RAIN_LIFE } },
 		keypad = { draw = keypad, place = place, events = { press = CRUMB_LIFE, show = 1.2, result = 0.6, error = 0.3 } },
 		display = { draw = display, events = { press = 0.12, result = 1.0, error = 1.1 } },

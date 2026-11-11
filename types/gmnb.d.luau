@@ -1298,6 +1298,8 @@ export type Gmnb = {
 	animation: (file: string) -> Animation,
 	pixels: (width: number, height: number) -> Pixels,
 	-- Provisional: moves into a theme-shipped WebAssembly module in 0.4.
+	-- Any number, at any time; the same spec again is the same ramp. The
+	-- app holds the colours of eight at once and makes again one it let go.
 	ramp: (spec: RampSpec) -> Ramp,
 
 	-- Sound.

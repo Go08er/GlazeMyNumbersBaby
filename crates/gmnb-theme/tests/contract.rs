@@ -197,8 +197,8 @@ return { api = 1, name = "T", options = {
 /// A background layer may thin itself on a see-through window instead
 /// of being faded by the app: `fade = false` (docs/theming.md,
 /// "See-through windows"). The other layers are never faded, so on them
-/// the key says nothing, and that is noted. Aurora's says so; a theme
-/// that doesn't is faded as ever.
+/// the key says nothing, and that is noted. The built-in themes say so;
+/// a theme that doesn't is faded as ever.
 #[test]
 fn a_background_layer_may_thin_itself() {
     let (t, _d) = load(
@@ -231,8 +231,9 @@ return { api = 1, name = "T", layers = {
     assert!(!t.def.layers["keypad"].unfaded);
     let built_in =
         |id: &str| Theme::load(Source::built_in(id).unwrap(), Limits::default()).unwrap();
-    assert!(built_in("aurora").def.layers["background"].unfaded);
-    assert!(!built_in("swirls").def.layers["background"].unfaded);
+    for id in ["aurora", "sprinkles", "swirls"] {
+        assert!(built_in(id).def.layers["background"].unfaded, "{id}");
+    }
 }
 
 /// A layer's keys are checked like every other key (docs/theming.md,

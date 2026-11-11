@@ -319,6 +319,14 @@ fraction says how far through the band it is, and between `edge[1]` and
 | `cycle = true`, `edge = { 0.5, 0.5 }` | Hard-edged bands: contour maps, posterised plasma |
 | `cycle = false`, `edge = { 0, 1 }` (the default) | A gradient map: position 0 is the first colour, `n − 1` the last, nothing repeats |
 
+A ramp can be made at any time, in a draw hook too, and the same spec
+asked for again is the same ramp. Colours that change while the theme
+runs (the desktop's accent, colours the user picks, a look that follows
+the window's opacity) are a new ramp for each: a theme may make as many
+as it likes. The app holds the colours of eight at once; making or
+drawing another lets go of the one used longest ago, and a ramp let go
+is made again, the same, when it is next drawn.
+
 **Moving it.** Changing the field every frame is wasteful: it changes
 slowly. Compute it a few times a second and let the app glide between two
 snapshots with `next` and `mix`. The glide is done on the numbers, before
@@ -761,7 +769,7 @@ These rows join [the contract's table](theming.md#limits-and-what-happens-when-a
 | Animations: frames shown; decoding | 30 a second; a quarter of one core, all animations together |
 | Pixel pictures: size; count; changes | 512×512; 4; 30 a second each |
 | Fields: points; per `draw`; computed pixels per call; passes | 16 384, each side 2 to 256; 2; 262 144; 30 a second per layer |
-| Ramps: colours; count | 2 to 16; 8 |
+| Ramps: colours; held at once | 2 to 16; 8 (a theme may make any number: one let go is made again, the same, when it is drawn again) |
 | Sounds: count; length; all together | 32; 4 s; 8 MiB (43 s) |
 | Sound files: size; kinds | 1 MiB; WAV (8, 16, 24 or 32-bit, or float), Ogg Vorbis; 1 or 2 channels; 8 to 96 kHz |
 | Sound recipes: layers; effects; layer-seconds over the whole theme | 8; 4; 64 |
