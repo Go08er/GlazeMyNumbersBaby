@@ -250,6 +250,39 @@ end
 
 local contrast = gmnb.contrast
 
+-- A palette is finished with some ten thousand contrast checks, and the
+-- frost is worked out again for every step of the opacity slider. So the
+-- checks themselves are done in plain numbers: what `gmnb.over` and
+-- `gmnb.contrast` do, without a colour made for each (a seventh of the
+-- time).
+
+-- How light a colour is, as the contrast rules count it (WCAG's relative
+-- luminance), from its three parts.
+local function lightness(r: number, g: number, b: number): number
+	local function part(c: number): number
+		return if c <= 0.04045 then c / 12.92 else ((c + 0.055) / 1.055) ^ 2.4
+	end
+	return 0.2126 * part(r) + 0.7152 * part(g) + 0.0722 * part(b)
+end
+
+-- The contrast of two such.
+local function ratio(a: number, b: number): number
+	return (math.max(a, b) + 0.05) / (math.min(a, b) + 0.05)
+end
+
+-- `top`, which may be translucent, laid over an opaque colour's three
+-- parts.
+local function laid(top: Rgba, r: number, g: number, b: number): (number, number, number)
+	local a = top.a or 1
+	return top.r * a + r * (1 - a), top.g * a + g * (1 - a), top.b * a + b * (1 - a)
+end
+
+-- How `ink`, which may be translucent, reads on an opaque `ground`.
+local function reads_at(ink: Rgba, ground: Rgba): number
+	local r, g, b = ground.r, ground.g, ground.b
+	return ratio(lightness(laid(ink, r, g, b)), lightness(r, g, b))
+end
+
 -- Glass. A key's is thin (`top` to `bottom`; a number key's ends at
 -- `number`, a little more solid), so that the aurora shows through the
 -- keypad, which is most of the window. What carries smaller and fainter
@@ -307,7 +340,7 @@ end
 -- of `grounds`.
 local function reads(ink: Rgba, grounds: { Rgba }, target: number): boolean
 	for _, ground in grounds do
-		if contrast(over(ink, ground), ground) < target then
+		if reads_at(ink, ground) < target then
 			return false
 		end
 	end
@@ -339,7 +372,9 @@ local function legible(color: Rgba, grounds: { Rgba }, target: number): Rgba
 	-- (Twice: moved for a later ground, it may have left an earlier one.)
 	for _ = 1, 2 do
 		for _, ground in grounds do
-			color = gmnb.with_contrast(color, ground, target)
+			if reads_at(color, ground) < target then
+				color = gmnb.with_contrast(color, ground, target)
+			end
 		end
 	end
 	return color
@@ -437,26 +472,35 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 	-- The lights. Each is brought toward the sky's lightness, by
 	-- thirty-seconds of the way, until all that is written over it reads.
 	local _, _, level = gmnb.to_hsl(bottom)
+	local on_keys_ink, step_back_ink = alpha(fg, ON_KEYS), alpha(fg, STEP_BACK)
+	local furthest = lightness(extreme.r, extreme.g, extreme.b)
+	local kept_light = lightness(kept.r, kept.g, kept.b)
 	local function bearable(light: Rgba): boolean
 		for _, pane in key_panes do
-			local ground = over(pane, light)
-			if contrast(over(alpha(fg, ON_KEYS), ground), ground) < TEXT * 1.03 then
+			local r, g, b = laid(pane, light.r, light.g, light.b)
+			if ratio(lightness(laid(on_keys_ink, r, g, b)), lightness(r, g, b)) < TEXT * 1.03 then
 				return false
 			end
 			-- An operator's glyph needs 3, on its tint.
-			if contrast(extreme, over(key_tint, ground)) < UI * 1.05 then
+			if ratio(furthest, lightness(laid(key_tint, r, g, b))) < UI * 1.05 then
 				return false
 			end
 		end
 		for _, pane in text_panes do
-			local ground = over(pane, light)
-			if contrast(over(alpha(fg, STEP_BACK), ground), ground) < TEXT * 1.03 then
+			local r, g, b = laid(pane, light.r, light.g, light.b)
+			local ground = lightness(r, g, b)
+			if ratio(lightness(laid(step_back_ink, r, g, b)), ground) < TEXT * 1.03 then
 				return false
 			end
-			if contrast(kept, ground) < TEXT then
+			if ratio(kept_light, ground) < TEXT then
 				return false
 			end
-			if contrast(fg, over(wash, ground)) < TEXT * 1.03 or contrast(fg, over(tint, ground)) < TEXT * 1.03 then
+			local wr, wg, wb = laid(wash, r, g, b)
+			if ratio(lightness(laid(fg, wr, wg, wb)), lightness(wr, wg, wb)) < TEXT * 1.03 then
+				return false
+			end
+			local tr, tg, tb = laid(tint, r, g, b)
+			if ratio(lightness(laid(fg, tr, tg, tb)), lightness(tr, tg, tb)) < TEXT * 1.03 then
 				return false
 			end
 		end
@@ -532,7 +576,9 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 	local open = both(on_panes, { top, bottom })
 	local accent = legible(p.accent, open, TEXT * 1.03)
 	local accent_ink = legible(accent, under(text_panes, tint), TEXT * 1.03)
-	local operator_ink = legible(accent_ink, under(key_panes, key_tint), UI * 1.03)
+	-- (6% over: more than the see-through checks below ask, so that the
+	-- frost doesn't come in with a step at the first hundredth of clear.)
+	local operator_ink = legible(accent_ink, under(key_panes, key_tint), UI * 1.06)
 	-- Errors. 0.2 wrote them in the hot colour as it came: 2:1 in the light
 	-- Aurora, and teal in Abyss, where it didn't look like an error at all.
 	-- A rose reads as one in every palette.
@@ -701,15 +747,19 @@ end
 -- over every one of `backs`: the sky's own colour, in sixty-fourths, and
 -- `least` at least.
 local function frost_needed(base: Rgba, backs: { Rgba }, checks: { Check }, least: number): number
+	local base_r, base_g, base_b = base.r, base.g, base.b
 	local function holds(strength: number): boolean
+		local clear = 1 - strength
 		for _, back in backs do
-			local frosted = over(alpha(base, strength), back)
+			local fr = base_r * strength + back.r * clear
+			local fg = base_g * strength + back.g * clear
+			local fb = base_b * strength + back.b * clear
 			for _, c in checks do
-				local ground = frosted
+				local r, g, b = fr, fg, fb
 				for _, layer in c.on do
-					ground = over(layer, ground)
+					r, g, b = laid(layer, r, g, b)
 				end
-				if contrast(over(c.ink, ground), ground) < c.target then
+				if ratio(lightness(laid(c.ink, r, g, b)), lightness(r, g, b)) < c.target then
 					return false
 				end
 			end
@@ -722,11 +772,10 @@ local function frost_needed(base: Rgba, backs: { Rgba }, checks: { Check }, leas
 	-- frost is nearly gone, and that is not the answer.)
 	local floor = math.ceil(least * 64 - 0.001)
 	local step = 64
-	while step - 4 >= floor and holds((step - 4) / 64) do
-		step -= 4
-	end
-	while step % 4 ~= 1 and step - 1 >= floor and holds((step - 1) / 64) do
-		step -= 1
+	for _, by in { 4, 1 } do
+		while step - by >= floor and holds((step - by) / 64) do
+			step -= by
+		end
 	end
 	return step / 64
 end
@@ -768,13 +817,13 @@ local function frost_for(s: Scheme, opacity: number): (number, number, number)
 		end
 	end
 	-- What decides is the lightest of those under light text and the
-	-- darkest under dark text; the four at each end are gone through.
+	-- darkest under dark text: the two at each end are gone through.
 	table.sort(all, function(a, b)
 		return a.light < b.light
 	end)
 	local backs: { Rgba } = {}
 	for i, back in all do
-		if i <= 4 or i > #all - 4 then
+		if i <= 2 or i > #all - 2 then
 			table.insert(backs, back.colour)
 		end
 	end
@@ -1519,10 +1568,11 @@ end
 -- at the crown.
 --
 -- How bright the curtains are is a field (docs/theming-media.md,
--- "Fields"): one number a point on a coarse grid, three times a second;
--- the app glides between two of those and makes the picture. That picture
--- is only ever white, more or less opaque. It is drawn as a mask, and
--- what shows through it is the palette's lights, a gradient by height.
+-- "Fields"): one number a point on a grid of some 9,000, three times a
+-- second; the app glides between two of those and makes the picture.
+-- That picture is only ever white, more or less opaque. It is drawn as a
+-- mask, and what shows through it is the palette's lights, a gradient by
+-- height.
 -- (The colours can't live in the field's ramp: a theme may make eight
 -- ramps, and Freestyle's palettes are without number.)
 --
@@ -1641,7 +1691,7 @@ local REACH = 0.80
 local BAND = 0.075
 -- Under its hem its light doesn't stop dead: this much of it glows on
 -- below, for this much of the window's height.
-local UNDERGLOW, UNDER = 0.30, 0.10
+local UNDERGLOW, UNDER = 0.27, 0.10
 
 -- Fifteen pictures a second while it drifts (a fold moves about 5 px a
 -- second), and the field three times a second: the app glides between
@@ -1657,15 +1707,21 @@ local DRIFT_FRAME = 0.066
 local PULSE_LIFE = 1.15
 local PULSE_FRAME = 0.032
 
--- About as many points as a field may have, in cells half again as tall
--- as wide (rays are thin and stand upright), none narrower than 3 px: a
+-- How many points the grid has, about, in cells half again as tall as
+-- wide (rays are thin and stand upright), none narrower than 3 px: a
 -- bigger window gets a coarser grid, not more to work out. And about as
 -- many pixels for the app to colour as a 760 × 640 window's aurora has at
--- three fifths size.
-local POINTS = 16000
-local MOST_POINTS = 16384
+-- half size.
+--
+-- (A field may have 16,384 points, and the aurora is a little finer with
+-- them all. But the first frame at a window size works out a whole
+-- snapshot, a hook has 8 ms, and on a machine busy with something else
+-- the same work takes twice as long: with 9,000 that frame is 2 to 3 ms
+-- where it was 4 to 5, and a picture of each side by side is hard to tell
+-- apart.)
+local POINTS = 9000
 local FINEST = 3
-local PIXELS = 140000
+local PIXELS = 100000
 
 -- Film grain: it hides the gradients' banding and makes them feel like a
 -- material. White specks in the dark, black ones in the light.
@@ -1685,11 +1741,7 @@ local thin = 1
 
 local function grid(width: number, height: number): (number, number)
 	local step = max(FINEST, sqrt(width * height * thin / (POINTS * 1.5)))
-	local cols = clamp(ceil(width / step) + 1, 2, 256)
-	local rows = clamp(ceil(height / (step * 1.5)) + 1, 2, 256)
-	-- (Rounded up twice over, it may be a row or two past what a field
-	-- may hold.)
-	return cols, min(rows, floor(MOST_POINTS / cols))
+	return clamp(ceil(width / step) + 1, 2, 256), clamp(ceil(height / (step * 1.5)) + 1, 2, 256)
 end
 
 -- How many pixels the app colours per pixel of the field, along a side.
@@ -1817,33 +1869,41 @@ local function light_columns(k: Kept, buf: buffer, first: number, last: number)
 		local hems, invs, crests, bodies = k.hem[c], k.inv[c], k.crest[c], k.body[c]
 		for i = first, last - 1 do
 			local hem, inv, crest, body = hems[i + 1], invs[i + 1], crests[i + 1], bodies[i + 1]
-			-- Above the hem: bright in a band along it, and each ray
-			-- fading as far up as it reaches.
+			-- Above the hem: each ray fading as far up as it reaches, and
+			-- a band along the hem where the curtain is brightest. A
+			-- ray's light grows by the same step from row to row: most
+			-- of the grid's points are a sum and no more.
 			local top = max(ceil((hem - 1 / inv) / pitch), 0)
 			local at = min(floor(hem / pitch), rows - 1)
+			local banded = max(ceil((hem - 1 / band) / pitch), top)
+			local step = body * pitch * inv
+			local ray = body * (1 - hem * inv) + top * step
 			local o = (top * cols + i) * 4
-			for j = top, at do
-				local up = hem - j * pitch
-				local v = body * (1 - up * inv)
-				local b = 1 - up * band
-				if b > 0 then
-					v += (crest - v) * b * b
-				end
-				writef32(buf, o, readf32(buf, o) + v)
+			for _ = top, min(banded - 1, at) do
+				writef32(buf, o, readf32(buf, o) + ray)
+				ray += step
 				o += down
 			end
-			-- Under it: the sharp edge, and the glow.
+			for j = banded, at do
+				local b = 1 - (hem - j * pitch) * band
+				writef32(buf, o, readf32(buf, o) + ray + (crest - ray) * b * b)
+				ray += step
+				o += down
+			end
+			-- Under it: the sharp edge, in the row or two it takes, and
+			-- the glow, which fades by the same step from row to row.
 			local from = max(at + 1, 0)
+			local fade = crest * UNDERGLOW * pitch * under
+			local glow = crest * UNDERGLOW * (1 + (hem - from * pitch) * under)
 			o = (from * cols + i) * 4
 			for j = from, min(floor((hem + glows) / pitch), rows - 1) do
-				local up = hem - j * pitch
-				local glow = 1 + up * under
-				local u = 1 + up * edge
-				local v = UNDERGLOW * glow * glow
+				local u = 1 + (hem - j * pitch) * edge
 				if u > 0 then
-					v += (1 - UNDERGLOW) * u
+					writef32(buf, o, readf32(buf, o) + glow + crest * (1 - UNDERGLOW) * u)
+				else
+					writef32(buf, o, readf32(buf, o) + glow)
 				end
-				writef32(buf, o, readf32(buf, o) + crest * v)
+				glow -= fade
 				o += down
 			end
 		end
@@ -1853,11 +1913,12 @@ end
 -- A draw hook has 8 ms of the processor, and loses its place for good
 -- after three frames that take longer. A whole snapshot takes about a
 -- millisecond on the machine this was written on. Where one would take
--- over 4, the grid and the picture are made as much coarser as brings it
--- to 3, for as long as the theme is loaded. The first twenty-four columns
--- tell: three batches of eight, of which the quickest counts (the
--- machine may have been busy with something else during the others).
-local SLOW, AFFORDED = 0.004, 0.003
+-- over 2, the grid and the picture are made as much coarser as brings it
+-- to 1.5, for as long as the theme is loaded. The first twenty-four
+-- columns tell, each time a window's size is new: three batches of
+-- eight, of which the quickest counts (the machine may have been busy
+-- with something else during the others).
+local SLOW, AFFORDED = 0.002, 0.0015
 
 -- What is kept for a picture of this size, and whether it was just made:
 -- then with one whole snapshot, of the aurora where it has drifted to,

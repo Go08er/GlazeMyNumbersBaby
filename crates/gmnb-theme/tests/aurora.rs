@@ -429,9 +429,11 @@ fn the_background_is_lights_and_stars_and_nothing_else() {
         let error = outcome(EventKind::Error, w);
         for palette in PALETTES {
             for (dark, opacity) in [(true, 1.0), (false, 1.0), (true, 0.4), (false, 0.15)] {
-                let theme = aurora();
+                let mut theme = aurora();
                 let mut c = ctx(&theme, dark, &[("palette", text(palette))]);
                 c.opacity = opacity;
+                // (As in the app: `style` runs first, and works the palette out.)
+                theme.style(&c).unwrap();
                 let option = chosen(palette, w, h);
                 let what = |frame: &str| format!("{palette} dark={dark} {opacity} {w}x{h} {frame}");
                 // Standing.
@@ -527,7 +529,7 @@ fn the_background_is_lights_and_stars_and_nothing_else() {
 #[test]
 fn on_a_see_through_window_the_sky_clears_and_the_lights_stay() {
     let (w, h) = (760.0, 640.0);
-    let theme = aurora();
+    let mut theme = aurora();
     assert!(theme.def.layers["background"].unfaded);
     let still = Frame {
         motion: false,
@@ -535,6 +537,7 @@ fn on_a_see_through_window_the_sky_clears_and_the_lights_stay() {
     };
     for dark in [true, false] {
         let mut c = ctx(&theme, dark, &[]);
+        theme.style(&c).unwrap();
         let opaque = made_of(&draw_at(&theme, &c, &still, 0.0).list, w, h, "opaque");
         assert_eq!((opaque.strength, opaque.grain), (1.0, 1.0));
         let most = |m: &Made| m.star.map_or(0.0, |s| s[3]);
@@ -574,6 +577,80 @@ fn on_a_see_through_window_the_sky_clears_and_the_lights_stay() {
     }
 }
 
+/// Dragging the opacity slider, nothing in the style jumps either. The
+/// veil under text that lies straight on the page, the frost under a
+/// key's glass and the graph's canvas are each worked out for the
+/// opacity, in sixty-fourths: from an opaque window down to a tenth, a
+/// hundredth at a time, in every palette, light and dark, none of them
+/// moves by more than two of those at a step, and none thins as the
+/// window clears.
+#[test]
+fn the_frost_comes_in_smoothly_as_the_window_clears() {
+    let mut theme = aurora();
+    let mut steps = Vec::new();
+    for palette in PALETTES {
+        for dark in [true, false] {
+            let mut c = ctx(&theme, dark, &[("palette", text(palette))]);
+            let mut last: Option<[f32; 3]> = None;
+            for step in (10..=100).rev() {
+                c.opacity = step as f32 / 100.0;
+                let style = theme.style(&c).unwrap().style.clone();
+                // The veil: the pane under bare text.
+                let veil = style
+                    .fill("plain.background")
+                    .as_color()
+                    .expect("the veil is one colour")[3];
+                // Under a key: the glass, and under it the frost, if any.
+                let key = style.control("keys.number").unwrap().finished(&[]);
+                let backing = match key.background.0.as_slice() {
+                    [_glass] => 0.0,
+                    [_glass, Paint::Color(frost)] => frost[3],
+                    other => panic!("a key's fill: {other:?}"),
+                };
+                // The canvas: one paint, its glass over its frost.
+                let canvas = match style.get("graph.canvas.background") {
+                    Some(Value::Paint(Paint::Gradient(g))) => g.colors[0][3],
+                    other => panic!("the canvas: {other:?}"),
+                };
+                let now = [veil, backing, canvas];
+                if step == 100 {
+                    // Opaque: the veil it always has, and no frost.
+                    assert_eq!(backing, 0.0, "{palette} dark={dark}");
+                }
+                if let Some(was) = last {
+                    for (what, (was, now)) in ["the veil", "a key's frost", "the canvas"]
+                        .iter()
+                        .zip(was.iter().zip(&now))
+                    {
+                        let moved = now - was;
+                        steps.push(moved);
+                        assert!(
+                            (-1e-4..=2.0 / 64.0 + 1e-4).contains(&moved),
+                            "{palette} dark={dark}: {what} goes from {was} to {now} between \
+                             opacity {} and {}",
+                            (step + 1) as f32 / 100.0,
+                            c.opacity
+                        );
+                    }
+                }
+                last = Some(now);
+            }
+            // All but clear, there is frost under everything.
+            let [veil, backing, canvas] = last.unwrap();
+            assert!(
+                veil > 0.6 && backing > 0.3 && canvas > 0.5,
+                "{palette} dark={dark}: {veil} {backing} {canvas}"
+            );
+        }
+    }
+    let largest = steps.iter().copied().fold(0.0, f32::max);
+    println!(
+        "aurora, the frost from opacity 1 to 0.1 by hundredths: the largest step {largest:.4} \
+         (a sixty-fourth is {:.4})",
+        1.0 / 64.0
+    );
+}
+
 /// What the background asks for, and when its picture changes: standing
 /// when the option is off or motion isn't allowed; fifteen pictures a
 /// second while it drifts, however often it is drawn; and never a field
@@ -581,9 +658,10 @@ fn on_a_see_through_window_the_sky_clears_and_the_lights_stay() {
 #[test]
 fn the_aurora_drifts_while_it_may_and_stands_when_it_may_not() {
     let (w, h) = (760.0, 640.0);
-    let theme = aurora();
+    let mut theme = aurora();
     let living = ctx(&theme, true, &[]);
     let standing = ctx(&theme, true, &[("living", OptionValue::Bool(false))]);
+    theme.style(&living).unwrap();
     let serial = |d: &Drawn| made_of(&d.list, w, h, "a frame").field.0.serial;
 
     // The option off: one picture, and nothing asked for.
@@ -668,8 +746,9 @@ fn the_aurora_drifts_while_it_may_and_stands_when_it_may_not() {
 
     // A theme just loaded, standing still: there is an aurora in its
     // picture. A good part of the field is lit, and a good part is dark.
-    let again = aurora();
+    let mut again = aurora();
     let c = ctx(&again, true, &[]);
+    again.style(&c).unwrap();
     let p = draw_at(&again, &c, &quiet, 0.0);
     let p = made_of(&p.list, w, h, "still").field.0;
     let lit = p
@@ -901,8 +980,9 @@ fn what_a_frame_costs() {
 /// as the next are made, and the theme stays far inside its 8 MiB.
 #[test]
 fn a_window_being_resized_keeps_its_memory() {
-    let theme = aurora();
+    let mut theme = aurora();
     let c = ctx(&theme, true, &[]);
+    theme.style(&c).unwrap();
     let key = press(5, KeyKind::Number, 110.0, 300.0);
     let mut most = 0usize;
     for i in 0..1200u32 {
@@ -1003,6 +1083,10 @@ fn frames() {
                 &format!("{palette}-{}.ppm", if dark { "dark" } else { "light" }),
                 &painted(&d.list, Some(&sky), w, h),
             );
+            // (Whatever a theme being worked on has printed.)
+            for line in theme.take_log() {
+                println!("{palette} dark={dark}: {line}");
+            }
             // The sky and the lights, as drawn: each colour and how light it is.
             let made = made_of(&d.list, w as f32, h as f32, palette);
             let Paint::Gradient(sky) = &sky else {

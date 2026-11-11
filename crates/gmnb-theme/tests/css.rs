@@ -1236,15 +1236,9 @@ fn auroras_palettes_stay_readable() {
 fn auroras_ctxs(aurora: &Theme) -> Vec<(String, Ctx)> {
     let mut out = Vec::new();
     for dark in [false, true] {
-        // (The palettes also at the opacities between: what a see-through
-        // window shows changes all the way down.)
-        for opacity in [0.85, 0.7, 0.3, 0.15] {
-            for palette in PALETTES {
-                let ctx = with(aurora, dark, opacity, &[("palette", text(palette))]);
-                out.push((format!("aurora {palette} dark={dark} {opacity}"), ctx));
-            }
-        }
-        for opacity in [1.0, 0.5, 0.1] {
+        // (Also at the opacities between the rules' three: what a
+        // see-through window shows changes all the way down.)
+        for opacity in [1.0, 0.85, 0.7, 0.5, 0.3, 0.15, 0.1] {
             for palette in PALETTES {
                 let ctx = with(aurora, dark, opacity, &[("palette", text(palette))]);
                 out.push((format!("aurora {palette} dark={dark} {opacity}"), ctx));

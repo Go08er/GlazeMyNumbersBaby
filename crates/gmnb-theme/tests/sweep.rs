@@ -1555,7 +1555,9 @@ fn aurora_under_any_accent_reads() {
     let wheel = wheel();
     for (i, accent) in wheel.iter().enumerate() {
         for dark in [false, true] {
-            for opacity in [1.0, 0.1] {
+            // (Half clear too: what a see-through Aurora shows, and so the
+            // frost under its text, changes all the way down.)
+            for opacity in [1.0, 0.5, 0.1] {
                 let mut styles = Vec::new();
                 let hex = appcore::color::to_hex(*accent);
                 let ctx = ctx_of(

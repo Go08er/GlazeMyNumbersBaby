@@ -1721,12 +1721,14 @@ itself, takes seconds a frame at the cap for blurs and shadows.)
 
 The built-in themes' busiest frames, at rest and mid-animation (their
 tests assert it, Swirls' at every size from 300 × 400 to 3840 × 2160):
-Swirls' cost 6% of what a frame may, Sprinkles' 12%, and Aurora's
-11% (thirteen keys' rays alive at once, or a result just after the
-equals key; its background standing, 5.5%: one field behind one
-mask and a gradient that runs straight down. 0.2's four blobs and two
-arcs, radial gradients all, were a fifth standing and 56% at their
-dearest).
+Swirls' cost 6% of what a frame may, Sprinkles' 12%, and Aurora's 11%
+(a result just after the equals key, or a new palette's four rays; 9%
+with thirteen keys' rays alive at once, and 20% with eight keys, a result
+and a new palette all at the same moment; its background standing, 5.5%:
+one field behind one mask and a gradient that runs straight down. A ray
+is charged by what it covers, so in a strip of a layer, 200 × 2160, the
+same moment costs 44%. 0.2's four blobs and two arcs, radial gradients
+all, were a fifth standing and 56% at their dearest).
 `Api::frame_cost` and `Api::busiest_frame` (in `gmnb-theme`) say what the
 last frame cost, and the dearest since the theme was loaded, as a share.
 
@@ -1764,7 +1766,7 @@ How each of Aurora's effects is made:
 | Hover brightness, the press that springs back, the swap button's turn | **Declared** (states and transitions) | The toolkit animates them, and stops for reduced motion. |
 | Readable over an aurora that moves | **Scripted** (`style`), from both sides: each of a palette's lights is tempered (the same hue, as saturated, nearer the sky's lightness) until the text over it reads through the thinnest glass there is; then every ink is worked out against each pane over the sky and over each light | A curtain's hem wanders under every key in turn. A palette can be any two colours. |
 | The see-through frost and halos | **Scripted** (`style`): the frost under every surface that carries text is as strong as that palette's inks need over what the window shows at `ctx.opacity` (the desktop, black or white, through the thinned sky, and the lights over that), in sixty-fourths; and never less than two fifths of the way to solid by the time the sky is gone | A fixed tint is too much at 0.9 and, for some palette, too little at 0.1; a step that shows makes the slider jump; and what shows through may be a photograph, busy behind a key's sign in a way no contrast figure knows about. |
-| The aurora: three curtains hanging along hems that wander, bright at the hem and fading upward in rays, folds travelling along them | **Scripted field** (`background` layer, `draw:field`): how bright, as one number a point on a grid of some 16,000, three snapshots a second worked out a quarter a frame; the app glides between two of them fifteen times a second | The light is smooth, so a coarse grid holds it; its rays are 20 px wide, so the grid's cells are narrow and tall. Per pixel in Luau it would take the whole of a frame's 8 ms many times over. |
+| The aurora: three curtains hanging along hems that wander, bright at the hem and fading upward in rays, folds travelling along them | **Scripted field** (`background` layer, `draw:field`): how bright, as one number a point on a grid of some 9,000, three snapshots a second worked out a quarter a frame; the app glides between two of them fifteen times a second | The light is smooth, so a coarse grid holds it; its rays are 20 px wide, so the grid's cells are narrow and tall. Per pixel in Luau it would take the whole of a frame's 8 ms many times over. |
 | Its colours, by height: green at the hem, teal, violet and crimson at the crown | The field through **one ramp that is only white**, clear to opaque, drawn as a **mask** (`draw:push_mask`), and the palette's six lights showing through it, a gradient straight down the window | A theme may make eight ramps, and Freestyle makes a new palette at every step of a colour being dragged: the colours can't live in a ramp. A mask is filled with whatever colours there are. |
 | The sky and its stars | **Declared** (`window.background`: a gradient, top to bottom) and **scripted** (160 stars at most, small squares in one colour, a window's worth by its size) | The sky is the window's own background, so the app thins it on a see-through window and it stands if the layer ever fails. |
 | A pulse: a ray of light rising from a key, the sky lit round a result, four rays for a new palette | **Scripted**: soft ellipses drawn into the aurora's own mask | In the mask a pulse shows the palette's lights where it stands and can't be brighter than they are: what the text was proved over holds for every frame. Each key's ray is one of four heights, chosen as its note is. Thirty pictures a second while one plays: a soft light needs no more, and every picture of the background is one of the whole window. |

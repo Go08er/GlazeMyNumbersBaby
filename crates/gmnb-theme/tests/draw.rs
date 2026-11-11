@@ -2334,12 +2334,13 @@ fn auroras_layers_draw_within_their_limits() {
     let notes = theme.take_draw_notes();
     assert!(notes.is_empty(), "{notes:?}");
     // Its busiest frames cost within what a frame may to draw. The
-    // aurora is one field behind one mask, and two gradients that run
-    // straight down: standing, its background is a sixteenth of what a
-    // frame may; with thirteen rays up at once, the dearest frame here, a
-    // fifth. (0.2's four blobs and two veils, radial gradients the
-    // software renderer draws at 5 ms the window each, were a fifth
-    // standing and over half at their dearest.)
+    // aurora is one field behind one mask and a gradient that runs
+    // straight down: standing, its background is 5.5% of what a frame
+    // may; with thirteen rays up at once, the dearest frame here, 9%.
+    // (0.2's four blobs and two veils, radial gradients the software
+    // renderer draws at 5 ms the window each, were a fifth standing and
+    // over half at their dearest. `tests/aurora.rs` has the rest: 11% for
+    // a result after = or a new palette, 20% with all of it at once.)
     let busiest = theme.api().busiest_frame();
     println!(
         "aurora: the busiest frame cost {:.1}% of what one may",
