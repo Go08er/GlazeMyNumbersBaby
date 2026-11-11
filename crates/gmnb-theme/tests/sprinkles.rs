@@ -1430,3 +1430,36 @@ fn the_wall_is_what_the_style_says() {
     assert_eq!((timeline.width, timeline.height), (128, 128));
     assert!((timeline.duration - 15.36).abs() < 1e-6);
 }
+
+/// Dragging through Freestyle's colour chooser makes a new scheme at every
+/// step, and the theme's own heap has a cap: a long drag (or a day of
+/// picking colours) must never use it up, which would switch the layer off.
+#[test]
+fn picking_colours_for_a_long_while_never_fills_the_heap() {
+    let theme = sprinkles();
+    let tick = clock(&theme);
+    let now = digits(5, 344.0, 56.0);
+    let mut own = ctx(&theme, false, "custom", &[]);
+    let mut version = 0;
+    let mut start = 0;
+    for step in 0..6000u32 {
+        let icing = format!("#{:06x}", (step * 2749 + 0x123456) & 0xff_ffff);
+        own.options.insert("icing".into(), OptionValue::Text(icing));
+        tick();
+        version += 1;
+        let f = Frame {
+            value: Some(value(&now, version, false, None, Role::Calculator)),
+            motion: false,
+            ..Frame::sized(344.0, 122.0)
+        };
+        ok(theme.draw(LayerKind::Display, &own, &f));
+        if step == 200 {
+            start = theme.engine().used_memory();
+        }
+    }
+    let end = theme.engine().used_memory();
+    assert!(
+        end < start + (1 << 20),
+        "heap {start} -> {end} bytes over 5800 colours"
+    );
+}
