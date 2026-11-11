@@ -263,6 +263,21 @@ pixel art. For a whole window of smooth colour, use a field.
 
 ### Fields: swirls, plasma, contours
 
+> **Provisional.** `draw:field` and `gmnb.ramp` (and `gmnb.noise`) are the
+> app's only effect-specific native code. In 0.4 they move out of GMNB:
+> themes get WebAssembly modules for their heavy work, near native speed in
+> a sandbox like Luau's, and the field pass becomes a module a theme ships
+> in its own folder (Swirls first), so no theme gets native speed another
+> theme can't. Until then they work as described here; a theme built on
+> them will need the module in 0.4.
+>
+> **What belongs in the app.** A library or native building block is part
+> of GMNB itself only if it is general enough to serve most theme makers
+> (more than half of themes would use it): audio, pictures and video, basic
+> drawing. Anything narrower, however fast it would be built in, is a
+> WebAssembly module a theme ships, so every theme maker has the same
+> route to native speed.
+
 Most procedural backgrounds are a smooth quantity (a distance, a height, a
 warped coordinate) pushed through a colour scheme with sharp edges. The
 smooth part can be computed coarsely. The sharp part cannot: colours
