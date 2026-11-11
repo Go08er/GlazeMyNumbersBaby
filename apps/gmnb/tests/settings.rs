@@ -455,12 +455,10 @@ fn settings_fits_a_new_window() {
     fits(&display, "360x600");
 }
 
-/// Settings in the least window (300 × 400) too. It doesn't yet: the
-/// Theme group's two buttons, side by side, need 269 px in the base look
-/// and 302 in Aurora, where 264 are left. They are the themes-folder
-/// work's (a wrapping box fits them).
+/// Settings in the least window (300 × 400) too. The Theme group's
+/// buttons, side by side, needed 269 px in the base look and 302 in Aurora
+/// where 264 are left; they wrap now.
 #[test]
-#[ignore = "the Theme group's buttons don't wrap yet"]
 fn settings_fits_the_least_window() {
     let Some(display) = display() else {
         eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
