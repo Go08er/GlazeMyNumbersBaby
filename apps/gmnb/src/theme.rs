@@ -40,8 +40,11 @@ pub fn rgba(c: [f32; 3], a: f32) -> gdk::RGBA {
 // The hub.
 // ---------------------------------------------------------------------------
 
-/// Returns false once it should be dropped (its widget is gone).
-type StyleSubscriber = Box<dyn Fn(&Rc<Style>) -> bool>;
+/// The widget (held weakly), and its call for each new style, which
+/// returns false once it should be dropped (its widget is gone).
+type StyleSubscriber = (glib::WeakRef<glib::Object>, StyleCall);
+/// A widget's call for each new style.
+type StyleCall = Box<dyn Fn(&Rc<Style>) -> bool>;
 /// Told what Settings says of sound now; false once its widget is gone.
 type SoundSubscriber = Box<dyn Fn(&str) -> bool>;
 /// How the user is told something (a toast).
@@ -1313,7 +1316,7 @@ impl Hub {
     fn notify(&self, style: &Rc<Style>) {
         // Collect first: a subscriber may itself subscribe or open UI.
         let subs = std::mem::take(&mut *self.style_subscribers.borrow_mut());
-        let mut keep: Vec<StyleSubscriber> = subs.into_iter().filter(|f| f(style)).collect();
+        let mut keep: Vec<StyleSubscriber> = subs.into_iter().filter(|(_, f)| f(style)).collect();
         keep.append(&mut self.style_subscribers.borrow_mut());
         *self.style_subscribers.borrow_mut() = keep;
     }
@@ -1327,15 +1330,17 @@ impl Hub {
     ) {
         f(widget, &self.style());
         let weak = widget.downgrade();
-        self.style_subscribers
-            .borrow_mut()
-            .push(Box::new(move |s| match weak.upgrade() {
+        push_pruned(
+            &self.style_subscribers,
+            widget.upcast_ref::<glib::Object>().downgrade(),
+            Box::new(move |s| match weak.upgrade() {
                 Some(w) => {
                     f(&w, s);
                     true
                 }
                 None => false,
-            }));
+            }),
+        );
     }
 
     pub fn stats(&self) -> Stats {
@@ -1518,6 +1523,20 @@ fn tell_and_prune(subscribers: &RefCell<Vec<SoundSubscriber>>, text: &str) {
     *subscribers.borrow_mut() = keep;
 }
 
+/// Adds a style subscriber, letting go first of those whose widget has
+/// gone (without telling the live ones anything: that would restyle each
+/// of them). Settings opened and closed again and again otherwise grew the
+/// list by one each time, until the next restyle (round 3, area D).
+fn push_pruned(
+    subscribers: &RefCell<Vec<StyleSubscriber>>,
+    widget: glib::WeakRef<glib::Object>,
+    tell: StyleCall,
+) {
+    let mut subs = subscribers.borrow_mut();
+    subs.retain(|(w, _)| w.upgrade().is_some());
+    subs.push((widget, tell));
+}
+
 /// The family names the app's font map has now, as fontconfig compares
 /// them ([`gmnb_theme::fontname::normal`]).
 pub(crate) fn known_families() -> HashSet<String> {
@@ -1575,6 +1594,42 @@ mod tests {
         }
         assert_eq!(subs.borrow().len(), 1);
         assert!(told.get() >= 50);
+    }
+
+    /// The same for the style: Settings' rows subscribe each time it
+    /// opens, and a closed Settings' are let go at the next opening, not
+    /// at the next restyle; the live ones are not restyled for it.
+    #[test]
+    fn style_subscribers_whose_widgets_are_gone_are_let_go() {
+        let subs: RefCell<Vec<StyleSubscriber>> = RefCell::default();
+        let told = Rc::new(Cell::new(0));
+        let kept = glib::Object::new::<glib::Object>();
+        for i in 0..50 {
+            // Every opening's widget but the last has gone by the next.
+            let widget = if i == 49 {
+                kept.clone()
+            } else {
+                glib::Object::new::<glib::Object>()
+            };
+            let told = told.clone();
+            push_pruned(
+                &subs,
+                widget.downgrade(),
+                Box::new(move |_| {
+                    told.set(told.get() + 1);
+                    true
+                }),
+            );
+            drop(widget);
+            assert_eq!(subs.borrow().len(), 1, "the gone are kept");
+        }
+        assert_eq!(subs.borrow().len(), 1);
+        assert_eq!(subs.borrow()[0].0.upgrade().as_ref(), Some(&kept));
+        assert_eq!(
+            told.get(),
+            0,
+            "a subscriber was told a style to be let go of others"
+        );
     }
     use super::*;
 
