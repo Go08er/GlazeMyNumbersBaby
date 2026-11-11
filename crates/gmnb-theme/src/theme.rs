@@ -633,7 +633,7 @@ fn parse_option(v: &ThemeValue, path: &str, notes: &mut Notes) -> Option<OptionD
         Some("toggle") => OptionKind::Toggle,
         Some("slider") => {
             let (min, max) = (number("min", 0.0), number("max", 1.0));
-            if max <= min || !max.is_finite() || !min.is_finite() {
+            if max <= min || !max.is_finite() || !min.is_finite() || !(max - min).is_finite() {
                 notes.push(&format!("{dot}max"), "a slider needs max above min");
                 return None;
             }
