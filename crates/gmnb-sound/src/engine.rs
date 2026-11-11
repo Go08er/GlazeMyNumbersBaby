@@ -396,7 +396,14 @@ pub struct SoundEngine {
 
 impl SoundEngine {
     /// Creates nothing: no thread, no socket.
-    pub fn new(settings: Settings) -> SoundEngine {
+    pub fn new(mut settings: Settings) -> SoundEngine {
+        // As `set_volume` keeps it: a volume of -3 would otherwise be a
+        // gain of 9, which is full volume.
+        settings.volume = if settings.volume.is_nan() {
+            0.0
+        } else {
+            settings.volume.clamp(0.0, 1.0)
+        };
         let counters = Arc::new(Counters::default());
         counters
             .volume
@@ -437,6 +444,9 @@ impl SoundEngine {
         }
         self.current = Some((bank.clone(), list, sounds.hook));
         if self.live() && sounds.any() {
+            // What the last theme has sounding fades now, not once the
+            // sound thread is done with the sound it is rendering.
+            self.with_mixer(Mixer::stop);
             self.start();
         } else {
             self.stop();
@@ -512,8 +522,25 @@ impl SoundEngine {
         self.counters
             .volume
             .store(volume.to_bits(), Ordering::Relaxed);
+        // At once: the sound thread may be busy rendering for a while.
+        let gain = volume * volume;
+        self.with_mixer(|m| m.set_gain(gain));
         if let Some(w) = &self.worker {
             w.tell(Ctl::Volume);
+        }
+    }
+
+    /// Does `f` to the running thread's mixer, from here: what must be
+    /// heard at once (a fade, the volume) does not wait for the sound
+    /// thread to come round to being told. (The mixer is only ever held
+    /// for a moment, never across a call to the server.)
+    fn with_mixer(&self, f: impl FnOnce(&mut Mixer)) {
+        let shared = self
+            .worker
+            .as_ref()
+            .and_then(|w| lock(&w.link.shared).clone());
+        if let Some(shared) = shared {
+            f(&mut shared.mixer());
         }
     }
 
@@ -540,6 +567,9 @@ impl SoundEngine {
     /// later ([`SoundEngine::reap`], or when the engine is dropped): this
     /// does not wait.
     fn stop(&mut self) {
+        // What is sounding fades out now, though the thread may be busy
+        // rendering a sound for a while before it hears it is to end.
+        self.with_mixer(Mixer::stop);
         if let Some(w) = self.worker.take() {
             w.tell(Ctl::Quit);
             // A connection still being opened is hung up on: the thread
