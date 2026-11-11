@@ -505,10 +505,11 @@ impl Hub {
     // ---- The theme ------------------------------------------------------------
 
     fn sources(&self) -> Vec<Source> {
-        themes::discover(
+        themes::discover_keeping(
             Some(&user_dir()),
             &self.built_ins.borrow().embedded,
             self.dev_dir.as_deref(),
+            &self.active.borrow(),
         )
     }
 
