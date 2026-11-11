@@ -1503,6 +1503,7 @@ sounds.
 | Time: one `draw` call; all `place` calls of one keypad frame | 8 ms; 2 ms |
 | Time: one `preview`, `visible` or action | 10 ms |
 | Draw calls per `draw` | 4096 |
+| What a frame costs to draw | 1000 points for each 760 × 640 of the layer's area ([Drawing per frame](#drawing-per-frame)) |
 | Open pushes / saves at once | 32 each |
 | Path segments per frame | 16 384 |
 | Text per `draw:text` call; text calls per frame | 256 bytes; 64 |
@@ -1515,7 +1516,7 @@ sounds.
 | Events kept per layer; longest kept | 32; 5 s |
 | Images: formats | PNG, JPEG, WebP, GIF |
 | Animations: file; frame size; frames; count | 8 MiB; 1024×1024; 2048; 4 |
-| Animations: counted against "Images: total decoded" | By what playing one holds: a GIF 4¼ of its frames, a WebP 5, an animated PNG 6 (a frame is width × height × 4 bytes); a file of one frame, that frame |
+| Animations: counted against "Images: total decoded" | By what playing one holds: a GIF 4¼ of its frames (4 and its largest frame at a byte a pixel, and an eighth more, if that is larger: a GIF's frames may be larger than its canvas), a WebP 5, an animated PNG 6 (a frame is width × height × 4 bytes); a file of one frame, that frame |
 | Animations: frames shown; decoding | 30 a second; a quarter of one core, all animations together |
 | Pixel pictures: size; count; changes | 512×512; 4; 30 a second each |
 | Fields: points; per `draw`; computed pixels per call; passes | 16 384, each side 2 to 256; 2; 262 144; 30 a second per layer |
@@ -1557,6 +1558,50 @@ for a picture of 2 MiB).
 | An animation is too heavy to decode in time | It plays slower; a note, once. |
 | `sound` fails or runs out of time | The `sounds` table decides for that event. After 3 failures the function is switched off; a toast, once. |
 | There is no sound system | Silence. Settings → Sound says so. No toast. |
+
+### Drawing per frame
+
+The caps on what a frame holds still let one frame take the toolkit tens
+of seconds or gigabytes: 1365 blurs of the whole window took the software
+renderer over ten seconds a frame, and 2000 circles over it held 4 GB on
+the GL renderer, which makes a window-sized mask for each. So each call is
+also charged what drawing it costs: its kind's points below, for each
+760 × 640 of the layer it covers (its box, through the transforms in
+force, cut to the clips open and to what can be seen). An effect
+(`push_opacity`, `push_mask`, `push_blend`, `push_blur`, `push_shadow`) is
+charged for the box around what was drawn inside it (a shadow's grown by
+its offset and blur) when it is popped; what is drawn inside is charged as
+well. A frame has 1000 points for each 760 × 640 of its layer's own area;
+a call that takes it past them is an error, and the frame is dropped, as
+past any cap. A keypad's or a readout's layer may draw beyond itself, up
+to its own size again on every side, and is charged for that too.
+
+The points are what each kind was measured to cost over the whole of a
+760 × 640 window, on the software renderer (processor time) and on GL
+(memory held while the frame is drawn, on llvmpipe): 1000 are 100 ms of
+the first or 256 MB of the second, whichever the call costs more of. So
+the dearest frame a theme can draw costs about that at 760 × 640, and in
+proportion to its pixels in a larger window.
+
+| Over the whole layer | Points | So, at most, a frame |
+|---|---|---|
+| A rectangle in a colour; a linear gradient of 2 stops (each stop past 2, 2 more); a radial gradient; a conic one | 1.1; 2.2; 52; 105 | 900; 450; 19; 9 |
+| A rounded rectangle | its paint's + 0.3 | |
+| A path filled or stroked, a circle (a mask on GL): in a colour; with a gradient | 12.7 + the paint's; 24 + the paint's | 72; 38 (linear) |
+| A picture scaled into its rectangle (a still, a frame of an animation, a field); tiled | 8.2; 4 | 120; 250 |
+| A border; `draw:shadow`; a clip with rounded corners | 1.3; 4.3; 0.9 | |
+| Text and glyphs (their box: the font's size by the text's bytes, three sizes tall; a glyph, the readout's whole value); with a gradient | 7; 23 + the paint's | |
+| `push_opacity`; `push_mask`; `push_blend` | 13; 26; 48 | 76; 38; 20 |
+| `push_blur(r)` | 140 + 1.6 r (0 for no blur) | 3 at 100, 7 at 1 |
+| `push_shadow`: each shadow of blur b | 71 + 0.87 b; 13 unblurred | 6 at 100 |
+
+The built-in themes' busiest frames, at rest and mid-animation (their
+tests assert it, Swirls' at every size from 300 × 400 to 3840 × 2160):
+Swirls' cost 6% of what a frame may, Glazed's 12%, and Aurora's, made of
+radial gradients, 56% (a new palette's four blooms over the window; its
+background standing, a fifth).
+`Api::frame_cost` and `Api::busiest_frame` (in `gmnb-theme`) say what the
+last frame cost, and the dearest since the theme was loaded, as a share.
 
 To get out of a theme that makes the window unusable, start GMNB with
 `--theme base` (or `GMNB_THEME=base`): it starts in the base look without

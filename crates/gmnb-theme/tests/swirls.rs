@@ -378,6 +378,13 @@ fn the_paint_flows_while_it_may_and_stands_when_it_may_not() {
             .iter()
             .all(|(_, strikes, off)| *strikes == 0 && !off)
     );
+    // Its busiest frames cost well within what a frame may to draw.
+    let busiest = theme.api().busiest_frame();
+    println!(
+        "swirls (flowing): the busiest frame cost {:.1}% of what one may",
+        busiest * 100.0
+    );
+    assert!(busiest > 0.0 && busiest < 0.25, "{busiest}");
 }
 
 /// The paint on the app's own clock: thirty pictures a second on a 60 Hz
@@ -571,6 +578,13 @@ fn the_background_stays_within_its_limits_at_any_size() {
         );
         let notes = theme.take_draw_notes();
         assert!(notes.is_empty(), "{w}x{h}: {notes:?}");
+        // Its busiest frames cost well within what a frame may to draw.
+        let busiest = theme.api().busiest_frame();
+        report.push(format!(
+            "  the busiest frame cost {:.1}% of what one may",
+            busiest * 100.0
+        ));
+        assert!(busiest > 0.0 && busiest < 0.25, "{w}x{h}: {busiest}");
     }
     println!(
         "swirls, the background stirred eight times over and rippling, by window size \
@@ -942,6 +956,13 @@ fn the_readouts_figures_are_paint_behind_a_mask() {
     );
     let notes = theme.take_draw_notes();
     assert!(notes.is_empty(), "{notes:?}");
+    // Its busiest frames cost well within what a frame may to draw.
+    let busiest = theme.api().busiest_frame();
+    println!(
+        "swirls (readout): the busiest frame cost {:.1}% of what one may",
+        busiest * 100.0
+    );
+    assert!(busiest > 0.0 && busiest < 0.25, "{busiest}");
 }
 
 /// Every tile Settings shows: a set of bands is its swirl through its

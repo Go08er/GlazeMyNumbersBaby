@@ -900,6 +900,104 @@ fn a_frame_over_a_cap_is_dropped_and_three_switch_the_hook_off() {
     );
 }
 
+/// What a frame costs to draw is capped (docs/theming.md, "Drawing per
+/// frame"): each call is charged by what it covers of the layer and its
+/// kind, and a 760 × 640 layer's frame has 1000 points, about 100 ms of
+/// the software renderer's time or 256 MB of the GL renderer's memory.
+/// Within every other cap, 1365 blurs of the whole window took over ten
+/// seconds a frame, and 2000 circles over it held 4 GB on GL.
+#[test]
+fn what_a_frame_costs_to_draw_is_capped() {
+    let window = Frame::sized(760.0, 640.0);
+    let cost = |body: &str, f: &Frame| -> Result<f64, String> {
+        let (theme, _d) = background("cost", "", body);
+        let result = theme.draw(LayerKind::Background, &Ctx::default(), f);
+        match result {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let blurs = |n: u32| {
+        format!(
+            "for _ = 1, {n} do draw:push_blur(100) draw:rect(0, 0, frame.width, frame.height, '#fff') draw:pop() end"
+        )
+    };
+    // Three blurs of the whole window: drawn, most of what a frame may.
+    let three = cost(&blurs(3), &window).unwrap();
+    assert!((0.85..1.0).contains(&three), "{three}");
+    // A fourth, or the 1365 the other caps let through: the frame is
+    // dropped, the error saying why.
+    for n in [4, 1365] {
+        let e = cost(&blurs(n), &window).unwrap_err();
+        assert!(e.contains("what one may to draw"), "{e}");
+    }
+    // Circles over the whole window (a mask each on GL): 72, not 73.
+    let circles = |n: u32| format!("for _ = 1, {n} do draw:circle(380, 320, 600, '#ffffff10') end");
+    assert!(cost(&circles(72), &window).is_ok());
+    assert!(cost(&circles(73), &window).is_err());
+    // Small ones cost what they cover: 2000 of radius 3, a fraction.
+    let small = cost(
+        "for i = 1, 2000 do draw:circle(i % 700, i % 600, 3, '#ffffff') end",
+        &window,
+    )
+    .unwrap();
+    assert!(small < 0.1, "{small}");
+    // An effect is charged for what is drawn inside it (a blur's grown by
+    // three times its radius): blurring a small picture a little is cheap;
+    // inside a small clip, a large one is too.
+    let blurred_small = cost(
+        "for _ = 1, 40 do draw:push_blur(4) draw:rect(10, 10, 40, 40, '#fff') draw:pop() end",
+        &window,
+    )
+    .unwrap();
+    assert!(blurred_small < 0.5, "{blurred_small}");
+    let clipped = cost(
+        "draw:push_clip(0, 0, 76, 64) for _ = 1, 40 do draw:push_blur(100) draw:rect(0, 0, 760, 640, '#fff') draw:pop() end draw:pop()",
+        &window,
+    )
+    .unwrap();
+    assert!(clipped < 0.5, "{clipped}");
+    // Through the transforms in force: a tenth of the window scaled by
+    // ten is the window.
+    assert_eq!(
+        cost("draw:scale(10) for _ = 1, 3 do draw:push_blur(100) draw:rect(0, 0, 76, 64, '#fff') draw:pop() end", &window)
+            .map(|c| (c * 100.0).round()),
+        cost(&blurs(3), &window).map(|c| (c * 100.0).round())
+    );
+    assert!(
+        cost("draw:scale(10) for _ = 1, 4 do draw:push_blur(100) draw:rect(0, 0, 76, 64, '#fff') draw:pop() end", &window)
+            .is_err()
+    );
+    // What can't be seen costs nothing: off the layer.
+    let off = cost(
+        "for _ = 1, 100 do draw:push_blur(100) draw:rect(2000, 2000, 760, 640, '#fff') draw:pop() end",
+        &window,
+    )
+    .unwrap();
+    assert_eq!(off, 0.0);
+    // A gradient costs its kind: twenty radial ones over the window are
+    // over (the software renderer's radial gradient is 40 times a colour).
+    let radial = |n: u32| {
+        format!(
+            "local g = gmnb.radial({{ colors = {{ '#ff0000', '#0000ff' }} }}) for _ = 1, {n} do draw:rect(0, 0, frame.width, frame.height, g) end"
+        )
+    };
+    assert!(cost(&radial(18), &window).is_ok());
+    assert!(cost(&radial(20), &window).is_err());
+    // A layer may cost in proportion to its area: over a quarter of the
+    // window, as many of them.
+    let quarter = Frame::sized(380.0, 320.0);
+    assert!(cost(&radial(18), &quarter).is_ok());
+    assert!(cost(&radial(20), &quarter).is_err());
+    // A frame that leaves an effect open is charged for it all the same.
+    let e = cost(
+        "for _ = 1, 3 do draw:push_blur(100) draw:rect(0, 0, frame.width, frame.height, '#fff') draw:pop() end draw:push_blur(100) draw:rect(0, 0, frame.width, frame.height, '#fff')",
+        &window,
+    )
+    .unwrap_err();
+    assert!(e.contains("what one may to draw"), "{e}");
+}
+
 #[test]
 fn frames_at_the_caps_are_drawn() {
     let (theme, _d) = background(
@@ -2146,4 +2244,15 @@ fn auroras_layers_draw_within_their_limits() {
     );
     let notes = theme.take_draw_notes();
     assert!(notes.is_empty(), "{notes:?}");
+    // Its busiest frames cost within what a frame may to draw. Aurora is
+    // made of radial gradients, which the software renderer draws at 5 ms
+    // the window each: standing, its background is a fifth of what a frame
+    // may; a new palette's four blooms over the window, the dearest frame
+    // of all, a little over half.
+    let busiest = theme.api().busiest_frame();
+    println!(
+        "aurora: the busiest frame cost {:.1}% of what one may",
+        busiest * 100.0
+    );
+    assert!(busiest > 0.0 && busiest < 0.6, "{busiest}");
 }
