@@ -165,6 +165,9 @@ pub struct Frame<'a> {
     pub events: Vec<(f64, &'a Event)>,
     pub keys: Option<Keys<'a>>,
     pub value: Option<DisplayValue<'a>>,
+    /// The window, in the layer's coordinates (x, y, w, h), if known:
+    /// what drawing it costs is counted where it can be seen.
+    pub window: Option<Rect>,
 }
 
 impl Frame<'_> {
@@ -182,6 +185,7 @@ impl Frame<'_> {
             events: Vec::new(),
             keys: None,
             value: None,
+            window: None,
         }
     }
 }

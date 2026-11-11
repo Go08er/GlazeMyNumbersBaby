@@ -931,10 +931,10 @@ fn what_a_frame_costs_to_draw_is_capped() {
         let e = cost(&blurs(n), &window).unwrap_err();
         assert!(e.contains("what one may to draw"), "{e}");
     }
-    // Circles over the whole window (a mask each on GL): 72, not 73.
+    // Circles over the whole window (a mask each on GL): 71, not 72.
     let circles = |n: u32| format!("for _ = 1, {n} do draw:circle(380, 320, 600, '#ffffff10') end");
-    assert!(cost(&circles(72), &window).is_ok());
-    assert!(cost(&circles(73), &window).is_err());
+    assert!(cost(&circles(71), &window).is_ok());
+    assert!(cost(&circles(72), &window).is_err());
     // Small ones cost what they cover: 2000 of radius 3, a fraction.
     let small = cost(
         "for i = 1, 2000 do draw:circle(i % 700, i % 600, 3, '#ffffff') end",
@@ -989,6 +989,49 @@ fn what_a_frame_costs_to_draw_is_capped() {
     let quarter = Frame::sized(380.0, 320.0);
     assert!(cost(&radial(18), &quarter).is_ok());
     assert!(cost(&radial(20), &quarter).is_err());
+    // What lies just off the layer is charged when a blur or a shadow
+    // brings it into view: blurred, or moved by its offset.
+    let off_blur = |n: u32| {
+        format!(
+            "for _ = 1, {n} do draw:push_blur(100) draw:rect(frame.width + 1, 0, frame.width, frame.height, '#fff') draw:pop() end"
+        )
+    };
+    assert!(cost(&off_blur(8), &window).is_ok());
+    assert!(cost(&off_blur(1365), &window).is_err());
+    let off_shadow = "for _ = 1, 10 do draw:push_shadow({ { x = -1000, blur = 100, color = '#000' } }) draw:rect(frame.width + 1, 0, frame.width, frame.height, '#fff') draw:pop() end";
+    assert!(cost(off_shadow, &window).is_err());
+    // A blend is charged for all that can be seen, whatever is in it (the
+    // software renderer blends whole layers): tiny ones as large ones.
+    let tiny_blends = |n: u32| {
+        format!(
+            "for _ = 1, {n} do draw:push_blend('screen') draw:rect(10, 10, 1, 1, '#fff') draw:pop() draw:rect(10, 10, 1, 1, '#fff') draw:pop() end"
+        )
+    };
+    assert!(cost(&tiny_blends(20), &window).is_ok());
+    assert!(cost(&tiny_blends(21), &window).is_err());
+    // A picture costs its own pixels however small it is drawn: here the
+    // noise, 512 x 512, drawn 10 x 10 (a picture's pixels are what the
+    // software renderer reads to scale it).
+    let small_pictures = |n: u32| {
+        format!(
+            "local p = gmnb.noise({{ size = 512 }}) for _ = 1, {n} do draw:image(p, 0, 0, 10, 10) end"
+        )
+    };
+    let each = cost(&small_pictures(1), &window).unwrap();
+    assert!((0.02..0.03).contains(&each), "{each}");
+    assert!(cost(&small_pictures(1000), &window).is_err());
+    // A keypad's or a readout's layer is charged where the window shows
+    // what it draws, beyond itself too.
+    let pad = Frame {
+        window: Some([-400.0, -300.0, 1920.0, 1080.0]),
+        ..Frame::sized(355.0, 355.0)
+    };
+    let (theme, _d) = load(
+        "cost-pad",
+        "return { api = 1, name = 'T', layers = { keypad = { draw = function(draw, frame) for _ = 1, 3 do draw:push_blur(100) draw:rect(800, 0, 700, 700, '#fff') draw:pop() end end } } }",
+    );
+    let drawn = theme.draw(LayerKind::Keypad, &Ctx::default(), &pad);
+    assert!(drawn.is_err(), "{:?}", drawn.map(|d| d.list.ops.len()));
     // A frame that leaves an effect open is charged for it all the same.
     let e = cost(
         "for _ = 1, 3 do draw:push_blur(100) draw:rect(0, 0, frame.width, frame.height, '#fff') draw:pop() end draw:push_blur(100) draw:rect(0, 0, frame.width, frame.height, '#fff')",

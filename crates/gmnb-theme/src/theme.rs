@@ -1311,6 +1311,7 @@ impl Theme {
             size: [frame.width, frame.height],
             whole: matches!(kind, LayerKind::Background | LayerKind::Overlay),
             glyph_box,
+            window: frame.window,
         });
         let result = self
             .engine

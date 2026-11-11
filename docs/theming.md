@@ -1567,31 +1567,45 @@ renderer over ten seconds a frame, and 2000 circles over it held 4 GB on
 the GL renderer, which makes a window-sized mask for each. So each call is
 also charged what drawing it costs: its kind's points below, for each
 760 × 640 of the layer it covers (its box, through the transforms in
-force, cut to the clips open and to what can be seen). An effect
-(`push_opacity`, `push_mask`, `push_blend`, `push_blur`, `push_shadow`) is
-charged for the box around what was drawn inside it (a shadow's grown by
-its offset and blur) when it is popped; what is drawn inside is charged as
-well. A frame has 1000 points for each 760 × 640 of its layer's own area;
-a call that takes it past them is an error, and the frame is dropped, as
-past any cap. A keypad's or a readout's layer may draw beyond itself, up
-to its own size again on every side, and is charged for that too.
+force, cut to the clips open and to what can be seen, or brought into
+view by a blur or a shadow open around it). An effect (`push_opacity`,
+`push_mask`, `push_blur`, `push_shadow`) is charged for the box around
+what was drawn inside it (a blur's grown by three times its radius, a
+shadow's by its offset and three times its blur) when it is popped, and a
+`push_blend` for all that can be seen (the software renderer blends whole
+layers, whatever is in them); what is drawn inside is charged as well. A
+picture drawn at all is also charged its own pixels, however small it is
+drawn. A frame has 1000 points for each 760 × 640 of its layer's own
+area; a call that takes it past them is an error, and the frame is
+dropped, as past any cap (that layer draws nothing that frame; the rest
+of the window is drawn). A keypad's or a readout's layer is charged for
+what it draws wherever the window shows it, beyond itself too.
 
 The points are what each kind was measured to cost over the whole of a
 760 × 640 window, on the software renderer (processor time) and on GL
 (memory held while the frame is drawn, on llvmpipe): 1000 are 100 ms of
-the first or 256 MB of the second, whichever the call costs more of. So
-the dearest frame a theme can draw costs about that at 760 × 640, and in
-proportion to its pixels in a larger window.
+the first or 256 MB of the second, whichever the call costs more of.
+Measured at the cap, 49 kinds each as many times as a 760 × 640
+background may draw it: the software renderer took 25 to 125 ms a
+frame (the measurement's own spread is a fifth or so), and GL held at
+most 243 MB more; a frame mixing them near the cap, effects inside
+effects, 110 ms. The cap is a layer's: a window drawn again draws every
+layer's picture, so a theme whose background, overlay and keypad are all
+at their caps costs about three times that a frame (290 ms, measured);
+and a larger window, or a screen of twice the pixels, in proportion to
+its pixels. (GL on llvmpipe, which GTK doesn't choose by
+itself, takes seconds a frame at the cap for blurs and shadows.)
 
 | Over the whole layer | Points | So, at most, a frame |
 |---|---|---|
-| A rectangle in a colour; a linear gradient of 2 stops (each stop past 2, 2 more); a radial gradient; a conic one | 1.1; 2.2; 52; 105 | 900; 450; 19; 9 |
+| A rectangle in a colour; a linear gradient of 2 stops (each stop past 2, 2.5 more); a radial gradient; a conic one | 1.3; 2.2; 52; 130 | 770; 450; 19; 7 |
 | A rounded rectangle | its paint's + 0.3 | |
-| A path filled or stroked, a circle (a mask on GL): in a colour; with a gradient | 12.7 + the paint's; 24 + the paint's | 72; 38 (linear) |
-| A picture scaled into its rectangle (a still, a frame of an animation, a field); tiled | 8.2; 4 | 120; 250 |
+| A path filled or stroked, a circle (a mask on GL): in a colour; with a gradient | 12.7 + the paint's; 24 + the paint's | 71; 38 (linear) |
+| A picture scaled into its rectangle (a still, a frame of an animation, a field); tiled | 8.2; 5.5 | 120; 180 |
+| A picture's own pixels, per 760 × 640 of them: smooth and clean (`"trilinear"`); smooth or hard | 43; 16 | a 2048 × 2048 still: 2; 6 |
 | A border; `draw:shadow`; a clip with rounded corners | 1.3; 4.3; 0.9 | |
 | Text and glyphs (their box: the font's size by the text's bytes, three sizes tall; a glyph, the readout's whole value); with a gradient | 7; 23 + the paint's | |
-| `push_opacity`; `push_mask`; `push_blend` | 13; 26; 48 | 76; 38; 20 |
+| `push_opacity`; `push_mask`; `push_blend` (all that can be seen) | 13; 26; 48 | 76; 38; 20 |
 | `push_blur(r)` | 140 + 1.6 r (0 for no blur) | 3 at 100, 7 at 1 |
 | `push_shadow`: each shadow of blur b | 71 + 0.87 b; 13 unblurred | 6 at 100 |
 

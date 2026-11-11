@@ -927,6 +927,13 @@ impl Instance {
         let now = st.woken.take().map_or(now, |woken| now.max(woken));
         let c = self.conditions(&layers, now);
         let timing = st.clock.begin(now, c);
+        // The window, in the layer's own coordinates: what a keypad's or a
+        // readout's drawing is charged for where it can be seen.
+        let window = self.widget.upgrade().and_then(|w| {
+            let root = w.root()?;
+            let b = root.upcast_ref::<gtk::Widget>().compute_bounds(&w)?;
+            Some([b.x(), b.y(), b.width(), b.height()])
+        });
         let drawn = {
             let State {
                 ring,
@@ -951,6 +958,7 @@ impl Instance {
                 },
                 keys: extra.keys,
                 value: extra.value,
+                window,
             };
             hub.draw_layer(self.kind, &frame)
         };

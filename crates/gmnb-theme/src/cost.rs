@@ -19,7 +19,7 @@
 //! each 760 × 640 of its own area, so a frame of the whole window at that
 //! size costs at most about 100 ms or 256 MB; a larger window, more.
 
-use crate::draw::{Op, Rect};
+use crate::draw::{Filter, Op, Rect};
 use crate::types::{GradientKind, Paint, Shadow};
 
 /// The area the weights are of: the window they were measured in.
@@ -35,16 +35,16 @@ pub const POINTS: f64 = 1000.0;
 /// picture of its own (3.3 MB over the window).
 fn paint(p: &Paint) -> f64 {
     match p {
-        Paint::Color(_) => 1.1,
+        Paint::Color(_) => 1.3,
         Paint::Gradient(g) => {
             let stops = g.colors.len().max(2) as f64;
             match g.kind {
                 GradientKind::Linear => {
                     let gl = if stops > 6.0 { 13.0 } else { 0.0 };
-                    (2.2 + 2.0 * (stops - 2.0)).max(gl)
+                    (2.2 + 2.5 * (stops - 2.0)).max(gl)
                 }
                 GradientKind::Radial => 52.0,
-                GradientKind::Conic => 105.0,
+                GradientKind::Conic => 130.0,
             }
         }
     }
@@ -65,7 +65,17 @@ const TEXT_MASK: f64 = 16.0;
 /// A picture scaled into its rectangle (a still, a frame of an
 /// animation, a field's picture); a picture repeated.
 const IMAGE: f64 = 8.2;
-const TILE: f64 = 4.0;
+/// And for each [`REFERENCE_AREA`] of the picture's own pixels, however
+/// small it is drawn: the software renderer reads them all to scale it
+/// (a 2048 x 2048 still over a 760 x 640 window: 37 ms smooth and clean,
+/// 14 ms smooth or hard; drawn 76 x 64, 8 ms).
+fn source(filter: Filter) -> f64 {
+    match filter {
+        Filter::Trilinear => 43.0,
+        Filter::Linear | Filter::Nearest => 16.0,
+    }
+}
+const TILE: f64 = 5.5;
 const BORDER: f64 = 1.3;
 /// `draw:shadow`.
 const BOX_SHADOW: f64 = 4.3;
@@ -195,6 +205,9 @@ struct Level {
     /// How much further than what is drawn inside it it reaches (a
     /// shadow's offset and blur).
     reach: f64,
+    /// Charged for the whole of what can be seen, whatever is drawn in it
+    /// (a blend: the software renderer blends whole layers).
+    whole: bool,
     /// A clip: what is drawn inside reaches no further (in the layer's
     /// coordinates), and its own area is what a rounded one costs.
     clip: Option<[f64; 4]>,
@@ -215,29 +228,53 @@ pub(crate) struct Meter {
     glyphs: [f64; 4],
     allowance: f64,
     spent: f64,
+    /// Points for the picture the next operation draws, by its own size.
+    picture: f64,
 }
 
 impl Default for Meter {
     fn default() -> Self {
-        Meter::new([0.0, 0.0], true, [0.0; 4], 1.0)
+        Meter::new([0.0, 0.0], true, None, [0.0; 4], 1.0)
     }
 }
 
 impl Meter {
-    /// A frame of a layer of `size` (`whole`: it covers its window), its
+    /// A frame of a layer of `size` (`whole`: it covers its window; else
+    /// the window is `window`, in the layer's coordinates, if known), its
     /// glyphs within `glyphs` (x, y, w, h), its allowance `scale` times
     /// the layer's own.
-    pub(crate) fn new(size: [f32; 2], whole: bool, glyphs: [f32; 4], scale: f64) -> Meter {
+    pub(crate) fn new(
+        size: [f32; 2],
+        whole: bool,
+        window: Option<[f32; 4]>,
+        glyphs: [f32; 4],
+        scale: f64,
+    ) -> Meter {
         let (w, h) = (f64::from(size[0].max(1.0)), f64::from(size[1].max(1.0)));
-        let around = if whole { 0.0 } else { w.max(h) };
+        let visible = match (whole, window) {
+            (true, _) => [0.0, 0.0, w, h],
+            (false, Some(window)) => union(Some([0.0, 0.0, w, h]), rect_box(&window)),
+            // Not known: the layer, grown by its size on every side.
+            (false, None) => {
+                let around = w.max(h);
+                [-around, -around, w + around, h + around]
+            }
+        };
         Meter {
             m: Affine::IDENTITY,
             levels: Vec::new(),
-            visible: [-around, -around, w + around, h + around],
+            visible,
             glyphs: rect_box(&glyphs),
             allowance: POINTS * scale * w * h / REFERENCE_AREA,
             spent: 0.0,
+            picture: 0.0,
         }
+    }
+
+    /// The next operation draws a picture of `pixels` of its own, scaled
+    /// with `filter`.
+    pub(crate) fn picture(&mut self, pixels: f64, filter: Filter) {
+        self.picture = source(filter) * pixels / REFERENCE_AREA;
     }
 
     /// What the frame has spent, as a share of its allowance.
@@ -248,7 +285,10 @@ impl Meter {
     /// `local`, through the transform in force, cut to what the levels
     /// open let through and to what can be seen: the box, if any is left.
     fn seen(&self, local: [f64; 4]) -> Option<[f64; 4]> {
-        let mut b = meet(self.m.bound(local), self.visible)?;
+        // What lies within an open blur's or shadow's reach of what can be
+        // seen is seen once blurred or moved.
+        let reach: f64 = self.levels.iter().map(|l| l.reach).sum();
+        let mut b = meet(self.m.bound(local), grow(self.visible, reach))?;
         for level in &self.levels {
             if let Some(clip) = level.clip {
                 b = meet(b, clip)?;
@@ -283,7 +323,7 @@ impl Meter {
                 return Ok(());
             }
             Op::Save => {
-                self.open(0.0, 0.0, None);
+                self.open(0.0, 0.0, None, false);
                 return Ok(());
             }
             Op::Restore | Op::Pop => return self.close(),
@@ -293,16 +333,16 @@ impl Meter {
                 // Nothing drawn inside reaches past it; a rounded one
                 // costs its own area.
                 self.charge(weight, clip.and_then(|c| self.seen_clip(c)))?;
-                self.open(0.0, 0.0, Some(clip.unwrap_or([0.0; 4])));
+                self.open(0.0, 0.0, Some(clip.unwrap_or([0.0; 4])), false);
                 return Ok(());
             }
             Op::PushOpacity(_) => {
-                self.open(OPACITY, 0.0, None);
+                self.open(OPACITY, 0.0, None, false);
                 return Ok(());
             }
             Op::PushBlur(r) => {
                 let reach = 3.0 * f64::from(*r) * self.m.magnitude();
-                self.open(blur(*r), reach, None);
+                self.open(blur(*r), reach, None, false);
                 return Ok(());
             }
             Op::PushShadow(list) => {
@@ -311,19 +351,15 @@ impl Meter {
                     .iter()
                     .map(|s| f64::from(s.x.abs().max(s.y.abs()) + s.spread.abs() + 3.0 * s.blur))
                     .fold(0.0, f64::max);
-                self.open(weight, reach * self.m.magnitude(), None);
+                self.open(weight, reach * self.m.magnitude(), None, false);
                 return Ok(());
             }
             Op::PushMask(_) | Op::PushBlend(_) => {
                 // Two parts, each ended by a pop: the effect is charged
                 // when the second ends, for both.
-                let weight = if matches!(op, Op::PushMask(_)) {
-                    MASK
-                } else {
-                    BLEND
-                };
-                self.open(weight, 0.0, None);
-                self.open(0.0, 0.0, None);
+                let blend = matches!(op, Op::PushBlend(_));
+                self.open(if blend { BLEND } else { MASK }, 0.0, None, blend);
+                self.open(0.0, 0.0, None, false);
                 return Ok(());
             }
             Op::Rect { rect, paint: p } => (paint(p), Some(rect_box(rect))),
@@ -372,15 +408,23 @@ impl Meter {
                 (text_weight(p), Some([x, y - size, x + w, y + 2.0 * size]))
             }
             Op::Glyph { paint: p, .. } => (text_weight(p), Some(glyphs)),
-            Op::Image { rect, .. } | Op::Animation { rect, .. } | Op::Field { rect, .. } => {
+            Op::Image { rect, .. } | Op::Animation { rect, .. } => (IMAGE, Some(rect_box(rect))),
+            Op::Field { rect, picture } => {
+                let pixels = f64::from(picture.width) * f64::from(picture.height);
+                self.picture(pixels, Filter::Linear);
                 (IMAGE, Some(rect_box(rect)))
             }
             Op::Tile { rect, .. } => (TILE, Some(rect_box(rect))),
         };
+        let picture = std::mem::take(&mut self.picture);
         let Some(local) = local else {
             return Ok(());
         };
         let b = self.seen(local);
+        // A picture drawn at all costs its own pixels too.
+        if b.is_some() && picture > 0.0 {
+            self.spent += picture;
+        }
         if let Some(b) = b
             && let Some(level) = self.levels.last_mut()
         {
@@ -400,11 +444,12 @@ impl Meter {
         Some(b)
     }
 
-    fn open(&mut self, weight: f64, reach: f64, clip: Option<[f64; 4]>) {
+    fn open(&mut self, weight: f64, reach: f64, clip: Option<[f64; 4]>, whole: bool) {
         self.levels.push(Level {
             m: self.m,
             weight,
             reach,
+            whole,
             clip,
             content: None,
         });
@@ -420,7 +465,11 @@ impl Meter {
         let Some(content) = level.content else {
             return Ok(());
         };
-        let reached = meet(grow(content, level.reach), self.visible);
+        let reached = if level.whole {
+            Some(self.visible)
+        } else {
+            meet(grow(content, level.reach), self.visible)
+        };
         let reached = match reached {
             Some(b) => self.seen_clip(b),
             None => None,

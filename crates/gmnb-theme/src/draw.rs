@@ -1053,6 +1053,9 @@ pub struct Begin {
     /// Where a readout's glyphs are, in the layer's coordinates (x, y,
     /// w, h): what a `draw:glyph` covers, at most.
     pub glyph_box: [f32; 4],
+    /// The window, in the layer's coordinates (x, y, w, h), if known:
+    /// what a keypad's or a readout's layer can be seen drawing on.
+    pub window: Option<[f32; 4]>,
 }
 
 impl Default for Begin {
@@ -1066,6 +1069,7 @@ impl Default for Begin {
             size: [0.0, 0.0],
             whole: true,
             glyph_box: [0.0; 4],
+            window: None,
         }
     }
 }
@@ -1148,6 +1152,7 @@ impl Api {
             size,
             whole,
             glyph_box,
+            window,
         } = *frame;
         let mut rec = self.shared.recorder.borrow_mut();
         rec.time = time;
@@ -1168,7 +1173,7 @@ impl Api {
         rec.over = None;
         rec.glyphs = glyphs;
         rec.notes.clear();
-        rec.meter = crate::cost::Meter::new(size, whole, glyph_box, 1.0);
+        rec.meter = crate::cost::Meter::new(size, whole, window, glyph_box, 1.0);
     }
 
     /// The hook has returned: what it drew, with whatever it left open
@@ -1596,6 +1601,9 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     }
                     let image = ImageId(id as u32 - 1);
                     let kind = pictures.get(image).map(|p| p.kind.clone());
+                    let pixels = pictures
+                        .get(image)
+                        .map_or(0.0, |p| f64::from(p.width) * f64::from(p.height));
                     let op = match kind {
                         // Of an animation a tile is its first frame.
                         _ if tile => Op::Tile {
@@ -1651,6 +1659,11 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                         },
                     };
                     drop(pictures);
+                    // What it costs: by what it covers, and (scaled) by its
+                    // own pixels. A tile is drawn at its own size.
+                    if let Op::Image { filter, .. } | Op::Animation { filter, .. } = &op {
+                        rec.meter.picture(pixels, *filter);
+                    }
                     rec.push(name, op)
                 },
             )?,
