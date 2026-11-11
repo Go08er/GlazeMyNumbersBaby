@@ -7,6 +7,7 @@ use adw::prelude::*;
 use calcvm::HistoryEntry;
 use gtk::glib;
 
+use super::fit::{self, FitLabel};
 use super::icon::paths;
 use crate::theme::Hub;
 use crate::window::{follow_icon, icon_button, scroller};
@@ -67,14 +68,17 @@ type RowAction = Rc<dyn Fn(&gtk::ListBoxRow)>;
 type MemoryOp = Box<dyn Fn(usize, MemOp, Option<&gtk::Widget>)>;
 
 /// One line of a row, right-aligned, `height` px high (the text centred in
-/// it as DGMNB centres it: style.css's line heights), cut at its start
-/// when it is too long.
-fn line_label(text: &str, class: &str, height: f32) -> gtk::Label {
-    let l = gtk::Label::new(Some(text));
+/// it as DGMNB centres it), shrunk to fit down to `min`.
+fn line_label(text: &str, class: &str, height: f32, path: &'static str, min: f32) -> FitLabel {
+    // One line in the style's font, shrunk to fit its row down to `min`
+    // as DGMNB's `label_fit` does (a long result was cut at its start
+    // instead, and lost its leading digits).
+    let l = FitLabel::new();
+    l.set_text(text);
     l.add_css_class(class);
-    l.set_xalign(1.0);
-    l.set_ellipsize(gtk::pango::EllipsizeMode::Start);
+    l.set_align(fit::Align::End);
     l.set_height_request(height.round() as i32);
+    fit::follow(&l, path, min, None);
     l
 }
 
@@ -461,12 +465,20 @@ impl CalcPanel {
         for (i, item) in items.iter().enumerate() {
             // The expression on a line of its own, clear of the ×; the
             // result in the rest of the row (DGMNB's).
-            let expr = line_label(&item.expression, "wc-hist-expr", mp::EXPRESSION_H);
+            let expr = line_label(
+                &item.expression,
+                "wc-hist-expr",
+                mp::EXPRESSION_H,
+                "panel.expression",
+                appcore::metrics::text::PANEL_EXPRESSION_MIN_SIZE,
+            );
             expr.set_margin_end(mp::EXPRESSION_TRIM as i32);
             let res = line_label(
                 &item.result,
                 "wc-hist-result",
                 mp::HISTORY_ROW_H - 2.0 * mp::ROW_PAD_Y - mp::EXPRESSION_H,
+                "panel.result",
+                appcore::metrics::text::PANEL_RESULT_MIN_SIZE,
             );
             let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
             b.append(&expr);
@@ -621,7 +633,13 @@ impl CalcPanel {
         self.memory_list.set_placeholder(Some(&empty));
         use appcore::metrics::panel as mp;
         for (i, value) in items.iter().enumerate() {
-            let label = line_label(value, "wc-hist-result", mp::MEMORY_VALUE_H);
+            let label = line_label(
+                value,
+                "wc-hist-result",
+                mp::MEMORY_VALUE_H,
+                "panel.result",
+                appcore::metrics::text::PANEL_RESULT_MIN_SIZE,
+            );
             // DGMNB's three cells, to the fraction of a pixel.
             let actions = super::width_bin::Cells::new(mp::MEMORY_BUTTONS_GAP);
             actions.set_halign(gtk::Align::End);

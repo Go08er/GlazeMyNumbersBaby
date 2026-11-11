@@ -110,7 +110,10 @@ pair passes.
   which at this size are more than 1% of the picture's edges; in
   Programmer, `M▾` and `MS`, which DGMNB squeezes into no room at the
   bar's end and shrinks to 10 px, where GMNB's buttons keep their least
-  width.
+  width. The other pages at 300x400 (round 4): Standard, Date and
+  Graphing pass; Currency and Length differ by the converter's scroll
+  thumb alone, which both apps show, GMNB's 4 px to the right and 3 px
+  taller (the page's ring room is inside its view).
 - `ONLY=REGEX` captures and compares only the cases it matches
   (`ONLY='date|currency'`), keeping the other pictures in `OUT`.
 - `COMPARE=path` uses that `compare` binary (else it is built here).

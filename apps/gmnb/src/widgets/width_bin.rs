@@ -186,6 +186,10 @@ mod imp {
         pub end: bool,
         pub width: f32,
         pub inset: f32,
+        /// A child wider than its room starts at the room's start and
+        /// runs on past its end (a line of text, as DGMNB sets one from
+        /// its rect's start), where any other is centred on its room.
+        pub keep_start: bool,
     }
 
     #[derive(Default)]
@@ -248,7 +252,11 @@ mod imp {
                 let room = wide - 2.0 * s.inset;
                 let min = w.measure(gtk::Orientation::Horizontal, height).0;
                 let cw = (room.round() as i32).max(min);
-                let at = x + s.inset + (room - cw as f32) / 2.0;
+                let at = if s.keep_start && !s.end {
+                    x + s.inset
+                } else {
+                    x + s.inset + (room - cw as f32) / 2.0
+                };
                 let t = gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(at, 0.0));
                 w.allocate(cw, height, -1, Some(t));
             }
@@ -379,10 +387,28 @@ impl Strip {
     pub fn append(&self, child: &impl IsA<gtk::Widget>, end: bool, width: f32, inset: f32) {
         let child = child.as_ref();
         child.set_parent(self);
-        self.imp()
-            .slots
-            .borrow_mut()
-            .push((child.clone(), imp::Slot { end, width, inset }));
+        self.imp().slots.borrow_mut().push((
+            child.clone(),
+            imp::Slot {
+                end,
+                width,
+                inset,
+                keep_start: false,
+            },
+        ));
+    }
+
+    /// A child (appended from the start) that is wider than its room
+    /// starts at the room's start and runs past its end, rather than
+    /// being centred on the room: a line of text.
+    pub fn keep_start(&self, child: &impl IsA<gtk::Widget>) {
+        let child = child.as_ref();
+        for (w, slot) in self.imp().slots.borrow_mut().iter_mut() {
+            if w == child {
+                slot.keep_start = true;
+            }
+        }
+        self.queue_allocate();
     }
 }
 

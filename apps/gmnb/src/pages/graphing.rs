@@ -43,6 +43,9 @@ struct Row {
     /// the swatch so they follow palette and theme changes.
     pickers: RefCell<Vec<(gtk::Button, gtk::CssProvider)>>,
     error: gtk::Label,
+    /// Analyze function: on only for an equation that is text and has no
+    /// error, as DGMNB's (`eq-analyze`).
+    analyze: gtk::Button,
     color: Cell<usize>,
     /// The field's text, waiting to be told to the graph ([`Deferred`]).
     edit: Deferred,
@@ -161,7 +164,7 @@ pub struct GraphingPage {
     /// The icons the style sizes: each with the control it is in.
     icons: RefCell<Vec<(glib::WeakRef<PathIcon>, &'static str)>>,
     focused: RefCell<Option<glib::WeakRef<gtk::Entry>>>,
-    mode_toggle: adw::ToggleGroup,
+    mode_toggle: ModeToggle,
     next_color: Cell<usize>,
     wide: Cell<bool>,
     building: Cell<bool>,
@@ -189,6 +192,66 @@ fn small_button(icon: &str, tip: &str, class: &str) -> (gtk::Button, PathIcon) {
         .build();
     b.update_property(&[gtk::accessible::Property::Label(tip)]);
     (b, icon)
+}
+
+/// The header's Equations and Graph switch in a narrow window: two round
+/// icon buttons of the header, one of them on, as DGMNB's (`rbtn` with its
+/// `on`), not a segmented control.
+#[derive(Clone)]
+struct ModeToggle {
+    equations: gtk::ToggleButton,
+    graph: gtk::ToggleButton,
+}
+
+impl ModeToggle {
+    fn new(hub: &crate::theme::Hub) -> Self {
+        use crate::widgets::icon::icon_toggle;
+        let equations = icon_toggle(paths::FUNCTION, "Equations");
+        let graph = icon_toggle(paths::GRAPHING, "Graph (Ctrl+Home)");
+        graph.set_group(Some(&equations));
+        equations.set_active(true);
+        for b in [&equations, &graph] {
+            crate::window::follow_icon(hub, b, "header.button");
+        }
+        Self { equations, graph }
+    }
+
+    fn widgets(&self) -> Vec<gtk::Widget> {
+        vec![self.equations.clone().upcast(), self.graph.clone().upcast()]
+    }
+
+    fn set_visible(&self, visible: bool) {
+        self.equations.set_visible(visible);
+        self.graph.set_visible(visible);
+    }
+
+    /// "equations" or "graph".
+    fn active_name(&self) -> &'static str {
+        if self.graph.is_active() {
+            "graph"
+        } else {
+            "equations"
+        }
+    }
+
+    fn set_active_name(&self, name: Option<&str>) {
+        match name {
+            Some("graph") => self.graph.set_active(true),
+            _ => self.equations.set_active(true),
+        }
+    }
+
+    /// `f` is told the name of the one that is turned on.
+    fn connect_active(&self, f: impl Fn(&'static str) + Clone + 'static) {
+        for (button, name) in [(&self.equations, "equations"), (&self.graph, "graph")] {
+            let f = f.clone();
+            button.connect_toggled(move |b| {
+                if b.is_active() {
+                    f(name);
+                }
+            });
+        }
+    }
 }
 
 impl GraphingPage {
@@ -291,11 +354,7 @@ impl GraphingPage {
         eq_col.append(&add);
         eq_col.append(&vars_header);
         eq_col.append(&vars_box);
-        let eq_scroll = gtk::ScrolledWindow::builder()
-            .child(&eq_col)
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .build();
+        let eq_scroll = crate::window::scroller(&ctx.hub, &eq_col);
 
         // Function analysis view.
         let back = gtk::Button::builder()
@@ -318,11 +377,7 @@ impl GraphingPage {
         an_col.append(&back);
         an_col.append(&analysis_title);
         an_col.append(&analysis_body);
-        let an_scroll = gtk::ScrolledWindow::builder()
-            .child(&an_col)
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .build();
+        let an_scroll = crate::window::scroller(&ctx.hub, &an_col);
 
         let side_stack = gtk::Stack::new();
         side_stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
@@ -359,27 +414,7 @@ impl GraphingPage {
         let split = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         split.append(&view_stack);
 
-        let mode_toggle = adw::ToggleGroup::new();
-        let eq_icon = PathIcon::new(paths::FUNCTION, ctl::ICON_BUTTON_ICON as i32);
-        mode_toggle.add(
-            adw::Toggle::builder()
-                .name("equations")
-                .child(&eq_icon)
-                .tooltip("Equations")
-                .build(),
-        );
-        let graph_icon = PathIcon::new(paths::GRAPHING, ctl::ICON_BUTTON_ICON as i32);
-        mode_toggle.add(
-            adw::Toggle::builder()
-                .name("graph")
-                .child(&graph_icon)
-                .tooltip("Graph (Ctrl+Home)")
-                .build(),
-        );
-        icons.push((eq_icon, "segmented.item"));
-        icons.push((graph_icon, "segmented.item"));
-        mode_toggle.set_active_name(Some("equations"));
-        mode_toggle.add_css_class("wc-toggle-group");
+        let mode_toggle = ModeToggle::new(&ctx.hub);
 
         let root = WidthBin::new(&split);
         let page = Rc::new(GraphingPage {
@@ -538,11 +573,7 @@ impl GraphingPage {
         }
         {
             let vs = view_stack.clone();
-            mode_toggle.connect_active_name_notify(move |t| {
-                if let Some(name) = t.active_name() {
-                    vs.set_visible_child_name(&name);
-                }
-            });
+            mode_toggle.connect_active(move |name| vs.set_visible_child_name(name));
         }
         {
             let weak = Rc::downgrade(&page);
@@ -611,11 +642,8 @@ impl GraphingPage {
         } else {
             self.side.set_width_request(-1);
             self.view_stack.add_named(&self.side, Some("equations"));
-            let name = self
-                .mode_toggle
-                .active_name()
-                .unwrap_or_else(|| "equations".into());
-            self.view_stack.set_visible_child_name(&name);
+            self.view_stack
+                .set_visible_child_name(self.mode_toggle.active_name());
             self.mode_toggle.set_visible(true);
         }
     }
@@ -890,9 +918,13 @@ impl GraphingPage {
             swatch_css,
             pickers: RefCell::default(),
             error,
+            analyze: analyze.clone(),
             color: Cell::new(color),
             edit: Deferred::new(glib::MainContext::default()),
         });
+        // An empty equation has nothing to analyze; a text's own state
+        // follows its error (`show_error`).
+        analyze.set_sensitive(false);
         // Undo from appcore's history, not GtkText's (R20-M-04, R20-M-05).
         crate::undo::attach(&entry);
         style.set_popover(Some(&self.style_popover(&row)));
@@ -1140,6 +1172,8 @@ impl GraphingPage {
         let err = self.graph.borrow().error(id).cloned();
         if let Some(row) = self.rows.borrow().iter().find(|r| r.id == id) {
             let show = err.is_some() && !row.entry.text().trim().is_empty();
+            row.analyze
+                .set_sensitive(err.is_none() && !row.entry.text().trim().is_empty());
             row.error.set_visible(show);
             if let Some(e) = &err {
                 row.error.set_text(e.message());
@@ -1655,7 +1689,7 @@ impl Page for GraphingHandle {
     fn activate(&self, _mode: ViewMode) {}
 
     fn header_end(&self) -> Vec<gtk::Widget> {
-        vec![self.0.mode_toggle.clone().upcast()]
+        self.0.mode_toggle.widgets()
     }
 
     fn key_pressed(&self, kp: &KeyPress) -> bool {

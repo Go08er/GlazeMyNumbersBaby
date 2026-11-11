@@ -78,6 +78,8 @@ pub enum Align {
     #[default]
     Start,
     Center,
+    /// Ending at the width's end (a history result), as DGMNB's `Align::End`.
+    End,
 }
 
 /// Text set before the line in a font and colour of its own (the
@@ -386,6 +388,7 @@ mod imp {
             let mut x = match self.align.get() {
                 Align::Start => lead + dx,
                 Align::Center => (w - lead - px(logical.width())) / 2.0 + lead + dx,
+                Align::End => w - px(logical.width()) + dx,
             };
             let field = self.field.get();
             if let Some(caret) = field {
