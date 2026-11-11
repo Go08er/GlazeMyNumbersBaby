@@ -1160,6 +1160,9 @@ export type Option = {
 	-- choice
 	choices: { { id: string, label: string } }?,
 	-- choice: draw a tile for one choice; the choices then show as a grid of tiles.
+	-- 10 ms each. Settings asks `visible` and `preview` in passes that share
+	-- 10 ms: what doesn't fit is asked in the next pass, after the window has
+	-- drawn, and a tile shows a blank until its picture comes.
 	preview: ((draw: Draw, frame: Preview, choice: string) -> ())?,
 	-- slider
 	min: number?,
@@ -1168,6 +1171,7 @@ export type Option = {
 	-- slider: how the value is shown.
 	format: ("number" | "percent")?,
 	-- Hidden when this returns false; shown otherwise (also if it fails).
+	-- 10 ms, in Settings' passes (see `preview`), asked before the tiles.
 	visible: ((options: { [string]: OptionValue }, ctx: Ctx) -> boolean)?,
 	-- Buttons beside the option.
 	actions: { OptionAction }?,
