@@ -972,7 +972,9 @@ wall and a picture was decoded at the `gmnb.image` call. Neither holds
 now: a time limit is of the processor time the calling thread has run,
 and no picture is decoded inside a call. What the pictures' functions
 still do inside a call is small and bounded by the limits: reading the
-file, reading a header, counting an animation's frames (at most 0.9 ms).
+file, reading a header, counting an animation's frames (a millisecond
+or so: a GIF made of more blocks than a picture of its size needs is
+refused before it is walked).
 It counts against the call like any other work. Measured in the engine,
 the processor time of the whole call: `gmnb.image` of a 2.1 MiB PNG or a
 2.8 MiB JPEG 0.12 ms; `gmnb.animation` of a 2.7 MiB GIF 0.35 ms, of a
@@ -998,8 +1000,12 @@ time):
 2. Walk the file without decoding pixels and build the timeline: GIF with
    `DecodeOptions::skip_frame_decoding(true)`; APNG by its `fcTL` chunks
    (which must be as many as `acTL` announces); WebP by its `ANMF` chunks
-   (which `WebPDecoder::new` must count the same). Measured: at most
-   0.9 ms, for a 9.9 MiB GIF.
+   (which `WebPDecoder::new` must count the same). Measured: 0.9 ms for
+   a 9.9 MiB GIF. The GIF decoder's walk costs by the block (about 40 ns
+   each), so its blocks are counted first, without decoding: a GIF of more
+   blocks than one for every 64 bytes plus sixteen for each frame allowed
+   is refused (8 MiB of blocks of a byte or two took the walk 60 to 90 ms).
+   A real GIF's bytes are nearly all in data sub-blocks of 255.
 3. Delays: GIF hundredths of a second; APNG `delay_num / delay_den` (a
    denominator of 0 is 100); WebP milliseconds. A delay under 20 ms
    becomes 100 ms. A delay over 10 s becomes 10 s.

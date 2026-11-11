@@ -197,8 +197,8 @@ yours to edit, delete or replace.
   built-in themes' ids in the order above where there is a folder, then
   every other theme folder by id, then `GMNB_THEME_DIR`'s. A theme GMNB
   put in the folder is marked "Comes with GMNB". Besides the built-in
-  themes, at most 64 theme folders are listed (the first by id, and the
-  one chosen wherever it falls), and
+  themes and the one chosen (wherever it falls), at most 64 theme folders
+  are listed, the first by id, and
   loading them for the list takes at most about two seconds in all: a theme
   after that is listed as not checked, so a folder of thousands of themes
   can't hold Settings. About → Legal keeps
@@ -1738,7 +1738,9 @@ tests assert it, Swirls' at every size from 300 × 400 to 3840 × 2160):
 Swirls' cost 6% of what a frame may, Sprinkles' 12%, and Aurora's 11%
 (a result just after the equals key, or a new palette's four rays; 9%
 with thirteen keys' rays alive at once, and 20% with eight keys, a result
-and a new palette all at the same moment; its background standing, 5.5%:
+and a new palette all at the same moment; Enter held down, a press and a
+result thirty times a second, 32 events alive, 25% at 300 × 400 and 57% at
+760 × 640, its dearest; its background standing, 5.5%:
 one field behind one mask and a gradient that runs straight down. A ray
 is charged by what it covers, so in a strip of a layer, 200 × 2160, the
 same moment costs 44%. 0.2's four blobs and two arcs, radial gradients
@@ -2139,8 +2141,8 @@ there is kept [9:1 from its edge](#text-surface-control-state).
 The same floor holds for every theme, not only the built-in ones, at the
 window's own colours (`crates/gmnb-theme/src/focus.rs`): a ring under
 1 px, or under 3:1 on what it lies on (with its edge around a key; and, for
-`focus` outside its control, the header, the sidebar, a panel and `plain`,
-the ring alone), is
+`focus`, the header, the sidebar, a panel and `plain`, outside its control or
+inside it, the ring alone), is
 the base look's ring instead (2 px just outside the control, in the
 theme's `accent_text`, else its `fg`, else black or white, whichever
 reads), and Settings notes why. A `native` ring that doesn't reach 3:1

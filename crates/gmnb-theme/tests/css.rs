@@ -2044,8 +2044,8 @@ fn rings_read(name: &str, style: &Style, behind: &[Rgba]) -> Vec<String> {
             },
             got,
         );
-        if path == "focus" && ring.offset > 0.0 {
-            // Around a control on a surface: the ring alone, outside it.
+        if path == "focus" {
+            // On a control on a surface: the ring alone.
             for surface in RING_SURFACES {
                 let fill = match style.get(surface) {
                     Some(Value::Surface(s)) => s.background.clone(),
@@ -2284,6 +2284,47 @@ fn a_ring_that_would_hide_the_focus_is_the_base_looks() {
         "{:?}",
         native.notes.list
     );
+}
+
+/// R4-A-1: a ring drawn inside its control (`offset` 0 or less) was judged
+/// on the keys only, so a ring that reads inside a key but is the colour of
+/// the header, the sidebar or a panel (where the controls that are not keys
+/// are transparent) hid the keyboard's focus round every header button.
+#[test]
+fn a_ring_inside_its_control_that_hides_on_a_surface_is_the_base_looks() {
+    use gmnb_theme::focus::{self, LEAST_CONTRAST};
+    let ctx = Ctx::default();
+    let engine = Engine::with_globals(Limits::default(), |lua| {
+        gmnb_theme::library::register(lua, gmnb_theme::library::without_drawing)
+    })
+    .unwrap();
+    for surface in ["header", "nav", "panel"] {
+        let value = if surface == "panel" {
+            "panel = { background = '#000000' }".to_string()
+        } else {
+            format!("{surface} = {{ background = '#000000' }}")
+        };
+        let src = format!(
+            "return {{ focus = {{ color = '#000000', width = 2, offset = 0 }}, \
+             window = {{ background = '#ffffff' }}, \
+             keys = {{ number = {{ background = '#ffffff' }}, func = {{ background = '#ffffff' }}, \
+             operator = {{ background = '#ffffff' }}, equals = {{ background = '#ffffff' }} }}, \
+             {value} }}"
+        );
+        let resolved = resolve(&ctx, &engine.load("=style", &src).unwrap());
+        let noted = resolved
+            .notes
+            .list
+            .iter()
+            .any(|n| n.message.contains("would hide the keyboard's focus"));
+        assert!(noted, "{surface}: no note: {:?}", resolved.notes.list);
+        let get = |p: &str| resolved.style.get(p).cloned();
+        let behind = focus::backdrop(get, resolved.style.tokens.colors.bg, None);
+        let ring = focus::ring_at(get, "focus").unwrap();
+        let grounds = focus::grounds(get, &resolved.style.tokens, "focus", &behind);
+        let got = focus::worst(&ring, &grounds.surfaces, false);
+        assert!(got >= LEAST_CONTRAST, "{surface}: {got:.2}");
+    }
 }
 
 /// R3-E-1b: the floor judged the `focus` ring on the window's background
