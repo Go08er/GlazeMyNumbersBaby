@@ -1222,3 +1222,100 @@ fn the_guard_is_not_fooled_by_a_moment_of_busy_and_lets_go_of_a_slow_one() {
     let again = field_width(&theme, 761.0, 640.0);
     assert!(again >= fine - 4, "{again} {fine}");
 }
+
+/// Dragging through Freestyle's colour chooser makes a new palette at each
+/// step, and Settings draws every palette's tile after each. The other
+/// palettes' schemes don't depend on those colours (nor System's on
+/// Freestyle's): they must come from what was remembered, not be worked
+/// out again (some 2 ms each: seven tiles were 12 ms a pass, over the
+/// 10 ms Settings allows one, against 0.3 ms when remembered).
+#[test]
+fn dragging_the_colour_does_not_work_the_other_tiles_out_again() {
+    let mut theme = aurora();
+    let option = theme
+        .def
+        .options
+        .iter()
+        .find(|o| o.id == "palette")
+        .unwrap()
+        .clone();
+    let mut tiles: Vec<Vec<f64>> = vec![Vec::new(); PALETTES.len()];
+    for i in 0..60u32 {
+        let colour = appcore::color::from_hsl((i * 6) as f32, 0.9, 0.5);
+        let cx = ctx(
+            &theme,
+            true,
+            &[
+                ("palette", text("custom")),
+                ("primary", text(&appcore::color::to_hex(colour))),
+                ("secondary", text("#ff6fb5")),
+            ],
+        );
+        theme.style(&cx).unwrap();
+        for (k, choice) in PALETTES.iter().enumerate() {
+            let started = cpu_ms();
+            theme.preview(&option, choice, &cx).unwrap();
+            tiles[k].push(cpu_ms() - started);
+        }
+    }
+    for (choice, times) in PALETTES.iter().zip(tiles.iter_mut()) {
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = times[times.len() / 2];
+        // Freestyle's own tile is made anew each step (and is the one
+        // that is cheap here: its scheme is the one `style` just made).
+        assert!(median < 0.6, "{choice}: {median:.2} ms a tile");
+    }
+}
+
+/// Enter held down: the keyboard repeats the equals key thirty times a
+/// second, and each repeat is a press and a result; the background keeps
+/// up with them all, 32 events at a time, at any window size, and no frame
+/// is dropped (three would switch the background off).
+#[test]
+fn enter_held_down_drops_no_frame() {
+    for (w, h) in [
+        (300.0f32, 400.0f32),
+        (760.0, 640.0),
+        (1920.0, 1080.0),
+        (3840.0, 2160.0),
+    ] {
+        let mut theme = aurora();
+        let c = ctx(&theme, true, &[]);
+        theme.style(&c).unwrap();
+        let mut press_e = press(121, KeyKind::Equals, w * 0.5, h * 0.9);
+        press_e.via = Some(Via::Keyboard);
+        let mut result_e = outcome(EventKind::Result, w);
+        result_e.via = Some(Via::Keyboard);
+        let mut worst = 0.0f64;
+        for frame in 0..120 {
+            let now = frame as f64 / 60.0;
+            let repeats = ((now * 30.0).floor() as i64 + 1).min(30);
+            let born: Vec<f64> = (0..repeats)
+                .flat_map(|k| [k as f64 / 30.0, k as f64 / 30.0])
+                .collect();
+            let skip = born.len().saturating_sub(32);
+            let events: Vec<(f64, &Event)> = born
+                .iter()
+                .enumerate()
+                .skip(skip)
+                .map(|(i, at)| (now - at, if i % 2 == 0 { &press_e } else { &result_e }))
+                .filter(|(age, _)| *age < 1.15)
+                .collect();
+            let f = Frame {
+                time: now,
+                dt: 1.0 / 60.0,
+                events,
+                ..Frame::sized(w, h)
+            };
+            ok(theme.draw(LayerKind::Background, &c, &f));
+            worst = worst.max(theme.api().frame_cost());
+        }
+        assert!(worst < 0.75, "{w}x{h}: {worst}");
+        assert!(
+            theme
+                .hooks()
+                .iter()
+                .all(|(_, strikes, off)| *strikes == 0 && !off)
+        );
+    }
+}

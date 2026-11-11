@@ -702,12 +702,15 @@ local remembered: { [string]: Scheme } = {}
 local remembered_count = 0
 
 local function scheme_for(id: string, ctx: Ctx): Scheme
+	-- (Only what the palette is made of: System's accent, Freestyle's two
+	-- colours. Dragging through the colour chooser must not make every
+	-- other palette's tile work its own out again at each step.)
 	local key = table.concat({
 		id,
 		tostring(ctx.dark),
-		if ctx.accent then gmnb.to_hex(ctx.accent) else "-",
-		tostring(ctx.options.primary),
-		tostring(ctx.options.secondary),
+		if id == "system" and ctx.accent then gmnb.to_hex(ctx.accent) else "-",
+		if id == "custom" then tostring(ctx.options.primary) else "-",
+		if id == "custom" then tostring(ctx.options.secondary) else "-",
 	}, "|")
 	local s = remembered[key]
 	if not s then
