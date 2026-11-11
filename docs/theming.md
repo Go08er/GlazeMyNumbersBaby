@@ -208,7 +208,9 @@ yours to edit, delete or replace.
   then is noticed when Settings next opens or GMNB next starts.
 - **The chosen theme deleted** (seen at start, while Settings is open, or
   as Settings opens): the base look, and a toast that says the theme isn't
-  installed, as for any theme that is missing or fails. It stays the
+  installed, as for any theme that is missing or fails (while Settings is
+  open, every such toast is Settings' own: the window's would be under it,
+  and in a narrow window hidden by it). It stays the
   choice, and is loaded again when its folder is back (restored, or
   dragged in, seen the same way).
 - ***Open themes folder*** opens the folder in the app your desktop opens

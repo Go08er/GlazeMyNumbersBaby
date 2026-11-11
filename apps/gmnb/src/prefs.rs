@@ -97,6 +97,20 @@ pub fn show(win: &Rc<Window>) {
     let themes = ThemeSettings::new(&ctx, &win.widget(), &dialog);
     page.add(&themes.group);
     page.add(&themes.options);
+    // What the hub tells while Settings is open is told in Settings: the
+    // window's toasts are under it (and hidden by it, narrow).
+    {
+        let dialog = dialog.downgrade();
+        ctx.hub.set_front_tell(Some(Box::new(move |message: &str| {
+            if let Some(dialog) = dialog.upgrade() {
+                let toast = adw::Toast::new(message);
+                // A theme's name is its own words: text, not markup.
+                toast.set_use_markup(false);
+                toast.set_timeout(4);
+                dialog.add_toast(toast);
+            }
+        })));
+    }
     // What became of the themes folder while Settings was closed (nothing
     // watches it then): a chosen theme whose folder went gives way to the
     // base look now, and one that came back is loaded.
@@ -213,9 +227,11 @@ pub fn show(win: &Rc<Window>) {
 
     dialog.add(&page);
     // The theme rows' handlers live as long as the dialog does; the watch
-    // on the themes folder ends as it closes.
+    // on the themes folder ends as it closes, and the hub tells the window
+    // again.
     dialog.connect_closed(move |_| {
         themes.unwatch();
+        themes.ctx.hub.set_front_tell(None);
     });
     // A dialog's keys never reach the window's controllers.
     crate::window::own_keys(&dialog);

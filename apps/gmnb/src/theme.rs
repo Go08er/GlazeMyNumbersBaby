@@ -163,6 +163,9 @@ pub struct Hub {
     style_subscribers: RefCell<Vec<StyleSubscriber>>,
     /// How the user is told of a theme that failed (a toast).
     tell: RefCell<Option<Tell>>,
+    /// How while Settings is open (its own toasts: the window's are under
+    /// it, and hidden by it in a narrow window).
+    front: RefCell<Option<Tell>>,
     /// What was to be told before there was a way to tell it.
     untold: RefCell<Vec<String>>,
     stats: Cell<Stats>,
@@ -317,6 +320,7 @@ impl Hub {
             epoch: Cell::new(0),
             style_subscribers: RefCell::default(),
             tell: RefCell::new(None),
+            front: RefCell::new(None),
             untold: RefCell::default(),
             stats: Cell::default(),
             layers: Layers::new(),
@@ -595,8 +599,18 @@ impl Hub {
         self.tell.replace(Some(Box::new(tell)));
     }
 
+    /// How the user is told while Settings is open (`None` once it has
+    /// closed): what [`Hub::set_tell`] says goes there meanwhile.
+    pub fn set_front_tell(&self, tell: Option<Tell>) {
+        self.front.replace(tell);
+    }
+
     fn tell(&self, message: &str) {
         eprintln!("gmnb: {message}");
+        if let Some(front) = self.front.borrow().as_ref() {
+            front(message);
+            return;
+        }
         match self.tell.borrow().as_ref() {
             Some(tell) => tell(message),
             None => self.untold.borrow_mut().push(message.to_string()),
