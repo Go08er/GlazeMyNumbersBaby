@@ -3,6 +3,8 @@
 //! in the real engine (docs/theming.md, "Tests the engine must have": 3,
 //! 4, 5 and 7).
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -670,7 +672,7 @@ const PALETTES: [&str; 7] = [
 ];
 
 fn built_in(id: &str) -> Theme {
-    let theme = Theme::load(Source::built_in(id).unwrap(), Limits::default())
+    let theme = Theme::load(Source::built_in(id).unwrap(), common::limits())
         .unwrap_or_else(|e| panic!("{id}: {e}"));
     assert!(theme.notes.is_empty(), "{id}: {:#?}", theme.notes);
     theme
@@ -883,7 +885,7 @@ fn discovery_lists_built_ins_then_the_users() {
             ("dev", Dev)
         ]
     );
-    let listed = theme::list(&sources, &Limits::default());
+    let listed = theme::list(&sources, &common::limits());
     assert_eq!(listed[0].meta.as_ref().unwrap().name, "Aurora");
     assert_eq!(listed[1].meta.as_ref().unwrap().name, "My Mono");
     assert_eq!(listed[2].meta.as_ref().unwrap().name, "Glazed");

@@ -11,13 +11,15 @@
 #[path = "../../gmnb-sound/examples/support/stand_in.rs"]
 mod stand_in;
 
+mod common;
+
 use std::time::Duration;
 
 use gmnb_sound::{Effect, EventName, Play, Recipe, SoundId, SoundSource, limits, prepare_all};
+use gmnb_theme::OptionValue;
 use gmnb_theme::events::{Action, Cause, Event, EventKind, KeyKind, Page, Source as From};
 use gmnb_theme::sound::{Choice, HOOK_TIME};
 use gmnb_theme::theme::{Source, Theme};
-use gmnb_theme::{Limits, OptionValue};
 use stand_in::{By, StandIn};
 
 // The sounds, by the order the theme makes them in.
@@ -57,7 +59,7 @@ const POURS: [(&str, &[usize]); 6] = [
 ];
 
 fn swirls() -> Theme {
-    Theme::load(Source::built_in("swirls").unwrap(), Limits::default())
+    Theme::load(Source::built_in("swirls").unwrap(), common::limits())
         .unwrap_or_else(|e| panic!("Swirls didn't load: {e}"))
 }
 

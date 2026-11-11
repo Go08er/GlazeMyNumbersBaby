@@ -3,6 +3,8 @@
 //! engine must have": 1 and 8). No toolkit: the stylesheet is read as
 //! text.
 
+mod common;
+
 use std::collections::BTreeMap;
 
 use appcore::color::{TEXT_CONTRAST, UI_CONTRAST, contrast};
@@ -23,7 +25,7 @@ const PALETTES: [&str; 7] = [
 const FLAVOURS: [&str; 5] = ["strawberry", "blueberry", "matcha", "lemon", "caramel"];
 
 fn built_in(id: &str) -> Theme {
-    Theme::load(Source::built_in(id).unwrap(), Limits::default()).unwrap()
+    Theme::load(Source::built_in(id).unwrap(), common::limits()).unwrap()
 }
 
 fn with(theme: &Theme, dark: bool, opacity: f32, options: &[(&str, OptionValue)]) -> Ctx {
