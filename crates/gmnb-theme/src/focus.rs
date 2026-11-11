@@ -237,11 +237,13 @@ pub fn floor(tokens: &Tokens, values: &mut BTreeMap<&'static str, Value>, notes:
             format!("it is {} px wide, under {LEAST_WIDTH}", ring.width)
         } else {
             let mut got = worst(&ring, &grounds.under(&ring), grounds.edge);
-            // Outside a control on one of the page's surfaces (the header,
-            // a panel, the sidebar): the ring alone, with no edge.
-            if ring.offset > 0.0 {
-                got = got.min(worst(&ring, &grounds.surfaces, false));
-            }
+            // On a control on one of the page's surfaces (the header, a
+            // panel, the sidebar): the ring alone, with no edge. Outside
+            // the control it lies on the surface; inside it, on the
+            // control's fill, which is the surface where it is transparent
+            // (R4-A-1: a ring inside its control was judged on the keys
+            // only).
+            got = got.min(worst(&ring, &grounds.surfaces, false));
             if got >= LEAST_CONTRAST {
                 continue;
             }
