@@ -2015,9 +2015,8 @@ no accent, `#ffff00`, `#000000`, `#ffffff`, `#808080`, `#0000ff` and
 `on_accent` on `accent` ≥ 4.5; `accent_text` on `bg` and on `surface` ≥ 4.5;
 `fg` on `surface` ≥ 12; every `series` colour on `bg` and on `surface` ≥ 3.
 
-**2. Aurora's palettes** (today: `built_in_palettes_stay_readable` and
-`generated_palettes_stay_readable_for_extreme_colours` in
-`apps/gmnb/src/theme.rs`). For all seven palettes, and for System and
+**2. Aurora's palettes** (today: `auroras_palettes_stay_readable` in
+`crates/gmnb-theme/tests/css.rs`). For all seven palettes, and for System and
 Freestyle generated from white, black, `#808080`, `#ffff00`, `#0000ff`,
 `#00ff00` and `#7c4dff` (with the complement, and with the colour twice),
 light and dark: the equals key's text on its gradient's two ends and
