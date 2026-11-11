@@ -1738,7 +1738,9 @@ tests assert it, Swirls' at every size from 300 × 400 to 3840 × 2160):
 Swirls' cost 6% of what a frame may, Sprinkles' 12%, and Aurora's 11%
 (a result just after the equals key, or a new palette's four rays; 9%
 with thirteen keys' rays alive at once, and 20% with eight keys, a result
-and a new palette all at the same moment; its background standing, 5.5%:
+and a new palette all at the same moment; Enter held down, a press and a
+result thirty times a second, 32 events alive, 25% at 300 × 400 and 57% at
+760 × 640, its dearest; its background standing, 5.5%:
 one field behind one mask and a gradient that runs straight down. A ray
 is charged by what it covers, so in a strip of a layer, 200 × 2160, the
 same moment costs 44%. 0.2's four blobs and two arcs, radial gradients
