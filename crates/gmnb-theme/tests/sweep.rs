@@ -17,8 +17,30 @@ use gmnb_theme::{Ctx, Limits, OptionValue, Style, css};
 
 const THEMES: [&str; 4] = ["aurora", "glazed", "swirls", "mono"];
 
+/// The limits a theme really has when `GMNB_REAL_LIMITS` is set; otherwise
+/// four times each hook's time. The sweeps check what the themes do, not
+/// how fast the machine running them is (CI's runners and the packages'
+/// builders are slower than the limits are set for, in unoptimised builds
+/// too); `tests/swirls.rs` and `tests/media.rs` hold the budgets.
+fn limits() -> Limits {
+    let real = Limits::default();
+    if std::env::var_os("GMNB_REAL_LIMITS").is_some() {
+        return real;
+    }
+    Limits {
+        load: real.load * 4,
+        style: real.style * 4,
+        frame: real.frame * 4,
+        preview: real.preview * 4,
+        visible: real.visible * 4,
+        action: real.action * 4,
+        place: real.place * 4,
+        ..real
+    }
+}
+
 fn built_in(id: &str) -> Theme {
-    Theme::load(Source::built_in(id).unwrap(), Limits::default()).unwrap()
+    Theme::load(Source::built_in(id).unwrap(), limits()).unwrap()
 }
 
 fn text(s: &str) -> OptionValue {

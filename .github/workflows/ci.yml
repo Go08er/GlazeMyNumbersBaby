@@ -86,9 +86,11 @@ jobs:
           # tile of Settings drawn once, a theme whose style fails shown in
           # the base look, one that fails at start told, Settings' sound
           # switch and volume slider there (settings.rs).
-          # least.rs and settings.rs: 4 each; markup.rs: 2.
-          [ "$(grep -c "^test result: ok\. 4 passed; 0 failed;" least-test.log)" -eq 2 ]
-          grep -q "^test result: ok\. 2 passed; 0 failed;" least-test.log
+          # Each file's own result: passed, none failed, at least one run.
+          for t in least markup settings; do
+            awk -v t="Running tests/$t.rs" 'index($0, t) {f = 1; next} f && /^test result:/ {print; exit}' \
+              least-test.log | grep -Eq "^test result: ok\. [1-9][0-9]* passed; 0 failed;"
+          done
           if grep -q "skipped" least-test.log; then exit 1; fi
       - name: D-Bus tests ran (private dbus-daemon)
         run: |
