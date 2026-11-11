@@ -1844,7 +1844,12 @@ fn swirls_reads_at_every_opacity() {
 #[test]
 fn swirls_own_colours_read_over_every_colour_of_the_field() {
     let extremes = EXTREMES.map(|(_, hex)| appcore::color::hex(hex));
-    let cases = swirls_own_cases(&extremes, &SWIRLS_GLASS, &[1.0, 0.85, 0.5, 0.15, 0.1]);
+    // (0.95, 0.85 and 0.75: inside the veil's going.)
+    let cases = swirls_own_cases(
+        &extremes,
+        &SWIRLS_GLASS,
+        &[1.0, 0.95, 0.85, 0.75, 0.5, 0.15, 0.1],
+    );
     let mut bad = swirls_unreadable_over_the_field(&cases);
     bad.extend(unreadable(named(&cases)));
     bad.extend(swirls_rings_unreadable_over_the_field(&cases));
