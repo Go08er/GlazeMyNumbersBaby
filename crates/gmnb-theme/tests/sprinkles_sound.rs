@@ -554,7 +554,10 @@ fn freestyle_takes_the_key_of_the_nearest_icing() {
         let jingle = &key_of(like).jingle;
         assert_eq!(plays.len(), 4, "{icing}");
         for (play, note) in plays.iter().zip(jingle) {
-            assert!(near(play.params.rate, speed(note, "E5"), 1e-5), "{icing}: not {like}'s");
+            assert!(
+                near(play.params.rate, speed(note, "E5"), 1e-5),
+                "{icing}: not {like}'s"
+            );
         }
     }
     assert!(app.notes.is_empty(), "{:?}", app.notes);

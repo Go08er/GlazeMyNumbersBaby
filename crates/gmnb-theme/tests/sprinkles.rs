@@ -58,8 +58,10 @@ fn own_ctxs(theme: &Theme) -> Vec<(String, Ctx)> {
                 PICKS[(i + 1) % PICKS.len()].to_string(),
             ] {
                 let mut own = ctx(theme, dark, "custom", &[]);
-                own.options.insert("icing".into(), OptionValue::Text(pick.to_string()));
-                own.options.insert("second".into(), OptionValue::Text(second.clone()));
+                own.options
+                    .insert("icing".into(), OptionValue::Text(pick.to_string()));
+                own.options
+                    .insert("second".into(), OptionValue::Text(second.clone()));
                 out.push((format!("freestyle {pick}+{second} dark={dark}"), own));
             }
         }
@@ -324,7 +326,12 @@ fn sprinkles_loads_and_returns_only_known_keys() {
         for o in &defs {
             if ["system_note", "icing", "second"].contains(&o.id.as_str()) {
                 let visible = theme.visible(o, &c);
-                assert_eq!(visible, shown.contains(&o.id.as_str()), "{flavour}: {}", o.id);
+                assert_eq!(
+                    visible,
+                    shown.contains(&o.id.as_str()),
+                    "{flavour}: {}",
+                    o.id
+                );
             }
         }
     }
@@ -1123,7 +1130,10 @@ fn what_glazed_paints_reads() {
     let mut cases = Vec::new();
     for flavour in FLAVOURS {
         for dark in [false, true] {
-            cases.push((format!("{flavour} dark={dark}"), ctx(&theme, dark, flavour, &[])));
+            cases.push((
+                format!("{flavour} dark={dark}"),
+                ctx(&theme, dark, flavour, &[]),
+            ));
         }
     }
     // And the flavours of one's own, iced in colours from the extremes
@@ -1275,7 +1285,10 @@ fn the_icing_follows_the_colours() {
             ..Frame::sized(344.0, 122.0)
         };
         ok(theme.draw(LayerKind::Display, c, &f));
-        (colours_of(&theme, pics.icing), colours_of(&theme, pics.buddy))
+        (
+            colours_of(&theme, pics.icing),
+            colours_of(&theme, pics.buddy),
+        )
     };
     let mut system = ctx(&theme, false, "system", &[]);
     system.accent = Some([1.0, 0.0, 0.25]);
@@ -1285,9 +1298,11 @@ fn the_icing_follows_the_colours() {
     assert_ne!(red.0, green.0, "the icing on the digits");
     assert_ne!(red.1, green.1, "the doughnut");
     let mut own = ctx(&theme, false, "custom", &[]);
-    own.options.insert("icing".into(), OptionValue::Text("#ff0040".into()));
+    own.options
+        .insert("icing".into(), OptionValue::Text("#ff0040".into()));
     let picked = glazed(&own);
-    own.options.insert("icing".into(), OptionValue::Text("#00cc4c".into()));
+    own.options
+        .insert("icing".into(), OptionValue::Text("#00cc4c".into()));
     let picked_again = glazed(&own);
     assert_ne!(picked.0, picked_again.0, "the icing on the digits");
     assert_ne!(picked.1, picked_again.1, "the doughnut");

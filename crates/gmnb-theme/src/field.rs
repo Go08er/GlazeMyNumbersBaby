@@ -242,7 +242,10 @@ pub(crate) fn register(lua: &Lua, gmnb: &Table, shared: &Rc<Shared>) -> mlua::Re
                     };
                     let edge = [at(1)?, at(2)?];
                     if edge[0] > edge[1] {
-                        return Err(bad(what, "`edge` is where the blend starts, then where it ends"));
+                        return Err(bad(
+                            what,
+                            "`edge` is where the blend starts, then where it ends",
+                        ));
                     }
                     edge
                 }
