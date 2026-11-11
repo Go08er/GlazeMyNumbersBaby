@@ -5,6 +5,8 @@
 //! reads (the readability tables of `css.rs` see a style's fills, not what
 //! a layer draws: the awning under the header, the icing on the digits).
 
+mod common;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::time::Instant;
@@ -30,7 +32,7 @@ const HEADER: f32 = 52.0;
 const AWNING: f32 = 36.0;
 
 fn glazed() -> Theme {
-    let theme = Theme::load(Source::built_in("glazed").unwrap(), Limits::default())
+    let theme = Theme::load(Source::built_in("glazed").unwrap(), common::limits())
         .unwrap_or_else(|e| panic!("Glazed didn't load: {e}"));
     assert!(theme.notes.is_empty(), "{:#?}", theme.notes);
     theme
