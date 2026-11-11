@@ -578,8 +578,11 @@ only `font` and `radius` still apply. In the stylesheet each family's rules
 sit under a window class (`window.gmnb.own-switch switch { … }`) that the
 app sets for every family *not* listed.
 
-Aurora uses this to keep the toolkit's switches, sliders, menus and focus
-ring exactly as 0.2 had them.
+Aurora uses this to keep the toolkit's switches, sliders and menus
+exactly as 0.2 had them. (Not its focus ring any more: libadwaita's is
+the accent at half opacity, about 2:1 on the page and on a key, and a
+`native` ring is held to [rule 5](#readability-rules) as libadwaita draws
+it.)
 
 ### See-through windows
 
@@ -1798,6 +1801,7 @@ Where 0.3's structure changed for the base look, Aurora follows it:
 | The aurora | Four blobs | Four blobs under two veils of light in the palette's hot colours |
 | A pulse | One bloom | A bloom; the equals key's, a result's and a new palette's also send a wavefront ahead |
 | A toggle key that is on (2nd, hyp) | The equals key's gradient at 0.85: its small text fell to 2.5:1 in the light palettes | The gradient solid, deepened until the text reaches 4.5:1 |
+| The keyboard's focus ring | The toolkit's: the accent at half opacity, 2 px inside the control, about 2:1 on the page and 2.2:1 on a key | The accent, solid, 2 px a pixel out from the control (4.5:1 or more on the opaque page, 4.5 to 6 on a number key); round a key a line of the backdrop's colour along each side, so that it reaches 3.8:1 or more over any desktop that shows through (rule 5) |
 
 ## Readability rules
 

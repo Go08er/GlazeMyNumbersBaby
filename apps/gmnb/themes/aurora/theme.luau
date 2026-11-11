@@ -723,8 +723,10 @@ local function style(ctx: Ctx): Style
 			date = { margin = { 4, 16, 16, 16 }, gap = 14 },
 			graph = { margin = { 0, 10, 10, 10 }, gap = 10, side_width = 340 },
 		},
-		-- Drawn by the toolkit, as in 0.2, in the `stock` colours.
-		native = { "segmented", "slider", "switch", "scrollbar", "menu", "toast", "tooltip", "button", "card", "focus" },
+		-- Drawn by the toolkit, as in 0.2, in the `stock` colours. (Not the
+		-- focus ring: the toolkit's is the accent at half opacity, 2:1 on
+		-- the page and on the keys. Aurora's is below.)
+		native = { "segmented", "slider", "switch", "scrollbar", "menu", "toast", "tooltip", "button", "card" },
 		stock = {
 			window = window,
 			view = view,
@@ -750,6 +752,12 @@ local function style(ctx: Ctx): Style
 		-- becomes a pane of frost on a see-through window. 0.2 had nothing
 		-- here, and such text sank to 1:1 over a desktop of its own colour.
 		plain = { background = frost, radius = KEY_RADIUS },
+		-- The keyboard's focus: the accent, solid, a pixel out from what
+		-- holds it (it reaches 4.5 on the backdrop, and 3 on the frost of a
+		-- see-through window). Round a key, which lies on the aurora and on
+		-- whatever desktop shows through it, a line of the backdrop's own
+		-- colour along each side keeps it seen on either.
+		focus = { width = 2, color = accent, offset = 3, edge = { width = 1, color = base } },
 		header = {
 			background = frost,
 			height = 47,
@@ -1047,7 +1055,7 @@ local function style(ctx: Ctx): Style
 				},
 				other_month = alpha(fg, 0.38),
 				today = { width = 1, color = accent },
-				focus = { width = 2, color = alpha(accent, 0.9), offset = 1 },
+				focus = { width = 2, color = accent, offset = 1 },
 			},
 		},
 
@@ -1066,7 +1074,7 @@ local function style(ctx: Ctx): Style
 				size = 44,
 				font = { family = "Outfit", weight = 300 },
 				checked_weight = 300,
-				focus = { width = 2, color = alpha(accent, 0.9), offset = 2, radius = 12 },
+				focus = { width = 2, color = accent, offset = 2, radius = 12 },
 			},
 			symbol = { font = outfit(26, 300), color = dim, margin = { 0, 0, 0, 14 } },
 			unit = {
