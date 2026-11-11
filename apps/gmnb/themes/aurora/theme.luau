@@ -756,8 +756,15 @@ local function style(ctx: Ctx): Style
 		-- holds it (it reaches 4.5 on the backdrop, and 3 on the frost of a
 		-- see-through window). Round a key, which lies on the aurora and on
 		-- whatever desktop shows through it, a line of the backdrop's own
-		-- colour along each side keeps it seen on either.
-		focus = { width = 2, color = accent, offset = 3, edge = { width = 1, color = base } },
+		-- colour along each side keeps it seen on either; see-through, the
+		-- accent is moved 9:1 from that line, so that one of the two reads
+		-- on any colour the desktop makes of the backdrop.
+		focus = {
+			width = 2,
+			color = if see then gmnb.with_contrast(accent, base, UI * UI * 1.01) else accent,
+			offset = 3,
+			edge = { width = 1, color = base },
+		},
 		header = {
 			background = frost,
 			height = 47,

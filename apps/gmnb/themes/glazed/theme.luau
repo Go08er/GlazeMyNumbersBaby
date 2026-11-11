@@ -584,7 +584,11 @@ local function style(ctx: Ctx): Style
 		menu = { background = s.card, border = outline, radius = 6, shadow = { { y = 3, color = s.shadow } } },
 		toast = { background = ink, color = s.card, radius = 6, font = jersey(1) },
 		tooltip = { background = ink, color = s.card, radius = 4 },
-		focus = { width = 2, color = s.icing_ink, offset = 3 },
+		-- In the icing's ink (`accent_text`), as the base look's: on a
+		-- see-through window that is moved 9:1 from the wall's colour,
+		-- with a line of it round a key, so that the ring reads on any
+		-- desktop.
+		focus = { width = 2, offset = 3 },
 
 		panel = {
 			background = s.card,

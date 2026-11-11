@@ -776,7 +776,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph's equation column and its analysis. (An empty list's text in the History panel lies on the panel, a surface of the style's.) |
 | `plain.radius` | Radius | `shape.card_radius` | same |
 | `scrim` | Color | black at 0.30 | The shade over what the sidebar or a sheet covers |
-| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given); below opacity 1 also `edge { 1, bg }` (around a key the desktop shows through the backdrop) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius. `edge`: the keypad (Rust, `widgets/keypad.rs`) draws it around its key that holds the focus |
+| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given); below opacity 1 its colour is moved 9:1 from `bg`, and it has `edge { 1, bg }` (around a key the desktop shows through the backdrop) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius. `edge`: the keypad (Rust, `widgets/keypad.rs`) draws it around its key that holds the focus |
 
 ### Header and window buttons
 
@@ -1801,7 +1801,7 @@ Where 0.3's structure changed for the base look, Aurora follows it:
 | The aurora | Four blobs | Four blobs under two veils of light in the palette's hot colours |
 | A pulse | One bloom | A bloom; the equals key's, a result's and a new palette's also send a wavefront ahead |
 | A toggle key that is on (2nd, hyp) | The equals key's gradient at 0.85: its small text fell to 2.5:1 in the light palettes | The gradient solid, deepened until the text reaches 4.5:1 |
-| The keyboard's focus ring | The toolkit's: the accent at half opacity, 2 px inside the control, about 2:1 on the page and 2.2:1 on a key | The accent, solid, 2 px a pixel out from the control (4.5:1 or more on the opaque page, 4.5 to 6 on a number key); round a key a line of the backdrop's colour along each side, so that it reaches 3.8:1 or more over any desktop that shows through (rule 5) |
+| The keyboard's focus ring | The toolkit's: the accent at half opacity, 2 px inside the control, about 2:1 on the page and 2.2:1 on a key | The accent, solid, 2 px a pixel out from the control (4.5:1 or more on the opaque page, 4.5 to 6 on a number key); round a key a line of the backdrop's colour along each side, and see-through the accent deepened 9:1 from that line, so that it reaches 3:1 or more over any desktop that shows through, at any opacity (rule 5) |
 
 ## Readability rules
 
@@ -1895,10 +1895,14 @@ surface, the ring alone. The calendar's ring: the popover, and a day. A
 converter value's: its pane, and its field. A ring left to the toolkit
 (`native` lists `focus`) is judged as libadwaita draws it: its accent at
 half opacity, 2 px inside the control. The tests are
-`every_focus_ring_reads` and
+`every_focus_ring_reads` (Aurora's System and Freestyle from rule 2's
+colours too), `every_focus_ring_reads_at_every_opacity` (every twentieth
+from 0.1 to 1) and
 `swirls_focus_ring_reads_over_every_colour_of_the_field`
 (`tests/css.rs`), and in the running app `tests/focus.rs`, which looks at
-the pixels around a key.
+the pixels around a key. A see-through window's backdrop can be any
+colour between the window's and the desktop's, so a ring round a key
+there is kept [9:1 from its edge](#text-surface-control-state).
 
 The same floor holds for every theme, not only the built-in ones, at the
 window's own colours (`crates/gmnb-theme/src/focus.rs`): a ring under
@@ -2157,6 +2161,8 @@ Decided here, and worth a second look by the owner:
     style's own surfaces, where a ring of one colour can be checked (the
     toolkit draws an outline in one colour; a second line there would
     need every control's own shadows rewritten). On a see-through window
-    the base look's ring has an edge of `bg` (rule 5 over a black
-    desktop: 1.15:1 without it in the light palette), which Mono and
-    Glazed, whose rings start from it, keep.
+    the base look's ring has an edge of `bg`, and its colour is moved
+    9:1 from it (rule 5 over a black desktop: 1.15:1 without them in the
+    light palette at 0.5, and an edge alone left 2.15:1 at 0.7), which
+    Mono and Glazed, whose rings start from it, keep. At opacity 1 the
+    ring is DGMNB's.

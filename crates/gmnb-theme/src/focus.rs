@@ -28,6 +28,11 @@ pub const LEAST_WIDTH: f32 = 1.0;
 /// for a part of the interface.
 pub const LEAST_CONTRAST: f32 = UI_CONTRAST;
 
+/// How far apart a ring and its edge must be to read on any colour at
+/// all: on a colour between them, the contrasts of the two multiply to
+/// theirs, so one of them reaches 3 when they are 9 apart.
+pub const EDGE_APART: f32 = UI_CONTRAST * UI_CONTRAST;
+
 /// The rings of the style, and where each is drawn.
 pub const RINGS: [&str; 3] = ["focus", "date.calendar.focus", "converter.value.focus"];
 

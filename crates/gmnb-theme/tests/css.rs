@@ -1503,8 +1503,69 @@ fn rings_read(name: &str, style: &Style, behind: &[Rgba]) -> Vec<String> {
 /// None of them leans on the floor: their own rings pass, with no note.
 #[test]
 fn every_focus_ring_reads() {
+    let mut styles = every_style();
+    // Aurora's System and Freestyle from the extreme colours too.
+    styles.extend(auroras_extreme_styles());
+    let mut bad = rings_unreadable(styles);
+    for id in ["aurora", "mono", "glazed", "swirls"] {
+        let mut theme = built_in(id);
+        for dark in [false, true] {
+            for opacity in [1.0, 0.5, 0.1] {
+                let ctx = with(&theme, dark, opacity, &[]);
+                for note in &theme.style(&ctx).unwrap().notes.list {
+                    if note.message.contains("focus") {
+                        bad.push(format!("{id} dark={dark} {opacity}: {note}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// Rule 5 between those opacities as well: every twentieth from 0.1 to
+/// 1, over a black and a white desktop, for the base look, Mono, Glazed's
+/// flavours and Aurora's palettes. (Their rings and edges are less than
+/// 9:1 apart: that they read at 0.5 and 0.1 doesn't say they read at 0.7.)
+#[test]
+fn every_focus_ring_reads_at_every_opacity() {
+    let mut styles = Vec::new();
+    let mut aurora = built_in("aurora");
+    let mut mono = built_in("mono");
+    let mut glazed = built_in("glazed");
+    for dark in [false, true] {
+        for step in 2..=20 {
+            let opacity = step as f32 / 20.0;
+            let ctx = Ctx {
+                dark,
+                opacity,
+                ..Ctx::default()
+            };
+            styles.push((format!("base dark={dark} {opacity}"), Style::base(&ctx)));
+            let ctx = with(&mono, dark, opacity, &[]);
+            let style = mono.style(&ctx).unwrap().style.clone();
+            styles.push((format!("mono dark={dark} {opacity}"), style));
+            for flavour in FLAVOURS {
+                let ctx = with(&glazed, dark, opacity, &[("flavour", text(flavour))]);
+                let style = glazed.style(&ctx).unwrap().style.clone();
+                styles.push((format!("glazed {flavour} dark={dark} {opacity}"), style));
+            }
+            for palette in PALETTES {
+                let ctx = with(&aurora, dark, opacity, &[("palette", text(palette))]);
+                let style = aurora.style(&ctx).unwrap().style.clone();
+                styles.push((format!("aurora {palette} dark={dark} {opacity}"), style));
+            }
+        }
+    }
+    let bad = rings_unreadable(styles);
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// Rule 5 for each style, opaque, or see-through over a black and a white
+/// desktop: what fails.
+fn rings_unreadable(styles: Vec<(String, Style)>) -> Vec<String> {
     let mut bad = Vec::new();
-    for (name, style) in every_style() {
+    for (name, style) in styles {
         let desktops: Vec<Option<Rgba>> = if style.opacity >= 1.0 {
             vec![None]
         } else {
@@ -1524,20 +1585,7 @@ fn every_focus_ring_reads() {
             bad.extend(rings_read(&format!("{name}{over}"), &style, &behind));
         }
     }
-    for id in ["aurora", "mono", "glazed", "swirls"] {
-        let mut theme = built_in(id);
-        for dark in [false, true] {
-            for opacity in [1.0, 0.5, 0.1] {
-                let ctx = with(&theme, dark, opacity, &[]);
-                for note in &theme.style(&ctx).unwrap().notes.list {
-                    if note.message.contains("focus") {
-                        bad.push(format!("{id} dark={dark} {opacity}: {note}"));
-                    }
-                }
-            }
-        }
-    }
-    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+    bad
 }
 
 /// Rule 5 for Swirls at the field's worst: around a key its ring lies on
