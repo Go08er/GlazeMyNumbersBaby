@@ -21,12 +21,12 @@ jobs:
         # librsvg2-common: gdk-pixbuf's SVG loader, which flatpak uses to
         # validate the exported (SVG) app icon.
         run: sudo apt-get update && sudo apt-get install -y flatpak librsvg2-common
-      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - uses: cachix/install-nix-action@91f6a0f59e94dfb2cfed0f4000f36a68ead1d20c # v31.11.4
       - name: Build bundles (nix run .#flatpak, .#flatpak-dgmnb)
         run: |
           nix run .#flatpak -- --keep-cache
           nix run .#flatpak-dgmnb
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: flatpak
           path: |
@@ -59,7 +59,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp ./*.pkg.tar.zst "$GITHUB_WORKSPACE/out/"
           cp .SRCINFO "$GITHUB_WORKSPACE/out/gmnb.SRCINFO"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: arch
           path: out/*
@@ -85,7 +85,7 @@ jobs:
           dpkg-buildpackage -b -us -uc
           mkdir -p out
           cp ../*.deb out/
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: debian
           path: out/*.deb
@@ -110,7 +110,7 @@ jobs:
           rpmbuild -bb packaging/fedora/gmnb.spec
           mkdir -p out
           cp ~/rpmbuild/RPMS/*/*.rpm out/
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fedora
           path: out/*.rpm
@@ -145,7 +145,7 @@ jobs:
       group: release-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
           merge-multiple: true
