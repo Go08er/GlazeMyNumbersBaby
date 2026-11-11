@@ -1299,11 +1299,29 @@ end
 -- A draw hook has 8 ms of the processor, and loses its place for good
 -- after three frames that take longer. A whole snapshot takes 1.6 ms on
 -- the machine this was written on. Where one would take over 5, the grid
--- and the picture are made as much coarser as brings it to 3.5, for as
--- long as the theme is loaded. The first nine rows tell: three batches of
+-- and the picture are made as much coarser as brings it to 3.5. The first
+-- nine rows tell, each time a window's size is new: three batches of
 -- three, of which the quickest counts (the machine may have been busy
 -- with something else during the others).
+-- (`os.clock` is the clock on the wall, so a machine that is busy for a
+-- moment looks slow for that moment: a size that looks slow is timed
+-- again before the grid is made coarser, and a size that is comfortably
+-- quick makes it finer again, the next time the window's size is new.)
 local SLOW, AFFORDED = 0.005, 0.0035
+
+-- A whole snapshot's time at this size, as far as the first nine rows
+-- tell, and the snapshot with the rows that were worked out.
+local function timed(width: number, height: number): (Kept, number, number)
+	local made = make(width, height)
+	local row, quickest = 0, math.huge
+	while row + 3 <= min(made.rows, 9) do
+		local started = os.clock()
+		swirl(made.a, made.cols, made.rows, width, height, STILL + turned, row, row + 3)
+		quickest = min(quickest, os.clock() - started)
+		row += 3
+	end
+	return made, quickest / 3 * made.rows, row
+end
 
 -- What is kept for a picture of this size, and whether it was just made:
 -- then with one whole snapshot, as far turned as the paint is, which is
@@ -1313,17 +1331,17 @@ local function keep(width: number, height: number): (Kept, boolean)
 	if k and k.width == width and k.height == height then
 		return k, false
 	end
-	local made = make(width, height)
-	local row, quickest = 0, math.huge
-	while row + 3 <= min(made.rows, 9) do
-		local started = os.clock()
-		swirl(made.a, made.cols, made.rows, width, height, STILL + turned, row, row + 3)
-		quickest = min(quickest, os.clock() - started)
-		row += 3
-	end
-	local whole = quickest / 3 * made.rows
+	local made, whole, row = timed(width, height)
 	if row > 0 and whole > SLOW and thin < 16 then
-		thin = min(16, thin * whole / AFFORDED)
+		-- Slow, or only busy for a moment: the quicker of two timings.
+		local again, whole_again, row_again = timed(width, height)
+		if whole_again < whole then
+			made, whole, row = again, whole_again, row_again
+		end
+	end
+	local steer = row > 0 and ((whole > SLOW and thin < 16) or (whole < AFFORDED / 2 and thin > 1))
+	if steer then
+		thin = clamp(thin * whole / AFFORDED, 1, 16)
 		made = make(width, height)
 		row = 0
 	end
@@ -1339,6 +1357,10 @@ end
 --   a stir    turns the paint round a point, there and back, like a spoon
 --   a ripple  pushes it outward in a ring that travels
 local STIR_LIFE = 1.3
+-- How long the layer keeps a result's event: a ripple is worn out by then
+-- (in a window it takes longer to cross it would vanish with the event,
+-- the paint jumping back).
+local RESULT_LIFE = 2.5
 local RIPPLE_SPEED = 620
 local RIPPLE_WIDTH = 100
 
@@ -1515,7 +1537,7 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 					add_stir(k, sx, sy, x, y, 260, exp(-4 * age) * sin(TAU * 4.5 * age) * 1.1)
 				end
 			elseif e.cause ~= "operator" and e.cause ~= "digit" then
-				local life = sqrt(width * width + height * height) / RIPPLE_SPEED
+				local life = min(sqrt(width * width + height * height) / RIPPLE_SPEED, RESULT_LIFE - 0.1)
 				if age < life then
 					alive = true
 					-- It swells in two frames and wears out on its way.
@@ -1530,7 +1552,11 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 				turned_once = true
 				alive = true
 				local reach = sqrt(width * width + height * height) * 0.6
-				add_stir(k, sx, sy, width / 2, height / 2, reach, stir_turn(age * 0.8) * 0.5)
+				-- (Taken in over its last fifth of a second: still turned a
+				-- twentieth of a radian when its event goes, the paint would
+				-- jump back by several pixels.)
+				local ending = clamp((STIR_LIFE - age) / 0.3, 0, 1)
+				add_stir(k, sx, sy, width / 2, height / 2, reach, stir_turn(age * 0.8) * 0.5 * ending)
 			end
 		end
 	end
@@ -2464,7 +2490,7 @@ local theme: Theme = {
 	sounds = sounds,
 	sound = sound,
 	layers = {
-		background = { draw = background, fade = false, events = { press = STIR_LIFE, result = 2.5, error = STIR_LIFE, mode = STIR_LIFE, option = STIR_LIFE } },
+		background = { draw = background, fade = false, events = { press = STIR_LIFE, result = RESULT_LIFE, error = STIR_LIFE, mode = STIR_LIFE, option = STIR_LIFE } },
 		keypad = { draw = keypad, place = place, events = { show = 1.6 } },
 		display = { draw = display },
 	},
