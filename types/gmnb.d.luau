@@ -961,6 +961,11 @@ export type Layer = {
 	-- True: `frame.pointer` is filled in and the layer is redrawn as the
 	-- pointer moves over it.
 	pointer: boolean?,
+	-- Background only. False: the app doesn't fade this layer to the
+	-- window's Background opacity along with window.background. It is
+	-- drawn at full strength over that, and thins itself as it sees fit
+	-- (frame.ctx.opacity). True (the default): faded with it.
+	fade: boolean?,
 	-- Keypad only: move, scale or fade one cell (an entrance, say).
 	place: ((key: KeyCell, frame: Frame) -> Placement?)?,
 }
