@@ -152,7 +152,7 @@ pub fn install(themes: &Path, built_in: &[BuiltIn], record: &Record) -> Pass {
                     pass.embedded.push(id);
                 }
                 Ok(_) => {
-                    if same_as(&target, theme) {
+                    if is_as_carried(&target, theme) {
                         pass.record.insert(id, now);
                     }
                 }
@@ -190,7 +190,7 @@ fn write(pass: &mut Pass, themes: &Path, theme: &BuiltIn) {
         }
         // Something took its place meanwhile (another GMNB, most likely).
         Ok(false) => {
-            if same_as(&target, theme) {
+            if is_as_carried(&target, theme) {
                 pass.record.insert(id, digest(theme));
             }
         }
@@ -209,10 +209,10 @@ fn is_missing(path: &Path) -> bool {
     matches!(fs::symlink_metadata(path), Err(e) if e.kind() == io::ErrorKind::NotFound)
 }
 
-/// Whether `dir` is a folder holding exactly what GMNB writes for `theme`.
-/// Its shape (paths and sizes) is compared first: only a folder of the
-/// same shape is read.
-fn same_as(dir: &Path, theme: &BuiltIn) -> bool {
+/// Whether `dir` is a folder holding exactly what GMNB writes for `theme`
+/// (not a link to one). Its shape (paths and sizes) is compared first:
+/// only a folder of the same shape is read.
+pub fn is_as_carried(dir: &Path, theme: &BuiltIn) -> bool {
     let tree = embedded_tree(theme);
     let shape: BTreeMap<&str, Option<u64>> = tree
         .iter()

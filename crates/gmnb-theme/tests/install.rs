@@ -145,6 +145,8 @@ fn the_first_start_installs_each_built_in_once() {
     );
     // Nothing hidden is left behind.
     assert_eq!(f.names(), ["one", "two"]);
+    assert!(install::is_as_carried(&f.theme("one"), &ONE_V1));
+    assert!(!install::is_as_carried(&f.theme("one"), &ONE_V2));
     assert_eq!(
         install::folder_digest(&f.theme("one")),
         Some(install::digest(&ONE_V1))
@@ -226,6 +228,7 @@ fn an_update_replaces_only_a_folder_as_gmnb_wrote_it() {
         let f = Folder::new("kept");
         let v1 = install::install(&f.themes(), &[ONE_V1], &Record::new());
         change(&f.theme("one"));
+        assert!(!install::is_as_carried(&f.theme("one"), &ONE_V1), "{what}");
         let mine = contents(&f.theme("one"));
         let v2 = install::install(&f.themes(), &[ONE_V2], &v1.record);
         assert!(
@@ -326,6 +329,10 @@ fn a_planted_link_is_not_followed() {
     fs::create_dir_all(f.themes()).unwrap();
     std::os::unix::fs::symlink(copy.join("one"), f.theme("one")).unwrap();
     assert_eq!(install::folder_digest(&f.theme("one")), None);
+    assert!(
+        !install::is_as_carried(&f.theme("one"), &ONE_V1),
+        "a link to a copy"
+    );
     let pass = install::install(&f.themes(), &[ONE_V1], &Record::new());
     assert!(pass.record.is_empty(), "{pass:?}");
     let forged = Record::from([("one".to_string(), install::digest(&ONE_V1))]);

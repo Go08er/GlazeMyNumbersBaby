@@ -1293,9 +1293,17 @@ fn credits(sources: &[Source]) -> Vec<(String, String)> {
     let built_in = themes::BUILT_IN
         .iter()
         .filter_map(|b| Source::built_in(b.id));
+    // A built-in theme's folder still as GMNB carries it credits what its
+    // own copy does: it isn't run again for that.
+    let as_carried = |s: &Source| {
+        let carried = themes::BUILT_IN.iter().find(|b| b.id == s.id);
+        carried
+            .zip(s.dir())
+            .is_some_and(|(b, dir)| install::is_as_carried(dir, b))
+    };
     let users = sources
         .iter()
-        .filter(|s| s.origin != Origin::BuiltIn)
+        .filter(|s| s.origin != Origin::BuiltIn && !as_carried(s))
         .cloned();
     let mut out: Vec<(String, String)> = Vec::new();
     for theme in built_in
