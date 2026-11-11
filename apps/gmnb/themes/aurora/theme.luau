@@ -434,8 +434,8 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 	local key_tint = alpha(p.accent, 0.20)
 	local kept = mix(p.accent, extreme, KEPT)
 
-	-- The lights. Each is brought toward the sky's lightness, a thirty-second
-	-- at a time, until all that is written over it reads.
+	-- The lights. Each is brought toward the sky's lightness, by
+	-- thirty-seconds of the way, until all that is written over it reads.
 	local _, _, level = gmnb.to_hsl(bottom)
 	local function bearable(light: Rgba): boolean
 		for _, pane in key_panes do
@@ -464,13 +464,25 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 	end
 	local function tempered(light: Rgba): Rgba
 		local h, s, l = gmnb.to_hsl(light)
-		for step = 32, 1, -1 do
-			local c = hsl(h, s, level + (l - level) * step / 32)
-			if bearable(c) then
-				return c
+		local function at(step: number): Rgba
+			return hsl(h, s, level + (l - level) * step / 32)
+		end
+		if bearable(at(32)) then
+			return at(32)
+		end
+		-- Nearer the sky always reads better: halve the range five times.
+		-- (At the sky's own lightness, step 0, the text reads as it does
+		-- on the sky.)
+		local reads_at, too_much = 0, 32
+		while too_much - reads_at > 1 do
+			local middle = (reads_at + too_much) // 2
+			if bearable(at(middle)) then
+				reads_at = middle
+			else
+				too_much = middle
 			end
 		end
-		return hsl(h, s, level)
+		return at(reads_at)
 	end
 	local lights = {}
 	for i, light in p.lights do
@@ -478,11 +490,15 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 	end
 	local star = tempered(hex("#ececec"))
 
-	-- What the window shows at full opacity: the sky's two colours and the
-	-- lights. And what text lies on: each pane over each of those.
+	-- What the window shows at full opacity: the sky's two colours, the
+	-- lights, and in the dark a star. And what text lies on: each pane over
+	-- each of those.
 	local backs = { top, bottom }
 	for _, light in lights do
 		table.insert(backs, light)
+	end
+	if p.dark then
+		table.insert(backs, star)
 	end
 	local function under(panes: { Rgba }, more: Rgba?): { Rgba }
 		local out = {}
@@ -514,13 +530,13 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 	-- a tint of itself (a lit text button, the current number base). And
 	-- as an operator's glyph, which is a sign and not text to read: 3.
 	local open = both(on_panes, { top, bottom })
-	local accent = legible(p.accent, open, TEXT)
-	local accent_ink = legible(accent, under(text_panes, tint), TEXT)
+	local accent = legible(p.accent, open, TEXT * 1.03)
+	local accent_ink = legible(accent, under(text_panes, tint), TEXT * 1.03)
 	local operator_ink = legible(accent_ink, under(key_panes, key_tint), UI * 1.03)
 	-- Errors. 0.2 wrote them in the hot colour as it came: 2:1 in the light
 	-- Aurora, and teal in Abyss, where it didn't look like an error at all.
 	-- A rose reads as one in every palette.
-	local danger = legible(hsl(348, 0.9, if p.dark then 0.72 else 0.46), open, TEXT)
+	local danger = legible(hsl(348, 0.9, if p.dark then 0.72 else 0.46), open, TEXT * 1.03)
 
 	-- Graph lines: on the canvas's own glass over all of it, and on the sky.
 	local canvas_top, canvas_bottom = canvas_tint(p.dark)
@@ -664,8 +680,25 @@ local function scheme(ctx: Ctx): Scheme
 	return scheme_for(tostring(ctx.options.palette), ctx)
 end
 
+-- On a see-through window the sky thins to clear air, as thin as the
+-- window's Background opacity says, and the desktop shows through it. The
+-- aurora stays: its lights hang over the desktop itself, a little clearer
+-- than they are in the night sky (this much of them is left when the sky
+-- is all but gone), so that the desktop shows through them as the stars
+-- show through an aurora.
+local SEE_THROUGH = 0.7
+
+-- And as the sky clears the glass frosts over, whatever the text needs:
+-- by this much of the way to solid when the sky is gone.
+local FROSTS_OVER = 0.4
+
+-- How much of each light is drawn at this opacity of the window.
+local function light_strength(opacity: number): number
+	return if opacity >= 1 then 1 else SEE_THROUGH + (1 - SEE_THROUGH) * math.max(opacity, 0)
+end
+
 -- How strong the frost under `checks` has to be for each of them to hold
--- over every one of `backs`: the sky's own colour, in sixteenths, and
+-- over every one of `backs`: the sky's own colour, in sixty-fourths, and
 -- `least` at least.
 local function frost_needed(base: Rgba, backs: { Rgba }, checks: { Check }, least: number): number
 	local function holds(strength: number): boolean
@@ -683,15 +716,19 @@ local function frost_needed(base: Rgba, backs: { Rgba }, checks: { Check }, leas
 		end
 		return true
 	end
-	-- Down from solid to the last step that holds. (Not a search by halves:
+	-- Down from solid to the last step that holds: by sixteenths, then by
+	-- sixty-fourths within the last of those. (Not a search by halves:
 	-- over a desktop darker than a dark ink the ink reads again once the
 	-- frost is nearly gone, and that is not the answer.)
-	local step = 16
-	local floor = math.ceil(least * 16 - 0.001)
-	while step > floor and holds((step - 1) / 16) do
+	local floor = math.ceil(least * 64 - 0.001)
+	local step = 64
+	while step - 4 >= floor and holds((step - 4) / 64) do
+		step -= 4
+	end
+	while step % 4 ~= 1 and step - 1 >= floor and holds((step - 1) / 64) do
 		step -= 1
 	end
-	return step / 16
+	return step / 64
 end
 
 -- The frost a see-through window needs: a layer of the sky's own colour
@@ -699,12 +736,11 @@ end
 -- opacity and no stronger. Three of them: the veil under text straight
 -- on the page, what goes under glass, and what the graph's canvas needs.
 --
--- A see-through window shows the sky and the aurora thinned over the
--- desktop, which may be black or white or anything between. An opaque
--- window needs none but the veil it always has (the lights were tempered
--- for that); the frost comes in by sixteenths as the window clears, so
--- that dragging the slider restyles the window a dozen times, not at
--- every step.
+-- What such a window shows is the desktop, which may be black or white
+-- or anything between, through the thinned sky; and the lights over
+-- that. An opaque window needs none but the veil it always has (the
+-- lights were tempered for that). The frost comes in by sixty-fourths as
+-- the window clears: dragging the slider, nothing jumps.
 local function frost_for(s: Scheme, opacity: number): (number, number, number)
 	local veil = s.glass.veil
 	if opacity >= 1 then
@@ -714,19 +750,42 @@ local function frost_for(s: Scheme, opacity: number): (number, number, number)
 	if known then
 		return known[1], known[2], known[3]
 	end
-	local backs = {}
+	local strength = light_strength(opacity)
+	local all: { { light: number, colour: Rgba } } = {}
 	for _, desktop in { black, white } do
-		for _, back in { s.sky_top, s.sky_bottom } do
-			table.insert(backs, over(alpha(back, opacity), desktop))
+		for _, sky in { s.sky_top, s.sky_bottom } do
+			local air = over(alpha(sky, opacity), desktop)
+			table.insert(all, { light = contrast(air, black), colour = air })
+			for _, light in s.lights do
+				local lit = over(alpha(light, strength), air)
+				table.insert(all, { light = contrast(lit, black), colour = lit })
+			end
+			if s.dark then
+				-- A star, going out with the sky.
+				local lit = over(alpha(s.star, opacity * opacity), air)
+				table.insert(all, { light = contrast(lit, black), colour = lit })
+			end
 		end
-		for _, light in s.lights do
-			table.insert(backs, over(alpha(light, opacity), desktop))
+	end
+	-- What decides is the lightest of those under light text and the
+	-- darkest under dark text; the four at each end are gone through.
+	table.sort(all, function(a, b)
+		return a.light < b.light
+	end)
+	local backs: { Rgba } = {}
+	for i, back in all do
+		if i <= 4 or i > #all - 4 then
+			table.insert(backs, back.colour)
 		end
 	end
 	local base = s.sky_bottom
+	-- And never less than this, the clearer the window: what shows through
+	-- may be a photograph, busy behind a key's sign in a way no contrast
+	-- figure knows about. The glass frosts over as the sky clears.
+	local clear = 1 - math.max(opacity, 0)
 	local found = {
-		frost_needed(base, backs, s.bare, veil),
-		frost_needed(base, backs, s.glazed, 0),
+		frost_needed(base, backs, s.bare, veil + (1 - veil) * FROSTS_OVER * clear),
+		frost_needed(base, backs, s.glazed, FROSTS_OVER * clear),
 		frost_needed(base, backs, s.plotted, 0),
 	}
 	-- (Dragging the opacity slider asks for a new one each step.)
@@ -793,8 +852,10 @@ local function style(ctx: Ctx): Style
 	end
 	-- A halo in the backdrop's colour around text that lies straight on it,
 	-- for the busy wallpaper no contrast figure knows about.
+	-- (It comes in over the first quarter of the way to clear.)
+	local clear = math.min((1 - ctx.opacity) * 4, 1)
 	local halo: { Shadow } = if see
-		then { { blur = 3, color = alpha(base, 0.9) }, { blur = 10, color = alpha(base, 0.75) } }
+		then { { blur = 3, color = alpha(base, 0.9 * clear) }, { blur = 10, color = alpha(base, 0.75 * clear) } }
 		else {}
 
 	-- Glass.
@@ -848,16 +909,21 @@ local function style(ctx: Ctx): Style
 	local chosen: State = { background = alpha(tint, 0.12), color = accent_ink }
 
 	-- Shadows, listed topmost first: a highlight along the top edge, a
-	-- hairline rim, a shade along the bottom edge that gives the glass its
-	-- thickness, and a soft drop shadow underneath.
+	-- hairline rim, and a shade along the bottom edge that gives the glass
+	-- its thickness.
+	--
+	-- (0.2's keys also had a soft drop shadow under them: 18 px of blur,
+	-- drawn 12 px in, so faint that pictures with it and without can't be
+	-- told apart. But every key's was blurred again for every frame of the
+	-- drift, since the sky moves behind them all: half of what a living
+	-- Aurora cost the software renderer, 31% of a core against 17%. A pane
+	-- of glass over the sky casts no shadow on it anyway.)
 	local thickness: Shadow = { inset = true, y = -1, color = alpha(black, if dark then 0.22 else 0.05) }
-	local drop: Shadow = { y = 6, blur = 18, spread = -12, color = shade }
-	local key_shadow: { Shadow } = { highlight, rim, thickness, drop }
+	local key_shadow: { Shadow } = { highlight, rim, thickness }
 	local operator_shadow: { Shadow } = {
 		highlight,
 		{ inset = true, spread = 1, color = alpha(accent, 0.22) },
 		thickness,
-		drop,
 	}
 	-- The equals key glows in its own colours.
 	local equals_shadow: { Shadow } = {
@@ -964,8 +1030,8 @@ local function style(ctx: Ctx): Style
 		},
 
 		window = {
-			-- Under the background layer, and what stands if it ever fails:
-			-- the sky.
+			-- The sky. The app thins it to the window's Background opacity,
+			-- and the background layer draws the aurora over it.
 			background = down(s.sky_top, s.sky_bottom),
 			color = fg,
 			font = { size = system.size, weight = 400 },
@@ -1442,8 +1508,9 @@ end
 -- 4. Background: the aurora
 ---------------------------------------------------------------------------
 --
--- Bottom to top: the sky and its stars, the aurora with a ray of light
--- wherever something just happened, and film grain.
+-- Over the sky, which is the window's own background (section 3): its
+-- stars, the aurora with a ray of light wherever something just
+-- happened, and film grain.
 --
 -- An aurora is curtains of light. Each hangs along a line that wanders
 -- across the sky, its hem: sharp and bright there, and fading upward in
@@ -1462,6 +1529,11 @@ end
 -- So every pixel of the background is the sky, or one of the palette's
 -- lights at its height, or something between the two: nothing brighter
 -- than a light is ever drawn, which is what section 2 counts on.
+--
+-- On a see-through window the app thins the sky, and the layer thins
+-- itself (`fade = false`): the stars go out with the sky, sooner than it
+-- does, and the lights stay, hanging over the desktop (section 2,
+-- `SEE_THROUGH`).
 
 local floor, ceil, sin, cos, min, max, sqrt, clamp =
 	math.floor, math.ceil, math.sin, math.cos, math.min, math.max, math.sqrt, math.clamp
@@ -1585,10 +1657,11 @@ local PULSE_LIFE = 1.15
 -- as wide (rays are thin and stand upright), none narrower than 3 px: a
 -- bigger window gets a coarser grid, not more to work out. And about as
 -- many pixels for the app to colour as a 760 × 640 window's aurora has at
--- two thirds size.
+-- three fifths size.
 local POINTS = 16000
+local MOST_POINTS = 16384
 local FINEST = 3
-local PIXELS = 170000
+local PIXELS = 140000
 
 -- Film grain: it hides the gradients' banding and makes them feel like a
 -- material. White specks in the dark, black ones in the light.
@@ -1608,7 +1681,11 @@ local thin = 1
 
 local function grid(width: number, height: number): (number, number)
 	local step = max(FINEST, sqrt(width * height * thin / (POINTS * 1.5)))
-	return clamp(ceil(width / step) + 1, 2, 256), clamp(ceil(height / (step * 1.5)) + 1, 2, 256)
+	local cols = clamp(ceil(width / step) + 1, 2, 256)
+	local rows = clamp(ceil(height / (step * 1.5)) + 1, 2, 256)
+	-- (Rounded up twice over, it may be a row or two past what a field
+	-- may hold.)
+	return cols, min(rows, floor(MOST_POINTS / cols))
 end
 
 -- How many pixels the app colours per pixel of the field, along a side.
@@ -1617,8 +1694,8 @@ local function sharpness(width: number, height: number): number
 end
 
 -- What the background keeps between frames: two snapshots of the field
--- and the one that comes after them (worked out a few rows a frame, so
--- that no frame carries a whole snapshot), and each curtain's columns.
+-- and the one that comes after them (worked out a few columns a frame,
+-- so that no frame carries a whole snapshot), and each curtain's columns.
 type Kept = {
 	width: number,
 	height: number,
@@ -1637,7 +1714,7 @@ type Kept = {
 	crest: { { number } },
 	body: { { number } },
 	-- Which third of a second `a` is of, whether the snapshot after `b`
-	-- has been begun, and how many of its rows are done.
+	-- has been begun, and how many of its columns are done.
 	tick: number,
 	begun: boolean,
 	done: number,
@@ -1716,47 +1793,54 @@ local function columns(k: Kept, t: number)
 	end
 end
 
--- The light at every point of rows `first` up to (not including) `last`,
--- from the columns worked out last: each curtain's added to the others'.
-local function light_rows(k: Kept, buf: buffer, first: number, last: number)
+-- The light of columns `first` up to (not including) `last` (counted from
+-- 0) of a snapshot that started out dark, from the columns worked out
+-- last: each curtain's added to the others'. Column by column, and in
+-- each only the rows the curtain lights there, from where its rays end
+-- down to where its glow under the hem does: half the grid is dark, and
+-- is never visited.
+local function light_columns(k: Kept, buf: buffer, first: number, last: number)
 	local cols, rows = k.cols, k.rows
 	local pitch = k.reach / (rows - 1)
+	local down = cols * 4
 	-- Under its hem a curtain's light is all but gone within a row and a
 	-- bit: an edge thinner than the grid would come out in steps.
 	local edge = 1 / max(pitch * 1.3, 3)
-	local under = 1 / (UNDER * k.height)
+	local glows = UNDER * k.height
+	local under = 1 / glows
 	local band = 1 / (BAND * k.height)
 	for c = 1, #CURTAINS do
-		local hem, inv, crest, body = k.hem[c], k.inv[c], k.crest[c], k.body[c]
-		local o = first * cols * 4
-		for j = first, last - 1 do
-			local y = j * pitch
-			for i = 1, cols do
-				local v = 0
-				local up = hem[i] - y
-				if up >= 0 then
-					-- Above the hem: bright at it, and each ray fading as
-					-- far up as it reaches.
-					local u = 1 - up * inv[i]
-					if u > 0 then
-						v = body[i] * u
-					end
-					local b = 1 - up * band
-					if b > 0 then
-						v += (crest[i] - v) * b * b
-					end
-				else
-					local glow = 1 + up * under
-					if glow > 0 then
-						local u = 1 + up * edge
-						v = crest[i] * (UNDERGLOW * glow * glow + (if u > 0 then (1 - UNDERGLOW) * u else 0))
-					end
+		local hems, invs, crests, bodies = k.hem[c], k.inv[c], k.crest[c], k.body[c]
+		for i = first, last - 1 do
+			local hem, inv, crest, body = hems[i + 1], invs[i + 1], crests[i + 1], bodies[i + 1]
+			-- Above the hem: bright in a band along it, and each ray
+			-- fading as far up as it reaches.
+			local top = max(ceil((hem - 1 / inv) / pitch), 0)
+			local at = min(floor(hem / pitch), rows - 1)
+			local o = (top * cols + i) * 4
+			for j = top, at do
+				local up = hem - j * pitch
+				local v = body * (1 - up * inv)
+				local b = 1 - up * band
+				if b > 0 then
+					v += (crest - v) * b * b
 				end
-				if c > 1 then
-					v += readf32(buf, o)
+				writef32(buf, o, readf32(buf, o) + v)
+				o += down
+			end
+			-- Under it: the sharp edge, and the glow.
+			local from = max(at + 1, 0)
+			o = (from * cols + i) * 4
+			for j = from, min(floor((hem + glows) / pitch), rows - 1) do
+				local up = hem - j * pitch
+				local glow = 1 + up * under
+				local u = 1 + up * edge
+				local v = UNDERGLOW * glow * glow
+				if u > 0 then
+					v += (1 - UNDERGLOW) * u
 				end
-				writef32(buf, o, v)
-				o += 4
+				writef32(buf, o, readf32(buf, o) + crest * v)
+				o += down
 			end
 		end
 	end
@@ -1765,11 +1849,11 @@ end
 -- A draw hook has 8 ms of the processor, and loses its place for good
 -- after three frames that take longer. A whole snapshot takes about a
 -- millisecond on the machine this was written on. Where one would take
--- over 5, the grid and the picture are made as much coarser as brings it
--- to 3.5, for as long as the theme is loaded. The first nine rows tell:
--- three batches of three, of which the quickest counts (the machine may
--- have been busy with something else during the others).
-local SLOW, AFFORDED = 0.005, 0.0035
+-- over 4, the grid and the picture are made as much coarser as brings it
+-- to 3, for as long as the theme is loaded. The first twenty-four columns
+-- tell: three batches of eight, of which the quickest counts (the
+-- machine may have been busy with something else during the others).
+local SLOW, AFFORDED = 0.004, 0.003
 
 -- What is kept for a picture of this size, and whether it was just made:
 -- then with one whole snapshot, of the aurora where it has drifted to,
@@ -1783,28 +1867,28 @@ local function keep(width: number, height: number): (Kept, boolean)
 	local started = os.clock()
 	columns(made, drift)
 	local spent = os.clock() - started
-	local row, quickest = 0, math.huge
-	while row + 3 <= min(made.rows, 9) do
+	local column, quickest = 0, math.huge
+	while column + 8 <= min(made.cols, 24) do
 		started = os.clock()
-		light_rows(made, made.a, row, row + 3)
+		light_columns(made, made.a, column, column + 8)
 		quickest = min(quickest, os.clock() - started)
-		row += 3
+		column += 8
 	end
-	local whole = spent + quickest / 3 * made.rows
-	if row > 0 and whole > SLOW and thin < 16 then
+	local whole = spent + quickest / 8 * made.cols
+	if column > 0 and whole > SLOW and thin < 16 then
 		thin = min(16, thin * whole / AFFORDED)
 		made = make(width, height)
 		columns(made, drift)
-		row = 0
+		column = 0
 	end
-	light_rows(made, made.a, row, made.rows)
+	light_columns(made, made.a, column, made.cols)
 	buffer.copy(made.b, 0, made.a)
 	kept = made
 	return made, true
 end
 
 -- The field for the fifteenth of a second the aurora has drifted to, the
--- next snapshot a few rows further on.
+-- next snapshot a few columns further on.
 local function advance(k: Kept, fresh: boolean)
 	local shown = floor(drift * SHOWN_RATE + 0.03)
 	if not fresh and shown == k.shown then
@@ -1819,8 +1903,8 @@ local function advance(k: Kept, fresh: boolean)
 		-- A new third of a second: the later snapshot becomes the earlier
 		-- one, the one that was being worked out the later (what is left of
 		-- it is done now, if frames were missed), and the next is begun.
-		if k.done < k.rows then
-			light_rows(k, k.c, k.done, k.rows)
+		if k.done < k.cols then
+			light_columns(k, k.c, k.done, k.cols)
 		end
 		k.a, k.b, k.c = k.b, k.c, k.a
 		k.tick = tick
@@ -1828,13 +1912,14 @@ local function advance(k: Kept, fresh: boolean)
 	end
 	if not k.begun then
 		columns(k, (k.tick + 2) / FIELD_RATE)
+		buffer.fill(k.c, 0, 0)
 		k.done = 0
 		k.begun = true
 	end
-	-- A few rows of the next snapshot: all of it in four frames of five.
-	if k.done < k.rows then
-		local upto = min(k.rows, k.done + ceil(k.rows / (SHOWN_PER_FIELD - 1)))
-		light_rows(k, k.c, k.done, upto)
+	-- A few columns of the next snapshot: all of it in four frames of five.
+	if k.done < k.cols then
+		local upto = min(k.cols, k.done + ceil(k.cols / (SHOWN_PER_FIELD - 1)))
+		light_columns(k, k.c, k.done, upto)
 		k.done = upto
 	end
 	k.mix = clamp((shown - k.tick * SHOWN_PER_FIELD) / SHOWN_PER_FIELD, 0, 1)
@@ -1849,12 +1934,29 @@ for i = 1, 160 do
 	STARS[i] = {
 		NOISE[(i * 3 + 11) % 256 + 1],
 		NOISE[(i * 5 + 101) % 256 + 1],
-		1 + 1.1 * size * size,
-		0.3 + 0.7 * NOISE[(i * 13 + 57) % 256 + 1] ^ 2,
+		1.1 + 1.5 * size * size,
+		0.45 + 0.55 * NOISE[(i * 13 + 57) % 256 + 1] ^ 2,
 	}
 end
 -- A star to every so many square pixels of window.
 local STAR_ROOM = 3000
+
+-- Each star's colour for a palette at an opacity of the window, kept
+-- from frame to frame: the brightest a star may be, more or less of it.
+local starlight: { of: Rgba?, opacity: number, colours: { Rgba } } = { of = nil, opacity = -1, colours = {} }
+
+local function star_colours(star: Rgba, opacity: number): { Rgba }
+	if starlight.of ~= star or starlight.opacity ~= opacity then
+		-- They go out as the sky clears, sooner than it does.
+		local out = opacity * opacity
+		local colours = {}
+		for i, s in STARS do
+			colours[i] = alpha(star, s[4] * out)
+		end
+		starlight = { of = star, opacity = opacity, colours = colours }
+	end
+	return starlight.colours
+end
 
 -- A soft light: a radial gradient centred on (cx, cy), painted only where
 -- it reaches inside the window.
@@ -1938,18 +2040,20 @@ local function background(draw: Draw, frame: Frame): Again
 		drift += frame.dt
 	end
 
-	-- The sky.
-	draw:rect(0, 0, w, h, gmnb.linear({ from = { 0, 0 }, to = { 0, h }, colors = { s.sky_top, s.sky_bottom } }))
 	if w < 2 or h < 2 then
 		return nil
 	end
-	-- Its stars, in the dark: specks, none brighter than a light may be.
+	-- How see-through the window is: the sky under this layer is that
+	-- thin already.
+	local opacity = clamp(frame.ctx.opacity, 0, 1)
+	-- The sky's stars, in the dark: specks, none brighter than a light
+	-- may be. They go out as the sky clears.
 	if s.dark then
-		local count = min(#STARS, floor(w * h / STAR_ROOM))
-		for i = 1, count do
+		local colours = star_colours(s.star, opacity)
+		for i = 1, min(#STARS, floor(w * h / STAR_ROOM)) do
 			local star = STARS[i]
 			local size = star[3]
-			draw:rect(star[1] * w - size / 2, star[2] * h - size / 2, size, size, alpha(s.star, star[4]))
+			draw:rect(star[1] * w - size / 2, star[2] * h - size / 2, size, size, colours[i])
 		end
 	end
 
@@ -1995,17 +2099,33 @@ local function background(draw: Draw, frame: Frame): Again
 		end
 	end
 	draw:pop()
-	-- The lights that show through it.
+	-- The lights that show through it: all of each in the night sky, a
+	-- little clearer over a desktop.
 	local lights = s.lights
+	local strength = light_strength(opacity)
 	draw:rect(0, 0, w, h, gmnb.linear({
 		from = { 0, 0 },
 		to = { 0, h },
-		colors = { lights[6], lights[5], lights[4], lights[3], lights[2], lights[1] },
+		colors = {
+			alpha(lights[6], strength),
+			alpha(lights[5], strength),
+			alpha(lights[4], strength),
+			alpha(lights[3], strength),
+			alpha(lights[2], strength),
+			alpha(lights[1], strength),
+		},
 		stops = HEIGHTS,
 	}))
 	draw:pop()
 
+	-- The grain is the sky's: it thins with it.
+	if opacity < 1 then
+		draw:push_opacity(opacity)
+	end
 	draw:tile(if s.dark then grain_dark else grain_light, 0, 0, w, h)
+	if opacity < 1 then
+		draw:pop()
+	end
 
 	-- Every frame while a pulse plays; fifteen a second while it only
 	-- drifts; and not at all when it stands still.
@@ -2280,7 +2400,7 @@ local function tile_light(w: number, h: number): Kept
 	end
 	local made = make(w, h)
 	columns(made, STILL)
-	light_rows(made, made.a, 0, made.rows)
+	light_columns(made, made.a, 0, made.cols)
 	tile_kept = made
 	return made
 end
@@ -2774,7 +2894,13 @@ local theme: Theme = {
 	layers = {
 		-- Which events each layer is told of, and for how many seconds it
 		-- keeps them. (The sounds of section 8 hang from the same events.)
-		background = { draw = background, events = { press = PULSE_LIFE, result = PULSE_LIFE, error = PULSE_LIFE, option = PULSE_LIFE } },
+		-- (`fade = false`: on a see-through window the background thins
+		-- itself, section 4.)
+		background = {
+			draw = background,
+			fade = false,
+			events = { press = PULSE_LIFE, result = PULSE_LIFE, error = PULSE_LIFE, option = PULSE_LIFE },
+		},
 		keypad = { draw = keypad, place = place, pointer = true, events = { press = RIPPLE_LIFE, show = 1.5 } },
 		display = { draw = display },
 	},

@@ -39,8 +39,8 @@ pictures, animations and sounds of its own, run in a sandbox with time and
 memory limits ([`docs/theming.md`](docs/theming.md)). GMNB comes with
 three, and Mono, the twenty-line example:
 
-- **Aurora**, the look GMNB was born with: a drifting aurora behind glass
-  keys, in seven palettes.
+- **Aurora**, the look GMNB was born with: an aurora behind glass keys,
+  curtains of light drifting over a night sky, in seven palettes.
 - **Glazed**, an 8-bit doughnut shop: press = and your number comes out
   glazed, with sprinkles and chip-tune sounds.
 - **Swirls**, the paint that flows behind s0y b0y,

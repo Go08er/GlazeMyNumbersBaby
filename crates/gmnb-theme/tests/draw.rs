@@ -2075,26 +2075,26 @@ fn auroras_layers_draw_within_their_limits() {
         let still = aurora_ctx(dark, palette, false);
         let f = Frame::sized(760.0, 640.0);
         let drawn = ok(theme.draw(LayerKind::Background, &still, &f));
-        // The sky, its stars in the dark (a window of this size has all
-        // 160), the aurora's light as a mask (a field over the top four
-        // fifths of the window), the lights that show through it and the
-        // grain; and it stands.
+        // Over the sky, which is the window's own background: its stars
+        // in the dark (a window of this size has all 160), the aurora's
+        // light as a mask (a field over the top four fifths of the
+        // window), the lights that show through it and the grain; and it
+        // stands.
         let stars = if dark { 160 } else { 0 };
         let ops = &drawn.list.ops;
-        assert_eq!(ops.len(), stars + 7, "{palette}");
+        assert_eq!(ops.len(), stars + 6, "{palette}");
         assert_eq!(drawn.again, None);
-        assert!(matches!(ops[0], Op::Rect { rect, .. } if rect == [0.0, 0.0, 760.0, 640.0]));
-        assert!(matches!(ops[stars + 1], Op::PushMask(MaskMode::Alpha)));
+        assert!(matches!(ops[stars], Op::PushMask(MaskMode::Alpha)));
         assert!(
-            matches!(&ops[stars + 2], Op::Field { rect, .. } if *rect == [0.0, 0.0, 760.0, 512.0])
+            matches!(&ops[stars + 1], Op::Field { rect, .. } if *rect == [0.0, 0.0, 760.0, 512.0])
         );
-        assert!(matches!(ops[stars + 3], Op::Pop));
+        assert!(matches!(ops[stars + 2], Op::Pop));
         assert!(
-            matches!(&ops[stars + 4], Op::Rect { rect, paint: Paint::Gradient(g) }
+            matches!(&ops[stars + 3], Op::Rect { rect, paint: Paint::Gradient(g) }
                 if *rect == [0.0, 0.0, 760.0, 640.0] && g.colors.len() == 6)
         );
         assert!(
-            matches!(ops[stars + 6], Op::Tile { rect, .. } if rect == [0.0, 0.0, 760.0, 640.0])
+            matches!(ops[stars + 5], Op::Tile { rect, .. } if rect == [0.0, 0.0, 760.0, 640.0])
         );
         // Living: again in a fifteenth of a second.
         let living = aurora_ctx(dark, palette, true);
@@ -2110,11 +2110,11 @@ fn auroras_layers_draw_within_their_limits() {
                 .list
                 .ops
                 .len(),
-            stars + 7
+            stars + 6
         );
     }
-    // (The dark Aurora from here on: the sky, 160 stars and six more.)
-    let standing = 167;
+    // (The dark Aurora from here on: 160 stars and six more.)
+    let standing = 166;
     let living = aurora_ctx(true, "aurora", true);
     let mut press = Event::at(
         EventKind::Press,

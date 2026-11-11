@@ -1758,11 +1758,16 @@ How each of Aurora's effects is made:
 | Effect | How | Why |
 |---|---|---|
 | The seven palettes; System and Freestyle generated from one or two colours | **Scripted** (`style`, with the `gmnb` colour functions) | Pure data and arithmetic. |
-| Glass keys, glass panels, the equals key's glow, lit bits, the whimsy chip, the sidebar's and flyouts' tints | **Declared** (style values: gradients, shadow lists) | They are the toolkit's own box drawing. |
+| Glass keys, glass panels, the equals key's glow, lit bits, the whimsy chip, the sidebar's and flyouts' tints | **Declared** (style values: gradients, shadow lists). In the dark the glass is smoked with the sky's own colour, thin on keys and thicker on panels and under text that lies straight on the page; in the light it is milk glass | They are the toolkit's own box drawing. (White glass, as 0.2 had it in the dark, turns a night sky grey.) |
 | Hover brightness, the press that springs back, the swap button's turn | **Declared** (states and transitions) | The toolkit animates them, and stops for reduced motion. |
-| The see-through frost and halos | **Scripted** (`style`): how much of the desktop each palette's inks need hidden is worked out from the palette, and the frost under every surface that carries text follows `ctx.opacity` | A fixed tint is too much at 0.9 and, for some palette, too little at 0.1. |
-| Aurora blobs and their drift, the two veils, vignette, pulses | **Scripted** (`background` layer) | A few gradients a frame; all of its numbers are the theme's. |
-| Grain | **Scripted placement** of a **built-in** texture (`gmnb.noise`, `draw:tile`) | Filling 36 864 pixels per call is no job for a script; the recipe is specified so it never changes. |
+| Readable over an aurora that moves | **Scripted** (`style`), from both sides: each of a palette's lights is tempered (the same hue, as saturated, nearer the sky's lightness) until the text over it reads through the thinnest glass there is; then every ink is worked out against each pane over the sky and over each light | A curtain's hem wanders under every key in turn. A palette can be any two colours. |
+| The see-through frost and halos | **Scripted** (`style`): the frost under every surface that carries text is as strong as that palette's inks need over what the window shows at `ctx.opacity` (the desktop, black or white, through the thinned sky, and the lights over that), in sixty-fourths; and never less than two fifths of the way to solid by the time the sky is gone | A fixed tint is too much at 0.9 and, for some palette, too little at 0.1; a step that shows makes the slider jump; and what shows through may be a photograph, busy behind a key's sign in a way no contrast figure knows about. |
+| The aurora: three curtains hanging along hems that wander, bright at the hem and fading upward in rays, folds travelling along them | **Scripted field** (`background` layer, `draw:field`): how bright, as one number a point on a grid of some 16,000, three snapshots a second worked out a quarter a frame; the app glides between two of them fifteen times a second | The light is smooth, so a coarse grid holds it; its rays are 20 px wide, so the grid's cells are narrow and tall. Per pixel in Luau it would take the whole of a frame's 8 ms many times over. |
+| Its colours, by height: green at the hem, teal, violet and crimson at the crown | The field through **one ramp that is only white**, clear to opaque, drawn as a **mask** (`draw:push_mask`), and the palette's six lights showing through it, a gradient straight down the window | A theme may make eight ramps, and Freestyle makes a new palette at every step of a colour being dragged: the colours can't live in a ramp. A mask is filled with whatever colours there are. |
+| The sky and its stars | **Declared** (`window.background`: a gradient, top to bottom) and **scripted** (160 stars at most, small squares in one colour, a window's worth by its size) | The sky is the window's own background, so the app thins it on a see-through window and it stands if the layer ever fails. |
+| A pulse: a ray of light rising from a key, the sky lit round a result, four rays for a new palette | **Scripted**: soft ellipses drawn into the aurora's own mask | In the mask a pulse shows the palette's lights where it stands and can't be brighter than they are: what the text was proved over holds for every frame. Each key's ray is one of four heights, chosen as its note is. |
+| See-through: the sky clears, the lights stay | **Scripted**: the layer says `fade = false` and thins itself: its lights at seven tenths or more of their strength at any opacity, its stars and grain gone with the sky | Faded with the sky, an aurora over a desktop at opacity 0.15 is 15% of an aurora. |
+| Grain | **Scripted placement** of a **built-in** texture (`gmnb.noise`, `draw:tile`) | Filling 36 864 pixels per call is no job for a script; the recipe is specified so it never changes. It hides the banding of a dark sky's gradient. |
 | Ripples, the pointer's light on key borders | **Scripted** (`keypad` layer) | |
 | The key cascade | **Scripted** (`place`) | One small function per key per frame while it plays. |
 | The display's gradient digits, glow, typing pop, result wave and shimmer, replace drift, error shake | **Scripted** (`display` layer). The app lays the text out and fits its size. | With glyphs handed over as drawable things, per-glyph animation is forty lines of Luau, and other themes can do something else entirely. Layout, fitting and accessibility must not be a theme's to get wrong. |
@@ -1809,8 +1814,9 @@ to Glazed.
 
 Swirls is the paint behind s0y b0y, the homepage of GMNB's owner (the
 ColorMix field of [ly](https://github.com/fairyglade/ly), WTFPL), with the
-calculator standing in it. Where Aurora is many gradients, Swirls is one
-picture the theme computes, and everything in it is built on that.
+calculator standing in it. Aurora's field is light behind a mask;
+Swirls' is the whole picture, its colours in the ramp, and everything in
+the theme is built on that.
 
 | Effect | How | Why |
 |---|---|---|
@@ -1928,6 +1934,18 @@ eye, not a threshold. What is not optional: the [readability
 rules](#readability-rules), the limits, and a still picture under reduced
 motion.
 
+One thing was not refined but made again: the aurora itself. 0.2's was
+four soft blobs of colour behind frosted glass, and looked like purple
+fog. 0.3's is an aurora: curtains of light over a night sky, sharp and
+bright along their hems and fading upward in rays, green lowest, violet
+and crimson at the crown, with stars behind them; and each palette is an
+aurora of its own colours (Ember red with amber at its hem, Abyss blue,
+Orchard from leaf green to blossom, Graphite with no colour in it,
+System and Freestyle from their first colour at the hem to their second
+at the crown). In the light it is the same aurora at dawn, on a pale
+sky: a black sky under the light look's dark text and milk glass would
+be the dark look.
+
 Where 0.3's structure changed for the base look, Aurora follows it:
 
 | What | 0.2 | Aurora on 0.3 |
@@ -1938,15 +1956,18 @@ Where 0.3's structure changed for the base look, Aurora follows it:
 | Toolkit-drawn text fields | libadwaita's entry | Aurora's `field` values, matched to it by eye |
 | Thresholds and sizes not in `layout` (wide at 620 px, the new-window size) | 0.2's | DGMNB's |
 | The drift's phase | Starts at 0 s when animated | Starts from the still frame (37 s) |
-| Readability under see-through | Judged by eye: a fixed tint under the keys, the readout and the panels, a halo around the rest | A frost of the palette's own background under every surface that carries text, `plain` panes included, as strong as that palette needs at that opacity to pass the [see-through rule](#readability-rules) (none above about four fifths); the graph's canvas turns almost solid |
-| Text that steps back (captions, expressions, the number bases' names) | The text colour at about 0.6 whatever the palette: 4.1 to 4.4:1 in the light ones | The least opacity, from 0.62 up, that reaches 4.5:1 on that palette's background, its blobs and its glass |
+| Readability under see-through | Judged by eye: a fixed tint under the keys, the readout and the panels, a halo around the rest | A frost of the sky's own colour under every surface that carries text, `plain` panes included, as strong as that palette needs at that opacity to pass the [see-through rule](#readability-rules) over what the window then shows, and no stronger; the graph's canvas turns almost solid |
+| A see-through window | The whole background faded, aurora and all | The sky clears and the aurora stays: its lights hang over the desktop, seven tenths or more of them at any opacity, behind the frosted glass of the keys ([See-through windows](#see-through-windows)) |
+| Glass in the dark | White, thin | Smoked with the sky's own colour: a key dims the aurora behind it and keeps its hue. Thin on keys; thicker on panels and under text straight on the page (the veil), where the small and the coloured text is |
+| Text that steps back (captions, expressions, the number bases' names) | The text colour at about 0.6 whatever the palette: 4.1 to 4.4:1 in the light ones | The least opacity, from 0.62 up, that reaches 4.5:1 on that palette's glass over its sky and over each of its lights |
 | Errors | The equals key's first colour as it came: 2:1 in the light Aurora, teal in Abyss | A rose, moved until it reaches 4.5:1 |
 | A lit text button, the current number base, the operators' glyphs | The accent on a tint of itself: under 4.5:1 in the light palettes | The accent deepened until it reaches 4.5:1 on that tint |
 | A key that can't be used | The whole key at 0.32 | Thinner glass and a faint glyph: on a see-through window the key keeps its frost |
-| The aurora | Four blobs | Four blobs under two veils of light in the palette's hot colours |
-| A pulse | One bloom | A bloom; the equals key's, a result's and a new palette's also send a wavefront ahead |
+| A key's drop shadow | 18 px of blur, drawn 12 px in | None. It could not be told from none in a picture, and the software renderer blurred every key's again for each frame of the drift, the sky moving behind them all: half of what a living Aurora cost it |
+| The aurora | Four blobs | Three curtains of light over a night sky with stars, in the palette's six lights by height; each light as strong as the text over it lets it be |
+| A pulse | One bloom | A ray of the aurora's own light rising from the key, as high as its note; the equals key's and a result's light the sky round them too; a new palette sends up four, left to right, as its chord plays |
 | A toggle key that is on (2nd, hyp) | The equals key's gradient at 0.85: its small text fell to 2.5:1 in the light palettes | The gradient solid, deepened until the text reaches 4.5:1 |
-| The keyboard's focus ring | The toolkit's: the accent at half opacity, 2 px inside the control, about 2:1 on the page and 2.2:1 on a key | The accent, solid, 2 px a pixel out from the control (4.5:1 or more on the opaque page, 4.5 to 6 on a number key); round a key a line of the backdrop's colour along each side, and see-through the accent deepened 9:1 from that line, so that it reaches 3:1 or more over any desktop that shows through, at any opacity (rule 5) |
+| The keyboard's focus ring | The toolkit's: the accent at half opacity, 2 px inside the control, about 2:1 on the page and 2.2:1 on a key | The accent, solid, 2 px a pixel out from the control; round a key, which lies on the aurora itself, a line of the sky's colour along each side, and the accent moved 9:1 from that line, so that one of the two reaches 3:1 or more over the sky, over any light and over any desktop that shows through, at any opacity (rule 5) |
 
 ## Readability rules
 
@@ -2018,6 +2039,20 @@ stirred or still, is one of those entries. The figures its `display`
 layer paints are checked the same way, on what they lie on. The plain
 table for Swirls is `swirls_page_texts_read`.
 
+For Aurora they are the sky, each of the palette's lights at its height,
+and every blend of the two (its layer draws the lights through a mask,
+and its pulses into the same mask; `tests/aurora.rs` holds every frame
+to that, pixel by pixel:
+`the_background_is_lights_and_stars_and_nothing_else`), and a star.
+`auroras_texts_read_over_every_colour_of_the_sky` runs the table over
+them at 17 heights and five strengths of the mask, in each of the seven
+palettes and in System and Freestyle from rule 2's colours, light and
+dark; see-through (rule 4) over what the window then shows, the sky
+thinned over a black and a white desktop and the lights as strong as
+the layer draws them there, at seven opacities for the palettes.
+`tests/sweep.rs` does the same round the colour wheel and for random
+pairs of colours.
+
 **4. See-through** (new; 0.2 judged this by eye). The same table at
 opacity 0.1 and 0.5, each stack composited over
 `over(alpha(window.background, opacity), desktop)` for a black and for a
@@ -2042,8 +2077,9 @@ converter value's: its pane, and its field. A ring left to the toolkit
 half opacity, 2 px inside the control. The tests are
 `every_focus_ring_reads` (Aurora's System and Freestyle from rule 2's
 colours too), `every_focus_ring_reads_at_every_opacity` (every twentieth
-from 0.1 to 1) and
-`swirls_focus_ring_reads_over_every_colour_of_the_field`
+from 0.1 to 1),
+`swirls_focus_ring_reads_over_every_colour_of_the_field` and
+`auroras_focus_ring_reads_over_every_colour_of_the_sky`
 (`tests/css.rs`), and in the running app `tests/focus.rs`, which looks at
 the pixels around a key. A see-through window's backdrop can be any
 colour between the window's and the desktop's, so a ring round a key
