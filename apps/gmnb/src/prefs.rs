@@ -564,11 +564,16 @@ impl ThemeSettings {
     /// in, deleted or changed there shows in the list.
     fn watch(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
-        let watch = crate::watch::Watch::start(&crate::theme::user_dir(), move || {
-            if let Some(t) = weak.upgrade() {
-                t.refresh();
-            }
-        });
+        let hub = Rc::downgrade(&self.ctx.hub);
+        let watch = crate::watch::Watch::start(
+            &crate::theme::user_dir(),
+            move || hub.upgrade().map(|h| h.active()).unwrap_or_default(),
+            move || {
+                if let Some(t) = weak.upgrade() {
+                    t.refresh();
+                }
+            },
+        );
         self.watch.replace(Some(watch));
     }
 

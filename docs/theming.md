@@ -197,8 +197,8 @@ yours to edit, delete or replace.
   built-in themes' ids in the order above where there is a folder, then
   every other theme folder by id, then `GMNB_THEME_DIR`'s. A theme GMNB
   put in the folder is marked "Comes with GMNB". Besides the built-in
-  themes, at most 64 theme folders are listed (the first by id, and the
-  one chosen wherever it falls), and
+  themes and the one chosen (wherever it falls), at most 64 theme folders
+  are listed, the first by id, and
   loading them for the list takes at most about two seconds in all: a theme
   after that is listed as not checked, so a folder of thousands of themes
   can't hold Settings. About → Legal keeps
