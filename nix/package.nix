@@ -59,7 +59,7 @@ rustPlatform.buildRustPackage {
     install -Dm644 packaging/${appId}.desktop -t $out/share/applications
     install -Dm644 packaging/${appId}.metainfo.xml -t $out/share/metainfo
     install -Dm644 packaging/icons/${appId}.svg -t $out/share/icons/hicolor/scalable/apps
-    install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/sprinkles/fonts/OFL-Jersey10.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
+    install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/sprinkles/fonts/OFL-Jersey10.txt apps/gmnb/themes/swirls/credits/ColorMix.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
       -t $out/share/licenses/${appId}
   '';
   preFixup = ''
@@ -68,11 +68,13 @@ rustPlatform.buildRustPackage {
   meta = {
     description = "GlazeMyNumbers,Baby: Windows Calculator ported to Rust, made pointlessly beautiful";
     homepage = "https://github.com/Go08er/GlazeMyNumbersBaby";
-    # MIT code; the embedded Inter, Noto subsets, Outfit and Jersey 10 are OFL-1.1; the rest are the
-    # crates compiled in (THIRD-PARTY-LICENSES.txt).
+    # MIT code; the embedded Inter, Noto subsets, Outfit and Jersey 10 are OFL-1.1; Swirls' swirl is
+    # adapted from ly's ColorMix (WTFPL); the rest are the crates compiled in
+    # (THIRD-PARTY-LICENSES.txt).
     license = with lib.licenses; [
       mit
       ofl
+      wtfpl
       asl20
       bsd3
       isc

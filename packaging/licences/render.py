@@ -28,11 +28,11 @@ VENDORED = [
 # until a supplement is written or checked again.
 SUPPLEMENTS = {
     "accesskit.txt": {
-        "accesskit": "0.25.1",
-        "accesskit_atspi_common": "0.21.0",
-        "accesskit_consumer": "0.39.1",
-        "accesskit_unix": "0.24.0",
-        "accesskit_winit": "0.34.1",
+        "accesskit": "0.25.2",
+        "accesskit_atspi_common": "0.21.1",
+        "accesskit_consumer": "0.39.2",
+        "accesskit_unix": "0.24.1",
+        "accesskit_winit": "0.34.2",
     },
     "luau.txt": {
         "mlua-sys": "0.13.0",

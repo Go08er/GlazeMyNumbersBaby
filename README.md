@@ -42,13 +42,13 @@ three:
 - **Aurora**, the look GMNB was born with: an aurora behind glass keys,
   curtains of light drifting over a night sky, in seven palettes.
 - **Sprinkles**, an 8-bit doughnut shop: press = and your number comes out
-  glazed, with sprinkles and chip-tune sounds. Five flavours, one iced in
-  your desktop's accent colour (System) and one in colours you pick
-  (Freestyle).
+  glazed, with sprinkles and chip-tune sounds. Five flavours, and two
+  of your own: System, iced in your desktop's accent colour, and
+  Freestyle, in colours you pick.
 - **Swirls**, flowing paint inspired by ly's ColorMix, under a
-  calculator of dark glass; the keys stir it. Six sets of colours, one
-  worked out from your desktop's accent colour (System) and one from
-  three colours you pick (Freestyle).
+  calculator of dark glass; the keys stir it. Six sets of colours, and
+  two of your own: System, worked out from your desktop's accent colour,
+  and Freestyle, from three colours you pick.
 
 On a see-through window (Settings → Window → Background opacity)
 Sprinkles becomes a shop window under its awning, and Swirls' paint
@@ -261,6 +261,9 @@ crates/gmnb-media   What a theme shows that is a picture (docs/theming-media.md)
                     the four still formats decoded by Rust crates behind
                     size caps, animations composited and played on one
                     thread, the field pass; never linked into DGMNB
+crates/gmnb-sound   A theme's sounds (docs/theming-media.md): the synthesiser,
+                    sound files, the mixer and the PulseAudio-protocol
+                    output; never linked into DGMNB
 apps/gmnb           The GTK 4 / libadwaita application
 apps/gmnb-launcher  Installed as `gmnb`: checks the CPU, then runs GMNB
 apps/dgmnb          The software-drawn application (winit, softbuffer,
