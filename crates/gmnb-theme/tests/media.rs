@@ -1631,3 +1631,35 @@ fn what_making_a_picture_costs_its_call() {
         );
     }
 }
+
+#[test]
+fn a_forged_ramp_table_with_a_huge_colour_list_is_refused_cheaply() {
+    let d = dir("ramp-forged");
+    std::fs::write(
+        d.0.join("theme.luau"),
+        r##"
+        local buf = buffer.create(2 * 2 * 4)
+        local first = gmnb.ramp({ colors = { "#ff0000", "#0000ff" } })
+        for i = 1, 12 do gmnb.ramp({ colors = { gmnb.rgb(i / 12, 0, 0), "#0000ff" } }) end
+        local red = first.colors[1]
+        local big = {}
+        for i = 1, 250000 do big[i] = red end
+        return { api = 1, name = 'T', layers = { background = { draw = function(draw, frame)
+            -- Ramp 1's number on a table of the theme's own making.
+            local forged = { id = 1, colors = big, edge = { 0, 1 }, cycle = false }
+            pcall(function()
+                draw:field(0, 0, 40, 40, { data = buf, cols = 2, rows = 2, channels = 1, ramp = forged })
+            end)
+        end } } }
+        "##,
+    )
+    .unwrap();
+    let theme = Theme::load(Source::folder("t", &d.0), Limits::default()).unwrap();
+    let started = std::time::Instant::now();
+    let _ = run(&theme, &at(0.0));
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "{:?}",
+        started.elapsed()
+    );
+}
