@@ -22,7 +22,9 @@ use crate::window::{Window, apply_backdrop, apply_theme_setting};
 /// Shown beside *Open themes folder*: installing a theme is running
 /// someone's script.
 const THEMES_ARE_CODE: &str = "Themes are code: each is a script that runs inside GMNB. It is \
-     sandboxed and limited, and can only change how GMNB looks, but install only themes you trust.";
+     sandboxed and limited, and can only change how GMNB looks and sounds, but no protection is \
+     complete: GMNB is not responsible for the actions of third-party themes. Make sure you trust \
+     the theme author before you use it.";
 
 /// The style class of the list's row for a chosen theme that isn't
 /// installed.

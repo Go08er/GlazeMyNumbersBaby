@@ -1622,7 +1622,11 @@ Media and sound ([their chapter](theming-media.md)):
 
 A theme is someone else's code running inside the calculator. It gets a
 sandbox with hard limits, and it can only ever affect how GMNB looks and
-sounds.
+sounds. The limits are as good as they can be made, not perfect: a theme
+written to misbehave can still make GMNB slow or use a lot of memory before
+it is stopped. **GMNB is not responsible for the actions of third-party
+themes. Make sure you trust the theme author before you use it.** Settings
+says so beside *Open themes folder*.
 
 | Limit | Value |
 |---|---|
@@ -2424,8 +2428,10 @@ Decided here, and worth a second look by the owner:
 4. **Old settings keys are kept**: written back unchanged, so going back
    to 0.2 afterwards finds the palette it had.
 5. **Themes are code.** They are sandboxed, limited and can only change
-   how GMNB looks, but installing one is still running someone's script.
-   Settings says so beside *Open themes folder*.
+   how GMNB looks and sounds, but installing one is still running someone's
+   script, and no protection is complete. GMNB is not responsible for the
+   actions of third-party themes; Settings says so beside *Open themes
+   folder*, and asks users to make sure they trust the theme author.
 6. **Operator glyphs count as symbols** in the readability rules (3:1).
    As text (4.5:1) the base look itself would fail: in the light palette
    `accent_text` on `surface2`, where the operator keys put it, is 4.1:1.
