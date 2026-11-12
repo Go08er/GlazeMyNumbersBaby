@@ -538,6 +538,15 @@ fn the_volume_is_kept_within_bounds() {
     assert_eq!(engine.volume(), 1.0);
     engine.set_volume(f32::NAN);
     assert_eq!(engine.volume(), 0.0);
+    // The same as it is made (R4-D-2): -3 squared is 9, which is full
+    // volume.
+    for (given, kept) in [(-3.0, 0.0), (7.0, 1.0), (f32::NAN, 0.0), (0.25, 0.25)] {
+        let engine = SoundEngine::new(Settings {
+            volume: given,
+            ..null()
+        });
+        assert_eq!(engine.volume(), kept, "{given}");
+    }
     // With a thread running it is told, and nothing else changes.
     let bank = loaded(&mut engine, vec![tone(0.05)]);
     engine.set_volume(0.8);
