@@ -714,6 +714,7 @@ impl Window {
             store: store.clone(),
             compact: Default::default(),
             flyouts: Default::default(),
+            switch_keys: Default::default(),
             layers: crate::inert::Layers::new(&win),
             precision: crate::pages::Followed::new(settings.literal_digits),
         });
@@ -1058,6 +1059,11 @@ impl Window {
         this
     }
 
+    /// Whether the navigation sidebar is open (`GMNB_STEPS`' `sidebar`).
+    pub fn sidebar_open(&self) -> bool {
+        self.split.shows_sidebar()
+    }
+
     pub fn widget(&self) -> adw::ApplicationWindow {
         self.win.clone()
     }
@@ -1243,6 +1249,46 @@ impl Window {
                 flyout.add_controller(w.key_router(true));
             }
             hide_ring_on_press(flyout);
+            // A flyout the keys open has the focus on its first key; one
+            // the pointer opens has it nowhere, as DGMNB's: GTK would
+            // give the first key a focus no ring shows, which a first Tab
+            // passes over and Enter presses (the trigonometry flyout's 2nd
+            // instead of "=").
+            flyout.connect_map(|popover| {
+                let popover = popover.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(win) = popover.root().and_downcast::<gtk::Window>()
+                        && !gtk::prelude::GtkWindowExt::gets_focus_visible(&win)
+                        && popover.is_mapped()
+                    {
+                        popover.set_focusable(true);
+                        popover.grab_focus();
+                    }
+                });
+            });
+        }));
+        // Popovers of the page's controls: the page switch alone is the
+        // window's (their other keys are their controls' own,
+        // [`own_keys`]).
+        let weak = Rc::downgrade(self);
+        *self.ctx.switch_keys.borrow_mut() = Some(Box::new(move |popover| {
+            let keys = gtk::EventControllerKey::new();
+            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let weak = weak.clone();
+            keys.connect_key_pressed(move |_, key, _code, mods| {
+                let (Some(w), Some(kp)) = (weak.upgrade(), key_press(key, mods)) else {
+                    return glib::Propagation::Proceed;
+                };
+                if matches!(
+                    input::window_shortcut(&kp),
+                    Some(WindowAction::SwitchMode(_))
+                ) && w.handle_key(&kp)
+                {
+                    return glib::Propagation::Stop;
+                }
+                glib::Propagation::Proceed
+            });
+            popover.add_controller(keys);
         }));
     }
 
@@ -1304,6 +1350,10 @@ impl Window {
         match route(kp, self.cover(&page)) {
             Route::Window(WindowAction::SwitchMode(mode)) => {
                 self.set_mode(mode);
+                // As picking the row (and DGMNB's `set_mode`) does: the
+                // sidebar an Alt+digit was pressed under closes, rather
+                // than staying open over the page it switched to.
+                self.split.set_show_sidebar(false);
                 true
             }
             Route::Window(WindowAction::Copy) => page.copy().is_some(),

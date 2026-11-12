@@ -1099,6 +1099,7 @@ impl GraphingPage {
             .css_classes(["wc-flyout"])
             .build();
         crate::window::own_keys(&pop);
+        self.ctx.switch_keys(&pop);
         pop
     }
 
@@ -1534,6 +1535,7 @@ impl GraphingPage {
             .css_classes(["wc-flyout"])
             .build();
         crate::window::own_keys(&pop);
+        self.ctx.switch_keys(&pop);
 
         // Weak both ways: the GraphView keeps this callback, and the entries'
         // handlers reach the GraphView.
