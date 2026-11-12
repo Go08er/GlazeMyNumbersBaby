@@ -455,12 +455,15 @@ impl ConverterPage {
                     }
                 })
             };
+            // Anywhere in the field picks it, as anywhere in DGMNB's field
+            // rect does (its padding too, and a theme's card around the
+            // value: only the value itself took the click; round 5, B2).
             let click = gtk::GestureClick::new();
             {
                 let pick = pick.clone();
                 click.connect_released(move |_, _, _, _| pick());
             }
-            f.value.add_controller(click);
+            f.frame.add_controller(click);
             // The same from the keyboard, once Tab has brought the focus
             // here: Space, as upstream's OnValueKeyDown, or Enter. (The
             // window lets both through: neither is a converter key.)
