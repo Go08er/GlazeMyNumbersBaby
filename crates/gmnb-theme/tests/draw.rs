@@ -2856,9 +2856,22 @@ fn what_a_call_costs_is_more_than_what_it_covers() {
     };
     over(tiles(512, 400).unwrap_err());
     assert!(tiles(512, 40).unwrap() > 0.1);
-    // A small one, as themes use them (a grain over the window), is cheap.
-    let small = tiles(16, 1000).unwrap();
-    assert!(small < 0.1, "{small}");
+    // A small one over the window, as themes use one (a grain), is cheap;
+    // a thousand calls of it are not (the probe: 0.1 to 0.4 ms a call
+    // however small, 100 ms and more for a thousand).
+    let grain = {
+        let (theme, _d) = background(
+            "grain",
+            "local g = gmnb.noise({ size = 16 })",
+            "draw:tile(g, 0, 0, frame.width, frame.height)",
+        );
+        theme
+            .draw(LayerKind::Background, &Ctx::default(), &window)
+            .map(|_| theme.api().frame_cost())
+            .unwrap()
+    };
+    assert!(grain < 0.02, "{grain}");
+    assert!(tiles(16, 1000).is_err(), "a thousand tiny tiles");
     // What is not seen costs nothing.
     let (theme, _d) = background(
         "tiles_off",

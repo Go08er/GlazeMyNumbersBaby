@@ -1787,10 +1787,10 @@ itself, takes seconds a frame at the cap for blurs and shadows.)
 
 | Over the whole layer | Points | So, at most, a frame |
 |---|---|---|
-| A rectangle in a colour; a linear gradient of 2 stops (each stop past 2, 2.5 more); a radial gradient; a conic one | 1.3; 2.2; 52; 130 | 770; 450; 19; 7 |
+| A rectangle in a colour; a linear gradient of 2 stops (each stop past 2, 2.5 more; at least 65 if it runs across the axes, at an angle not a multiple of 90, and 5 along them with a colour that isn't opaque); a radial gradient; a conic one | 1.3; 2.2; 52; 130 | 770; 450 (15 across the axes); 19; 7 |
 | A rounded rectangle | its paint's + 0.3, and 0.02 a pixel of its radius (not by area) | |
 | A path filled or stroked, a circle (a mask on GL): in a colour; with a gradient | 12.7 + the paint's; 24 + the paint's | 71; 38 (linear) |
-| A picture scaled into its rectangle (a still, a frame of an animation, a field); tiled | 8.2; 5.5 (and 7 for each 760 × 640 of a tiled picture's own pixels) | 120; 180 |
+| A picture scaled into its rectangle (a still, a frame of an animation, a field); tiled | 8.2; 5.5 (and 7 for each 760 × 640 of a tiled picture's own pixels, and 4 for each tile call seen, however small) | 120; 180 |
 | A picture's own pixels, per 760 × 640 of them: smooth and clean (`"trilinear"`); smooth or hard | 43; 16 | a 2048 × 2048 still: 2; 6 |
 | A border; a clip with rounded corners | 1.3; 0.9 (and each rounded or turned clip open adds a quarter to what is drawn inside) | |
 | `draw:shadow`: over the box and its reach | 4.3 | |
