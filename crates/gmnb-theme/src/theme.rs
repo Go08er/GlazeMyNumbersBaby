@@ -1417,6 +1417,8 @@ impl Theme {
             whole: matches!(kind, LayerKind::Background | LayerKind::Overlay),
             glyph_box,
             window: frame.window,
+            offscreen: frame.offscreen,
+            density: frame.density,
         });
         let result = self
             .engine
@@ -1440,6 +1442,7 @@ impl Theme {
         // itself; what `draw` returned stays what `draw` returned.
         drawn.due = self.api.take_due();
         drawn.retry = self.api.take_retry();
+        drawn.offscreen = self.api.frame_offscreen();
         Ok(drawn)
     }
 
