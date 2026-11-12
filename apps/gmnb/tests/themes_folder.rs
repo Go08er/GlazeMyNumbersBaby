@@ -971,6 +971,47 @@ fn themes_dragged_in_or_deleted_show_while_settings_is_open() {
     );
 }
 
+/// R5-C-1: a chosen theme whose folder was deleted stays in Settings' list
+/// as the choice ("Doesn't load: Not installed"); choosing another theme
+/// left that row there, a phantom nobody could use, until the folder next
+/// changed. Choosing another theme takes it out; the other rows stay.
+#[test]
+fn choosing_another_theme_takes_the_row_of_one_not_installed_out() {
+    let display = display_or_skip!();
+    let profile = Profile::new("phantom");
+    let app = Running::start(
+        &display,
+        &profile,
+        None,
+        &[
+            ("GMNB_THEME", "aurora"),
+            ("GMNB_PREFS", "1"),
+            (
+                "GMNB_STEPS",
+                "wait:300;themes;wait:3000;themes;choose:swirls;wait:600;themes;quit",
+            ),
+        ],
+    );
+    let first = themes_line(&app.line("themes: ", 1));
+    assert_eq!(
+        first.0,
+        ["base", "aurora*", "sprinkles*", "swirls*"],
+        "{}",
+        app.stderr()
+    );
+    std::fs::remove_dir_all(profile.themes().join("aurora")).unwrap();
+    let second = themes_line(&app.line("themes: ", 2));
+    assert_eq!(
+        second.0,
+        ["base", "sprinkles*", "swirls*", "aurora"],
+        "{}",
+        app.stderr()
+    );
+    let third = themes_line(&app.line("themes: ", 3));
+    let err = app.finish();
+    assert_eq!(third.0, ["base", "sprinkles*", "swirls*"], "{err}");
+}
+
 /// The inotify watches process `pid` holds: each watched inode.
 fn watched(pid: u32) -> Vec<u64> {
     let mut out = Vec::new();
