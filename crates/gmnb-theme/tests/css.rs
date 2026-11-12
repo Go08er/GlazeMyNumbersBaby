@@ -2001,11 +2001,12 @@ fn swirls_unreadable_over_the_field(cases: &[Swirl]) -> Vec<String> {
 
 /// What a style's ring lies on besides a key: the page's surfaces a
 /// control may sit on, each over the window's background.
-const RING_SURFACES: [&str; 4] = [
+const RING_SURFACES: [&str; 5] = [
     "plain.background",
     "header.background",
     "nav.background",
     "panel",
+    "panel.sheet",
 ];
 
 /// Rule 5 for one style, over each colour of `behind` in turn (what the
@@ -2379,4 +2380,63 @@ fn a_ring_that_hides_on_a_surface_of_the_page_is_the_base_looks() {
         let got = focus::worst(&ring, on, false);
         assert!(got >= LEAST_CONTRAST, "{what}: {got:.2} ({ring:?})");
     }
+}
+
+/// R5-A-2: the toolkit's own ring (`native` lists `focus`) was judged inside
+/// the keys only, where R4-A-1 had the app's ring judged on the page's
+/// surfaces too: an accent that reads inside a key but is the colour of the
+/// header hid the keyboard's focus round every header button. The app's
+/// ring is drawn instead, with a note.
+#[test]
+fn a_toolkit_ring_that_hides_on_a_surface_of_the_page_is_the_apps() {
+    let ctx = Ctx::default();
+    let engine = Engine::with_globals(Limits::default(), |lua| {
+        gmnb_theme::library::register(lua, gmnb_theme::library::without_drawing)
+    })
+    .unwrap();
+    let white = "{ background = '#ffffff' }";
+    let src = format!(
+        "return {{ native = {{ 'focus' }}, colors = {{ accent_text = '#000000' }}, \
+         window = {white}, header = {{ background = '#000000' }}, \
+         keys = {{ number = {white}, func = {white}, operator = {white}, equals = {white} }} }}"
+    );
+    let src = src.as_str();
+    let resolved = resolve(&ctx, &engine.load("=style", src).unwrap());
+    assert!(
+        !resolved.style.native().contains(&"focus"),
+        "{:?}",
+        resolved.notes.list
+    );
+}
+
+/// R5-A-1: the floor judged the `focus` ring on the window's background,
+/// the keys and four surfaces, but the narrow window's History and Memory
+/// (its tabs, rows and buttons) lie on the bottom sheet, `panel.sheet`: a
+/// ring that read on the others and not there hid the keyboard's focus in
+/// it. It is the base look's ring, with a note.
+#[test]
+fn a_ring_that_hides_on_the_narrow_windows_sheet_is_the_base_looks() {
+    use gmnb_theme::focus::{self, LEAST_CONTRAST};
+    let ctx = Ctx::default();
+    let engine = Engine::with_globals(Limits::default(), |lua| {
+        gmnb_theme::library::register(lua, gmnb_theme::library::without_drawing)
+    })
+    .unwrap();
+    let surface = "panel.sheet";
+    let src = "return { focus = { color = '#000000', width = 2, offset = 2 }, \
+               window = { background = '#ffffff' }, \
+               panel = { sheet = { background = '#000000' } } }";
+    let resolved = resolve(&ctx, &engine.load("=style", src).unwrap());
+    let noted = resolved
+        .notes
+        .list
+        .iter()
+        .any(|n| n.message.contains("would hide the keyboard's focus"));
+    assert!(noted, "{surface}: no note: {:?}", resolved.notes.list);
+    let get = |p: &str| resolved.style.get(p).cloned();
+    let behind = focus::backdrop(get, resolved.style.tokens.colors.bg, None);
+    let ring = focus::ring_at(get, "focus").unwrap();
+    let grounds = focus::grounds(get, &resolved.style.tokens, "focus", &behind);
+    let got = focus::worst(&ring, &grounds.surfaces, false);
+    assert!(got >= LEAST_CONTRAST, "{surface}: {got:.2}");
 }

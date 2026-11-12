@@ -38,11 +38,13 @@ pub const RINGS: [&str; 3] = ["focus", "date.calendar.focus", "converter.value.f
 
 /// The page's surfaces a control may sit on, each over the window's
 /// background: the ring of `focus` lies on them outside the control.
-pub const SURFACES: [&str; 4] = [
+pub const SURFACES: [&str; 5] = [
     "plain.background",
     "header.background",
     "nav.background",
     "panel",
+    // The narrow window's History and Memory (R5-A-1).
+    "panel.sheet",
 ];
 
 /// The ring libadwaita draws itself: its accent colour at half opacity,
@@ -213,8 +215,11 @@ pub fn floor(tokens: &Tokens, values: &mut BTreeMap<&'static str, Value>, notes:
             _ => tokens.colors.accent_text,
         };
         let ring = native_ring(accent);
-        let under = grounds(|p| values.get(p).cloned(), tokens, "focus", &behind).under(&ring);
-        let got = worst(&ring, &under, false);
+        let g = grounds(|p| values.get(p).cloned(), tokens, "focus", &behind);
+        // Inside a key, and on a control of the header, the sidebar or a
+        // panel, whose fill is the surface's where it is transparent
+        // (R5-A-2: the app's ring was judged there, the toolkit's not).
+        let got = worst(&ring, &g.under(&ring), false).min(worst(&ring, &g.surfaces, false));
         if got < LEAST_CONTRAST {
             if let Some(Value::Words(w)) = values.get_mut("native") {
                 w.retain(|f| *f != "focus");
