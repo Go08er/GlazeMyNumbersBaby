@@ -838,7 +838,9 @@ impl GraphView {
             let hair = rgba3(color, look.hair_opacity);
             let st = gsk::Stroke::new(mg::HAIR_WIDTH);
             st.set_line_cap(gsk::LineCap::Round);
-            if let Some((dash, gap)) = look.hair_dash {
+            // (GSK refuses a dash that never draws or never moves on: a
+            // theme's `{0, 0}` is a solid line, as `draw:stroke` takes it.)
+            if let Some((dash, gap)) = look.hair_dash.filter(|(d, g)| d + g > 0.0) {
                 st.set_dash(&[dash, gap]);
             }
             for (x0, y0, x1, y1) in [(sx, 0.0, sx, h), (0.0, sy, w, sy)] {
