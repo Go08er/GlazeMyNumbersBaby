@@ -62,19 +62,23 @@ pub fn show(win: &Rc<Window>) {
         .subtitle("Follows the system unless you choose otherwise")
         .build();
     row.add_suffix(&theme);
+    // (GMNB_FOCUS=wc-light-dark: where the row is, for the tests.)
+    row.add_css_class("wc-light-dark");
     group.add(&row);
-    {
-        // In the least window the three toggles and the row's text don't
-        // fit side by side: the toggles take only the room their labels
-        // need, and the row says only its title (the toggles say the
-        // rest).
-        let narrow = adw::Breakpoint::new(
-            adw::BreakpointCondition::parse("max-width: 330sp").expect("a condition"),
-        );
-        narrow.add_setter(&theme, "homogeneous", Some(&false.to_value()));
-        narrow.add_setter(&row, "subtitle", Some(&"".to_value()));
-        dialog.add_breakpoint(narrow);
-    }
+    // Settings in the least window: one breakpoint for all of it, added to
+    // the dialog once its setters are all in (below). libadwaita applies
+    // only the last added of those whose condition holds: the sliders'
+    // breakpoint, added after this one with the same condition, undid it
+    // (the row's subtitle back, the toggles even, wider than the window
+    // with a wide system font; round 6's CI run).
+    let narrow = adw::Breakpoint::new(
+        adw::BreakpointCondition::parse("max-width: 330sp").expect("a condition"),
+    );
+    // There the three toggles and the row's text don't fit side by side:
+    // the toggles take only the room their labels need, and the row says
+    // only its title (the toggles say the rest).
+    narrow.add_setter(&theme, "homogeneous", Some(&false.to_value()));
+    narrow.add_setter(&row, "subtitle", Some(&"".to_value()));
     {
         let ctx = ctx.clone();
         theme.connect_active_name_notify(move |t| {
@@ -270,10 +274,7 @@ pub fn show(win: &Rc<Window>) {
         // In the least window the sliders' rows (their slider asks for 160
         // px) left their text some 40 px: "Vo-lu-me", a subtitle four letters
         // wide (R5-C-3). The sliders ask for less there; the same
-        // condition as the toggles' above.
-        let narrow = adw::Breakpoint::new(
-            adw::BreakpointCondition::parse("max-width: 330sp").expect("a condition"),
-        );
+        // breakpoint as the toggles' above.
         for class in ["wc-sound-volume-slider", "wc-opacity-slider"] {
             if let Some(scale) = find_by_class(page.upcast_ref(), class) {
                 narrow.add_setter(&scale, "width-request", Some(&NARROW_SLIDER.to_value()));
