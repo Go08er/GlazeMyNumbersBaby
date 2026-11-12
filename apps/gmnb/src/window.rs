@@ -1058,6 +1058,11 @@ impl Window {
         this
     }
 
+    /// Whether the navigation sidebar is open (`GMNB_STEPS`' `sidebar`).
+    pub fn sidebar_open(&self) -> bool {
+        self.split.shows_sidebar()
+    }
+
     pub fn widget(&self) -> adw::ApplicationWindow {
         self.win.clone()
     }
@@ -1243,6 +1248,23 @@ impl Window {
                 flyout.add_controller(w.key_router(true));
             }
             hide_ring_on_press(flyout);
+            // A flyout the keys open has the focus on its first key; one
+            // the pointer opens has it nowhere, as DGMNB's: GTK would
+            // give the first key a focus no ring shows, which a first Tab
+            // passes over and Enter presses (the trigonometry flyout's 2nd
+            // instead of "=").
+            flyout.connect_map(|popover| {
+                let popover = popover.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(win) = popover.root().and_downcast::<gtk::Window>()
+                        && !gtk::prelude::GtkWindowExt::gets_focus_visible(&win)
+                        && popover.is_mapped()
+                    {
+                        popover.set_focusable(true);
+                        popover.grab_focus();
+                    }
+                });
+            });
         }));
     }
 
@@ -1304,6 +1326,10 @@ impl Window {
         match route(kp, self.cover(&page)) {
             Route::Window(WindowAction::SwitchMode(mode)) => {
                 self.set_mode(mode);
+                // As picking the row (and DGMNB's `set_mode`) does: the
+                // sidebar an Alt+digit was pressed under closes, rather
+                // than staying open over the page it switched to.
+                self.split.set_show_sidebar(false);
                 true
             }
             Route::Window(WindowAction::Copy) => page.copy().is_some(),
