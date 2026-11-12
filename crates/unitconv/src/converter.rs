@@ -607,6 +607,12 @@ impl UnitConverter {
         ) else {
             return;
         };
+        // A category this converter doesn't have (a damaged or hand-made
+        // file) would leave it on one that isn't in the list, with no
+        // units: it is ignored, like any malformed string.
+        if !self.category_to_units.contains_key(&category.id) {
+            return;
+        }
         self.current_category = category;
 
         // Only restore from the saved units if they are valid in the current available units.
