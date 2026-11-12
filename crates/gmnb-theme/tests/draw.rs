@@ -1191,6 +1191,39 @@ fn what_the_layers_hold_off_screen_is_capped_whatever_the_size() {
     let hd = at(&glass, 1920.0, 1080.0, LIMIT, 1.0).unwrap();
     let uhd = at(&glass, 3840.0, 2160.0, LIMIT, 1.0).unwrap();
     assert!(hd < uhd && uhd < 0.75 * LIMIT, "{hd} {uhd}");
+
+    // A preview tile is no layer of the window's, and has 512 KiB of its
+    // own: tile-sized circles, as many as a tile's points buy, are refused;
+    // a blur and a mask over it all are drawn.
+    let tile = |body: &str| {
+        let (theme, _d) = load(
+            "offscreen-tile",
+            &format!(
+                "return {{ api = 1, name = 'T', options = {{
+                    {{ id = 'p', type = 'choice', choices = {{ {{ id = 'a' }} }},
+                      preview = function(draw, frame, choice)
+                          local w, h = frame.width, frame.height
+                          {body}
+                      end }} }} }}"
+            ),
+        );
+        let result = theme.preview(&theme.def.options[0], "a", &Ctx::default());
+        result
+            .map(|_| theme.api().frame_offscreen())
+            .map_err(|e| e.to_string())
+    };
+    assert_eq!(gmnb_theme::cost::PREVIEW_OFFSCREEN_BYTES, 512.0 * 1024.0);
+    let e = tile("for i = 1, 4000 do draw:circle(w / 2, h / 2, w, '#336699') end").unwrap_err();
+    assert!(
+        e.contains("off-screen") && e.contains("past the 1 MB"),
+        "{e}"
+    );
+    let glassy = tile(
+        "draw:push_blur(8) draw:circle(w / 2, h / 2, w, '#336699') draw:pop() \
+         draw:push_mask() draw:rect(0, 0, w, h, '#fff') draw:pop() draw:rect(0, 0, w, h, '#f00') draw:pop()",
+    )
+    .unwrap();
+    assert!(glassy > 0.0 && glassy < 0.5 * 512.0 * 1024.0, "{glassy}");
 }
 
 /// A path that crosses itself is charged by its crossings (R5-D-2): the

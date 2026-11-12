@@ -1466,11 +1466,14 @@ impl Theme {
         let (w, h) = layer::PREVIEW_SIZE;
         layer::preview_table(&self.engine, &self.preview, w, h, self.ctx.table())?;
         // A tile is a still picture: animations show their first frame.
+        // A tile is no layer of the window's: it has a small allowance of
+        // its own to hold off-screen (Settings may show many).
         self.api.begin(&draw::Begin {
             still: true,
             layer: u64::MAX,
             size: [w, h],
             whole: true,
+            offscreen: crate::cost::PREVIEW_OFFSCREEN_BYTES,
             ..draw::Begin::default()
         });
         let result = self.engine.call(

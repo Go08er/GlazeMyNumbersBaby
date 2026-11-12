@@ -1639,7 +1639,7 @@ says so beside *Open themes folder*.
 | One library call's own work, which the time limit can't stop midway: a plain search (`string.find` with `plain` or a pattern of no magic characters, `string.split`); a pattern search (`find`, `match`, `gmatch`, `gsub`); `table.move` | 2^30 bytes (string × pattern); 2^26 (string bytes × the pattern's longest `[set]`); 2^20 elements. Past them the call is an error. |
 | Draw calls per `draw` | 4096 |
 | What a frame costs to draw | 1000 points for each 760 × 640 of what the layer is charged over (a keypad's or a readout's, the window too), and never fewer than 1000 ([Drawing per frame](#drawing-per-frame)) |
-| What the window's layers hold off-screen | 768 MiB for all the layers on screen together, whatever the window's size: the masks GL makes of what is filled, and the surfaces the effects are drawn into, by the window's device pixels ([What the layers hold off-screen](#what-the-layers-hold-off-screen)) |
+| What the window's layers hold off-screen | 768 MiB for all the layers on screen together (a preview tile, 512 KiB of its own), whatever the window's size: the masks GL makes of what is filled, and the surfaces the effects are drawn into, by the window's device pixels ([What the layers hold off-screen](#what-the-layers-hold-off-screen)) |
 | The memory of the whole of GMNB | 4 GiB, whatever the theme or the calculation (the kernel's `RLIMIT_DATA`); past 3.5 GiB the session is saved and the theme switched off ([The memory of the whole of GMNB](#the-memory-of-the-whole-of-gmnb)) |
 | Open pushes / saves at once | 32 each |
 | Path segments per frame | 16 384 |
@@ -1841,7 +1841,10 @@ pictures stand, and are drawn again with every frame of the window); a
 call that takes it past that is an error, and the frame is dropped, as
 past any cap, its note saying how much it would have held. A picture that
 holds more than the others leave it once they hold more (a page shown
-again) is drawn again, within what is left.
+again) is drawn again, within what is left. A preview tile in Settings
+is no layer of the window's, and Settings may show many: each has 512 KiB
+of its own (a hundred bytes for each of its pixels: a blur, a mask and a
+few circles over the whole of it).
 
 Each kind holds, for each device pixel of what it covers (its box, as
 [Drawing per frame](#drawing-per-frame) counts it: cut to the clips open
@@ -1881,8 +1884,10 @@ background asking for nearly all that may be held, every frame, held at
 most 1.85 GB in all on llvmpipe and 1.77 GB on NVIDIA in window-sized
 circles (796 MB by the count), 1.92 GB and 0.96 GB in opacity groups,
 blurs and circles (755 MB), and 135 MB on the software renderer. A theme
-whose four layers each ask for it is drawn only as far as what is left
-allows: each layer refused is struck, and switched off after three. A
+whose four layers each ask for all of it, every frame, ends with all four
+switched off: each layer drawn takes what the others leave, the others are
+refused and struck, and as pictures come and go each takes its turn being
+refused, until each has its three strikes. A
 frosted-glass theme (five lights as large as the window, blurred behind
 three to six panes of glass) holds 500 to 550 MB by this count, two
 thirds of what may be held, and drew at 1920 × 1080 and 3840 × 2160 with

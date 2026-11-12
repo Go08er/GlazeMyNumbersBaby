@@ -954,6 +954,13 @@ struct Offscreen {
 /// panes) asks for two thirds of it, 500 to 550 MB.
 pub const OFFSCREEN_BYTES: f64 = (768u64 << 20) as f64;
 
+/// What one of Settings' preview tiles may have the renderer hold
+/// off-screen: 512 KiB, a hundred bytes for each of its 96 × 56 pixels (a
+/// blur, a mask and a few circles over the whole of it). A tile is no layer
+/// of the window's, and Settings may show many: 4096 tile-sized circles,
+/// within a tile's points, would count 176 MB each.
+pub const PREVIEW_OFFSCREEN_BYTES: f64 = (512u64 << 10) as f64;
+
 /// Bytes held for each device pixel covered (GL on llvmpipe, the whole of a
 /// window of 760 × 640 and of 1600 × 1080, each kind up to 64 times):
 /// a path filled or stroked, or a circle, in a colour: its mask, 7 to 8; with
