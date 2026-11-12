@@ -69,6 +69,9 @@ pub struct Ctx {
     /// Set by the window: what a flyout of a page's own keys needs
     /// ([`Ctx::flyout`]).
     pub flyouts: std::cell::RefCell<Option<FlyoutHook>>,
+    /// Set by the window: the page switch (Alt+1…5) a popover that is
+    /// not a flyout of the page's own keys still has ([`Ctx::switch_keys`]).
+    pub switch_keys: std::cell::RefCell<Option<FlyoutHook>>,
     /// What covers what in the window, for assistive technology; a page
     /// registers the layers it opens over itself.
     pub layers: Rc<crate::inert::Layers>,
@@ -83,6 +86,15 @@ impl Ctx {
     /// ring, as in the window.
     pub fn flyout(&self, popover: &gtk::Popover) {
         if let Some(f) = self.flyouts.borrow().as_ref() {
+            f(popover);
+        }
+    }
+
+    /// A popover of the page's controls (a calendar, the graph's
+    /// settings): Alt+1…5 still switches the page from it, as in DGMNB
+    /// (R7-C-3), the page closing the popover with it.
+    pub fn switch_keys(&self, popover: &gtk::Popover) {
+        if let Some(f) = self.switch_keys.borrow().as_ref() {
             f(popover);
         }
     }

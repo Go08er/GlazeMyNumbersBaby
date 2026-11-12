@@ -714,6 +714,7 @@ impl Window {
             store: store.clone(),
             compact: Default::default(),
             flyouts: Default::default(),
+            switch_keys: Default::default(),
             layers: crate::inert::Layers::new(&win),
             precision: crate::pages::Followed::new(settings.literal_digits),
         });
@@ -1265,6 +1266,29 @@ impl Window {
                     }
                 });
             });
+        }));
+        // Popovers of the page's controls: the page switch alone is the
+        // window's (their other keys are their controls' own,
+        // [`own_keys`]).
+        let weak = Rc::downgrade(self);
+        *self.ctx.switch_keys.borrow_mut() = Some(Box::new(move |popover| {
+            let keys = gtk::EventControllerKey::new();
+            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let weak = weak.clone();
+            keys.connect_key_pressed(move |_, key, _code, mods| {
+                let (Some(w), Some(kp)) = (weak.upgrade(), key_press(key, mods)) else {
+                    return glib::Propagation::Proceed;
+                };
+                if matches!(
+                    input::window_shortcut(&kp),
+                    Some(WindowAction::SwitchMode(_))
+                ) && w.handle_key(&kp)
+                {
+                    return glib::Propagation::Stop;
+                }
+                glib::Propagation::Proceed
+            });
+            popover.add_controller(keys);
         }));
     }
 

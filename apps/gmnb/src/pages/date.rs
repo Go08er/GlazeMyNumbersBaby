@@ -46,7 +46,7 @@ struct DateButton {
     days: Rc<DayGrid>,
 }
 
-fn date_button(texts: &Texts) -> DateButton {
+fn date_button(texts: &Texts, ctx: &Ctx) -> DateButton {
     // "Tuesday, November 10, 2026  ▾", centred and shrunk to fit, as
     // DGMNB sets it: the arrow is drawn, not read.
     let label = FitLabel::drawn();
@@ -64,6 +64,8 @@ fn date_button(texts: &Texts) -> DateButton {
     // A day is picked by Enter or Space with Shift or Ctrl held too, as
     // in the window.
     crate::window::own_keys(&popover);
+    // Alt+1…5 still switches the page, as in DGMNB.
+    ctx.switch_keys(&popover);
     // Its grab keeps the pointer and the keys from the window's
     // controllers: a day picked is known to be the pointer's or the
     // keyboard's doing here (assistive technology's makes no sound).
@@ -331,8 +333,8 @@ impl DatePage {
         let caption_gap = md::FIELD_TOP - md::FIELD_LABEL_H;
 
         // --- difference mode
-        let from = date_button(&texts);
-        let to = date_button(&texts);
+        let from = date_button(&texts, &ctx);
+        let to = date_button(&texts, &ctx);
         let diff_result = result_line();
         let diff_days = gtk::Label::new(None);
         diff_days.set_xalign(0.0);
@@ -362,7 +364,7 @@ impl DatePage {
         ]));
 
         // --- add/subtract mode
-        let start = date_button(&texts);
+        let start = date_button(&texts, &ctx);
         below(&start.bin, md::STEP_FROM_OP - md::FIELD_TOP - md::FIELD_H);
         let op = adw::ToggleGroup::new();
         op.add(toggle("add", S::ADD_OPTION, &texts));
