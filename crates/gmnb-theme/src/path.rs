@@ -887,79 +887,112 @@ fn edges(path: &Path) -> Vec<[f64; 4]> {
     out
 }
 
-/// Steps of the sweep [`crossings`] makes, at most: a path whose edges
-/// need more is counted as the worst.
-const SWEEP_STEPS: usize = 4_000_000;
+/// Steps [`strain`] makes, at most: a path that needs more is counted as
+/// the worst. (Some two milliseconds.)
+const SWEEP_STEPS: usize = 1_000_000;
+/// The strips of a path's height its lines are sorted into.
+const BANDS: usize = 64;
 
-/// How many pairs of a path's edges cross (`edges`: [`edges`]'s), counted
-/// to `limit` and no further (then `limit` is what it says). A pair is
-/// counted when each edge's ends lie on either side of the other: lines
-/// that only touch, as the neighbours of a polyline do, are not. Which
-/// pairs to try is found by a sweep over the edges' boxes in x, within
-/// [`SWEEP_STEPS`]; a path that needs more than that is given as having
-/// `limit`.
+/// How hard a path is for the toolkit to fill or stroke, in units: one for
+/// each pair of its lines whose boxes meet (`half`, half a stroke's width,
+/// grown on every side: thick lines that lie across each other make the
+/// tessellator's work too, as a fan of them does at its hub), and three
+/// more for a pair that crosses. A line and the one it is joined to are not
+/// a pair. Counted to `limit` and no further (then `limit` is what it
+/// says); a path whose lines need more than [`SWEEP_STEPS`] to be told
+/// apart is given as having `limit`.
 ///
-/// The toolkit's tessellator spends time for each crossing of a path, and
-/// a path of 16 000 lines that all cross is 64 million of them: a stroke
-/// of one took it two minutes, a fill three seconds.
-pub fn crossings(path: &Path, limit: f64) -> f64 {
-    let edges = edges(path);
-    count_crossings(&edges, limit)
+/// The tessellator spends time on each crossing of a path, and a path of 16
+/// 000 lines that all cross has 64 million of them: a stroke of one took it
+/// two minutes, a fill three seconds. Lines whose boxes meet are the ones
+/// that can cross, a curve's control points joined standing for the curve
+/// (it may cross where they don't, but within their boxes).
+pub fn strain(path: &Path, half: f64, limit: f64) -> f64 {
+    count_pairs(&edges(path), half, limit)
 }
 
-fn count_crossings(edges: &[[f64; 4]], limit: f64) -> f64 {
-    // A line with no length (`close` at the point the path is at) crosses
+fn count_pairs(edges: &[[f64; 4]], half: f64, limit: f64) -> f64 {
+    // A line with no length (`close` at the point the path is at) meets
     // nothing.
     let lines: Vec<[f64; 4]> = edges
         .iter()
         .copied()
         .filter(|e| e[0] != e[2] || e[1] != e[3])
         .collect();
-    let edges = &lines[..];
-    // A path of a few lines has few crossings, and they are cheap.
-    if edges.len() < 16 {
+    // A path of a few lines has few pairs, and they are cheap.
+    if lines.len() < 16 {
         return 0.0;
     }
-    // (x0, x1, y0, y1) of each edge's box.
-    let boxes: Vec<[f64; 4]> = edges
+    // (x0, x1, y0, y1) of each line's box.
+    let boxes: Vec<[f64; 4]> = lines
         .iter()
         .map(|e| {
             [
-                e[0].min(e[2]),
-                e[0].max(e[2]),
-                e[1].min(e[3]),
-                e[1].max(e[3]),
+                e[0].min(e[2]) - half,
+                e[0].max(e[2]) + half,
+                e[1].min(e[3]) - half,
+                e[1].max(e[3]) + half,
             ]
         })
         .collect();
-    let mut order: Vec<usize> = (0..edges.len()).collect();
-    order.sort_by(|a, b| boxes[*a][0].total_cmp(&boxes[*b][0]));
-    let side =
-        |e: &[f64; 4], x: f64, y: f64| (e[2] - e[0]) * (y - e[1]) - (e[3] - e[1]) * (x - e[0]);
-    let (mut active, mut found, mut steps): (Vec<usize>, f64, usize) = (Vec::new(), 0.0, 0);
-    for i in order {
-        let b = boxes[i];
-        active.retain(|j| boxes[*j][1] >= b[0]);
-        steps += active.len() + 1;
+    let lowest = boxes.iter().fold(f64::INFINITY, |m, b| m.min(b[2]));
+    let highest = boxes.iter().fold(f64::NEG_INFINITY, |m, b| m.max(b[3]));
+    // Sorted into strips of the height unless most lines run across many of
+    // them (then each pair would be tried in every strip they share).
+    let tall = ((highest - lowest) / BANDS as f64).max(f64::MIN_POSITIVE);
+    let band = |y: f64| (((y - lowest) / tall) as usize).min(BANDS - 1);
+    let across: usize = boxes.iter().map(|b| band(b[3]) - band(b[2]) + 1).sum();
+    let strips = if across > 8 * boxes.len() { 1 } else { BANDS };
+    let band = |y: f64| if strips == 1 { 0 } else { band(y) };
+    let mut bands: Vec<Vec<usize>> = vec![Vec::new(); strips];
+    let mut steps = 0usize;
+    for (i, b) in boxes.iter().enumerate() {
+        let (first, last) = (band(b[2]), band(b[3]));
+        steps += last - first + 1;
         if steps > SWEEP_STEPS {
             return limit;
         }
-        for j in &active {
-            let c = boxes[*j];
-            if c[2] > b[3] || c[3] < b[2] {
-                continue;
+        for strip in &mut bands[first..=last] {
+            strip.push(i);
+        }
+    }
+    let joined = |i: usize, j: usize| {
+        let (a, b) = if i < j { (i, j) } else { (j, i) };
+        b == a + 1 && lines[a][2] == lines[b][0] && lines[a][3] == lines[b][1]
+    };
+    let side =
+        |e: &[f64; 4], x: f64, y: f64| (e[2] - e[0]) * (y - e[1]) - (e[3] - e[1]) * (x - e[0]);
+    let mut found = 0.0;
+    for (k, strip) in bands.iter_mut().enumerate() {
+        strip.sort_by(|a, b| boxes[*a][0].total_cmp(&boxes[*b][0]));
+        let mut active: Vec<usize> = Vec::new();
+        for &i in strip.iter() {
+            let b = boxes[i];
+            active.retain(|j| boxes[*j][1] >= b[0]);
+            steps += active.len() + 1;
+            if steps > SWEEP_STEPS {
+                return limit;
             }
-            let (e, f) = (&edges[i], &edges[*j]);
-            let (s1, s2) = (side(e, f[0], f[1]), side(e, f[2], f[3]));
-            let (s3, s4) = (side(f, e[0], e[1]), side(f, e[2], e[3]));
-            if s1 * s2 < 0.0 && s3 * s4 < 0.0 {
+            for &j in &active {
+                let c = boxes[j];
+                // Boxes that meet, counted in the strip of the higher top
+                // (both are in it).
+                if c[2] > b[3] || c[3] < b[2] || band(b[2].max(c[2])) != k || joined(i, j) {
+                    continue;
+                }
                 found += 1.0;
+                let (e, f) = (&lines[i], &lines[j]);
+                let (s1, s2) = (side(e, f[0], f[1]), side(e, f[2], f[3]));
+                let (s3, s4) = (side(f, e[0], e[1]), side(f, e[2], e[3]));
+                if s1 * s2 < 0.0 && s3 * s4 < 0.0 {
+                    found += 3.0;
+                }
                 if found >= limit {
                     return limit;
                 }
             }
+            active.push(i);
         }
-        active.push(i);
     }
     found
 }
@@ -986,25 +1019,36 @@ pub fn reach(path: &Path) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Path, Segment, count_crossings, length, svg_length, svg_segments};
+    use super::{Path, Segment, count_pairs, length, svg_length, svg_segments};
 
-    /// Pairs of lines that cross, and only those: a grid of 20 by 20 lines
-    /// has 400; parallel lines, a polyline's neighbours and lines that
-    /// only touch have none; and counting stops at the limit.
+    /// Pairs of lines whose boxes meet are a unit each, and a pair that
+    /// crosses four: a grid of 20 by 20 lines has 400 of those; parallel
+    /// lines apart, a polyline's neighbours and lines of no length none;
+    /// and counting stops at the limit.
     #[test]
-    fn crossings_are_counted_to_a_limit() {
+    fn pairs_of_lines_are_counted_to_a_limit() {
         let mut grid = Vec::new();
         for i in 0..20 {
             let i = f64::from(i);
             grid.push([-1.0, i, 21.0, i]);
             grid.push([i, -1.0, i, 21.0]);
         }
-        assert_eq!(count_crossings(&grid, 1e9), 400.0);
-        assert_eq!(count_crossings(&grid, 50.0), 50.0);
-        let parallel: Vec<[f64; 4]> = (0..40)
-            .map(|i| [0.0, f64::from(i), 9.0, f64::from(i) + 5.0])
+        assert_eq!(count_pairs(&grid, 0.0, 1e9), 400.0 * 4.0);
+        assert_eq!(count_pairs(&grid, 0.0, 50.0), 50.0);
+        // Thick lines side by side meet; thin ones that far apart don't.
+        let apart: Vec<[f64; 4]> = (0..40)
+            .map(|i| [0.0, f64::from(i) * 3.0, 9.0, f64::from(i) * 3.0])
             .collect();
-        assert_eq!(count_crossings(&parallel, 1e9), 0.0);
+        assert_eq!(count_pairs(&apart, 0.0, 1e9), 0.0);
+        assert_eq!(count_pairs(&apart, 1.5, 1e9), 39.0);
+        // A fan from one point crosses nowhere, and its lines' boxes meet.
+        let fan: Vec<[f64; 4]> = (0..40)
+            .map(|i| {
+                let a = f64::from(i) * 0.01;
+                [0.0, 0.0, 100.0 * a.cos(), 100.0 * a.sin()]
+            })
+            .collect();
+        assert_eq!(count_pairs(&fan, 0.0, 1e9), 40.0 * 39.0 / 2.0);
         let polyline: Vec<[f64; 4]> = (0..40)
             .map(|i| {
                 [
@@ -1015,14 +1059,20 @@ mod tests {
                 ]
             })
             .collect();
-        assert_eq!(count_crossings(&polyline, 1e9), 0.0);
+        assert_eq!(count_pairs(&polyline, 0.0, 1e9), 0.0);
         // A few lines are not counted at all, nor are lines of no length
         // (16 384 `close`s of a path at its start).
-        assert_eq!(count_crossings(&grid[..10], 1e9), 0.0);
+        assert_eq!(count_pairs(&grid[..10], 0.0, 1e9), 0.0);
         assert_eq!(
-            count_crossings(&vec![[3.0, 4.0, 3.0, 4.0]; 16384], 10.0),
+            count_pairs(&vec![[3.0, 4.0, 3.0, 4.0]; 16384], 0.0, 10.0),
             0.0
         );
+        // Lines that need more telling apart than there is time for are the
+        // worst.
+        let stacked: Vec<[f64; 4]> = (0..4000)
+            .map(|i| [0.0, 0.0, 10.0, f64::from(i % 7) * 1e-9])
+            .collect();
+        assert_eq!(count_pairs(&stacked, 0.0, 77.0), 77.0);
     }
 
     /// How long a path is, at most (a dashed stroke is charged by it): the

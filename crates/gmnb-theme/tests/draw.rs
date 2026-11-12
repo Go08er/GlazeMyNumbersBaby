@@ -1112,12 +1112,44 @@ fn a_path_that_crosses_itself_is_charged_by_its_crossings() {
         )
         .unwrap_err(),
     );
+    // ... and lines that cross nowhere but lie across each other: a fan of
+    // thick lines from one point (8000 of them took the software renderer
+    // 1.9 s), arches of one span with short lines through their crowns,
+    // which cross the curves where the control points joined don't (3000
+    // of each took it 3.2 s), concentric circles with radial lines.
+    over(
+        cost(
+            "local n = 1000 local p = gmnb.path() for i = 0, n - 1 do local a = i / n * 2 * math.pi \
+                 p:move_to(300, 300) p:line_to(300 + 280 * math.cos(a), 300 + 280 * math.sin(a)) end \
+             draw:stroke(p, 2, '#ff000080')",
+        )
+        .unwrap_err(),
+    );
+    over(
+        cost(
+            "local n = 3000 local p = gmnb.path() \
+             for i = 0, n - 1 do p:move_to(100, 400) p:quad_to(300, i * 0.01, 500, 400) end \
+             for i = 0, n - 1 do local x = 290 + (i / n) * 20 p:move_to(x, 195) p:line_to(x + 0.01, 225) end \
+             draw:stroke(p, 1, '#ff000080')",
+        )
+        .unwrap_err(),
+    );
+    over(
+        cost(
+            "local n = 3000 local p = gmnb.path() for i = 1, n do p:circle(300, 300, i * 280 / n) end \
+             for i = 0, n - 1 do local a = i / n * 2 * math.pi \
+                 p:move_to(300 + 10 * math.cos(a), 300 + 10 * math.sin(a)) p:line_to(300 + 270 * math.cos(a), 300 + 270 * math.sin(a)) end \
+             draw:stroke(p, 1, '#ff000080')",
+        )
+        .unwrap_err(),
+    );
     // What doesn't cross is as before, however many lines: a sine of 16 000,
-    // a regular polygon of 5000 corners, a thousand parallel lines, scanlines.
+    // a regular polygon of 5000 corners, a thousand parallel lines, scanlines, a sunburst of 300 rays.
     for body in [
         "local p = gmnb.path():move_to(0, 300) for i = 1, 16000 do p:line_to(i * 0.045, 300 + 100 * math.sin(i * 0.01)) end draw:stroke(p, 2, '#fff')",
         "local p = gmnb.path():move_to(500, 300) for i = 1, 5000 do local a = i / 5000 * 2 * math.pi p:line_to(300 + 200 * math.cos(a), 300 + 200 * math.sin(a)) end p:close() draw:fill(p, '#fff') draw:stroke(p, 2, '#000')",
         "local p = gmnb.path() for i = 1, 1000 do p:move_to(0, i * 0.5) p:line_to(700, i * 0.5 + 100) end draw:stroke(p, 1, '#fff')",
+        "local n = 300 local p = gmnb.path() for i = 0, n - 1 do local a = i / n * 2 * math.pi p:move_to(300, 300) p:line_to(300 + 280 * math.cos(a), 300 + 280 * math.sin(a)) end draw:stroke(p, 2, '#fff')",
         "local p = gmnb.path() for i = 1, 2160 do p:move_to(0, i * 0.3) p:line_to(700, i * 0.3) end draw:stroke(p, 0.25, '#fff')",
     ] {
         let c = cost(body).unwrap();

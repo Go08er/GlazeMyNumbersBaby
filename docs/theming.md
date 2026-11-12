@@ -1705,9 +1705,13 @@ drawn. A dashed stroke is also charged for each of its dashes, whatever
 they cover (the toolkit's stroker makes a shape of each, and shapes that
 cross cost more than their number: a zigzag of 2000 lines dashed 0.5 on,
 0.5 off was 14 million of them, a minute of the software renderer). So is
-a path that crosses itself, for each crossing (a star of 8000 corners, each
-joined to the one almost opposite, has 16 million: 12 s stroked, 1.5 s
-filled). A frame has 1000 points for each 760 × 640 of what its layer is
+a path whose lines lie across each other, for each pair whose boxes meet
+and more for each pair that crosses (a star of 8000 corners, each joined to
+the one almost opposite, has 16 million crossings: 12 s stroked, 1.5 s
+filled; 8000 thick lines from one point, which cross nowhere, 1.9 s). A
+path whose lines are too many to tell apart in a couple of milliseconds
+(some 1500 that all lie across each other) is charged as the dearest. A
+frame has 1000 points for each 760 × 640 of what its layer is
 charged over (its own area; a keypad's or a readout's, the window's too,
 as below), and never fewer than 1000 (a small layer, or one not yet sized,
 spends little anyway: what it draws is charged only where it can be
@@ -1742,7 +1746,7 @@ itself, takes seconds a frame at the cap for blurs and shadows.)
 | Text and glyphs (their box: the font's size by the text's bytes, three sizes tall; a glyph, the readout's whole value); with a gradient | 7; 23 + the paint's | |
 | `push_opacity`; `push_mask`; `push_blend` (all that can be seen) | 13; 26; 48 | 76; 38; 20 |
 | A dash of a dashed `draw:stroke` (an on-interval of the pattern, however little of the layer it covers; the pattern's length over the path's: a path's points and control points joined, a circle or arc as its whole) | 0.2 each, not by area | 5000 |
-| Each crossing of a filled or stroked path's lines with each other (the lines of a curve are its control points joined; a polyline's neighbours don't cross) | 0.0015 filled; 0.01 stroked, not by area | 666 000; 100 000 |
+| A filled or stroked path's lines (a curve's control points joined) that lie across each other: each pair whose boxes meet (a stroke's grown by half its width; a line and the one it is joined to are no pair), and four for each pair that crosses; not by area | 0.002 a unit stroked; 0.00035 filled | 500 000; 2 800 000 units |
 | `push_blur(r)` | 140 + 1.6 r (0 for no blur) | 3 at 100, 7 at 1 |
 | `push_shadow`: each shadow of blur b | 71 + 0.87 b; 13 unblurred | 6 at 100 |
 

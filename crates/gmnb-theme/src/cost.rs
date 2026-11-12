@@ -86,12 +86,15 @@ const TILE: f64 = 5.5;
 /// of parallel lines: 15 s and 2.1 GB). However much of it lies beyond
 /// the layer, so this is not by what can be seen.
 const DASH: f64 = 0.2;
-/// Points for each crossing of a path's lines with each other (the
-/// tessellator spends time on each: 16 million of them, the lines of a
-/// star of 8000 corners, took the software renderer 12 s stroked and 1.5 s
-/// filled, 0.75 µs and 0.1 µs each).
-const CROSSING_STROKE: f64 = 0.01;
-const CROSSING_FILL: f64 = 0.0015;
+/// Points for each unit of a path's strain (`path::strain`: a pair of its
+/// lines whose boxes meet is one, and a pair that crosses four). The
+/// tessellator spends time on each crossing: 16 million of them, the lines
+/// of a star of 8000 corners, took the software renderer 12 s stroked and
+/// 1.5 s filled, 0.75 µs and 0.1 µs each. (A fan of 8000 thick lines from
+/// one point, which cross nowhere, took it 1.9 s; 3000 arches of one span
+/// and as many short lines through their crowns, 3.2 s.)
+const STRAIN_STROKE: f64 = 0.002;
+const STRAIN_FILL: f64 = 0.00035;
 const BORDER: f64 = 1.3;
 /// `draw:shadow`.
 const BOX_SHADOW: f64 = 4.3;
@@ -394,7 +397,7 @@ impl Meter {
                 (masked(p), Some([x - r, y - r, x + r, y + r]))
             }
             Op::Fill { path, paint: p, .. } => {
-                self.cross(path, CROSSING_FILL)?;
+                self.cross(path, 0.0, STRAIN_FILL)?;
                 (
                     masked(p),
                     crate::path::bounds(path).map(|b| b.map(f64::from)),
@@ -406,7 +409,7 @@ impl Meter {
                 paint: p,
             } => {
                 self.spent += DASH * dashes(stroke, crate::path::length(path));
-                self.cross(path, CROSSING_STROKE)?;
+                self.cross(path, f64::from(stroke.width) / 2.0, STRAIN_STROKE)?;
                 (
                     masked(p),
                     crate::path::bounds(path)
@@ -462,12 +465,13 @@ impl Meter {
         self.charge(weight, b)
     }
 
-    /// A path about to be filled or stroked: its crossings charged at
-    /// `price` each, counted as far as the frame has points for. `Err`:
-    /// the frame is past its allowance (by that share).
-    fn cross(&mut self, path: &crate::path::Path, price: f64) -> Result<(), f64> {
+    /// A path about to be filled or stroked (`half`: half the stroke's
+    /// width): its strain charged at `price` a unit, counted as far as the
+    /// frame has points for. `Err`: the frame is past its allowance (by
+    /// that share).
+    fn cross(&mut self, path: &crate::path::Path, half: f64, price: f64) -> Result<(), f64> {
         let room = ((self.allowance - self.spent) / price).max(0.0) + 1.0;
-        self.spent += price * crate::path::crossings(path, room);
+        self.spent += price * crate::path::strain(path, half, room);
         if self.spent > self.allowance {
             return Err(self.spent / self.allowance);
         }
