@@ -582,6 +582,40 @@ fn settings_fits_the_least_window() {
     fits(&display, "300x400");
 }
 
+/// R5-C-3: a slider's row (Volume, Background opacity) in the least
+/// window left its text some 40 px beside a slider that asked for 160:
+/// "Vo-lu-me", a subtitle a few letters wide, the row 260 px high. The
+/// slider asks for less there; the row (Volume's: `GMNB_FOCUS` says where
+/// it is) is no more than 150 px high, in the base look and each built-in
+/// theme.
+#[test]
+fn a_sliders_row_leaves_its_text_room_in_the_least_window() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    const THEME: &str = r#"return { api = 1, name = "Plain" }"#;
+    let mut bad = Vec::new();
+    for theme in ["base", "aurora", "sprinkles", "swirls"] {
+        let env = [
+            ("GMNB_THEME", theme),
+            ("GMNB_PREFS", "1"),
+            ("GMNB_SIZE", "300x700"),
+            ("GMNB_FOCUS", "wc-sound-volume"),
+        ];
+        let err = run(&display, THEME, &env, 3_500);
+        let height = err
+            .lines()
+            .find_map(|l| l.strip_prefix("GMNB_FOCUS: wc-sound-volume at "))
+            .and_then(|rest| rest.split_whitespace().nth(3)?.parse::<f32>().ok());
+        match height {
+            Some(h) if h <= 150.0 => {}
+            other => bad.push(format!("{theme}: the Volume row is {other:?} px high")),
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
 /// Settings opened at `size` in the base look and each built-in theme,
 /// and nothing in it wider than the window.
 fn fits(display: &Path, size: &str) {

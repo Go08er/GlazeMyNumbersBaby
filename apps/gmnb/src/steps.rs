@@ -20,6 +20,8 @@
 //! - `press:<css class>`: the first button with that class in the window
 //!   or its dialog pressed (activated, as a key on it would: Settings'
 //!   `wc-open-themes`, `wc-restore-themes`);
+//! - `choose:<id>`: the theme's row in Settings' list chosen, as a click
+//!   on it chooses it (`base`: the base look), and saved as that is;
 //! - `themes`: what Settings lists, a line on stderr: `themes: ` and each
 //!   row's theme (`base` for the base look), `*` after one marked "Comes
 //!   with GMNB"; then `restore shown` or `restore hidden`;
@@ -51,6 +53,7 @@ enum Step {
     Settings,
     Close,
     Press(String),
+    Choose(String),
     Themes,
     Slide(String, Vec<f64>),
     Quit,
@@ -74,6 +77,7 @@ fn parse(spec: &str) -> VecDeque<Step> {
                 "wait" => Step::Wait(arg.trim().parse().ok()?),
                 "theme" => Step::Theme(arg.trim().to_string()),
                 "press" => Step::Press(arg.trim().to_string()),
+                "choose" => Step::Choose(arg.trim().to_string()),
                 "slide" => {
                     let (class, values) = arg.split_once(':')?;
                     let values: Option<Vec<f64>> =
@@ -157,6 +161,30 @@ fn next(win: Rc<Window>, steps: std::cell::RefCell<VecDeque<Step>>, gap: u64) {
                     button.activate();
                 }
                 None => eprintln!("GMNB_STEPS: no button with class {class}"),
+            }
+        }
+        Step::Choose(id) => {
+            // The row of Settings' list that names the theme, chosen as a
+            // click on it chooses it (`base`: the base look).
+            let all = widgets(&win.widget().upcast());
+            let check = all
+                .iter()
+                .find(|w| w.has_css_class("wc-theme-list"))
+                .and_then(|list| {
+                    widgets(list)
+                        .into_iter()
+                        .find(|w| w.is::<adw::ActionRow>() && w.widget_name() == id)
+                })
+                .and_then(|row| {
+                    widgets(&row)
+                        .into_iter()
+                        .find(|w| w.is::<gtk::CheckButton>())
+                });
+            match check {
+                Some(check) => {
+                    check.activate();
+                }
+                None => eprintln!("GMNB_STEPS: no theme row {id}"),
             }
         }
         Step::Themes => {
