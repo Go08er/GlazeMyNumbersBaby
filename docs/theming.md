@@ -1703,7 +1703,19 @@ shadow's by its offset and three times its blur) when it is popped, and a
 `push_blend` for all that can be seen (the software renderer blends whole
 layers, whatever is in them); what is drawn inside is charged as well. A
 picture drawn at all is also charged its own pixels, however small it is
-drawn. A dashed stroke is also charged for each of its dashes, whatever
+drawn (a tiled one too: the toolkit makes a picture of the whole of what it
+repeats, 190 ms for 50 tiles of 10 × 10 px of a 2048 × 2048 still). A
+`draw:shadow` is also charged for its blur, however little it covers (200 of
+4 × 4 px blurred by 100 took 1.7 s; 20 inset ones over the window, 2.5 s). A
+clip with rounded corners, or turned, adds a quarter of the cost of what is
+drawn inside it for each such clip open (a rectangle over the window, drawn
+inside 30 of them, took 8 times as long). Text is charged for the fonts it
+is set in: the first 8 of a frame (a size, weight, slant, variations or
+family list each makes one; `draw:text_size` counts as well) are free, each
+further one is 45 points (4.5 ms: 64 texts of 64 weights took 290 ms a
+frame, however little each covered). A `push_blend` is charged by its mode
+(hue, saturation, color and luminosity, 190; color-dodge, color-burn and
+soft-light, 100; the rest, 48). A dashed stroke is also charged for each of its dashes, whatever
 they cover (the toolkit's stroker makes a shape of each, and shapes that
 cross cost more than their number: a zigzag of 2000 lines dashed 0.5 on,
 0.5 off was 14 million of them, a minute of the software renderer). So is
@@ -1742,11 +1754,12 @@ itself, takes seconds a frame at the cap for blurs and shadows.)
 | A rectangle in a colour; a linear gradient of 2 stops (each stop past 2, 2.5 more); a radial gradient; a conic one | 1.3; 2.2; 52; 130 | 770; 450; 19; 7 |
 | A rounded rectangle | its paint's + 0.3 | |
 | A path filled or stroked, a circle (a mask on GL): in a colour; with a gradient | 12.7 + the paint's; 24 + the paint's | 71; 38 (linear) |
-| A picture scaled into its rectangle (a still, a frame of an animation, a field); tiled | 8.2; 5.5 | 120; 180 |
+| A picture scaled into its rectangle (a still, a frame of an animation, a field); tiled | 8.2; 5.5 (and 7 for each 760 × 640 of a tiled picture's own pixels) | 120; 180 |
 | A picture's own pixels, per 760 × 640 of them: smooth and clean (`"trilinear"`); smooth or hard | 43; 16 | a 2048 × 2048 still: 2; 6 |
-| A border; `draw:shadow`; a clip with rounded corners | 1.3; 4.3; 0.9 | |
+| A border; `draw:shadow`; a clip with rounded corners | 1.3; 4.3 (and 0.3 × blur^1.45 for each, not by area: 8 at 10, 40 at 30, 240 at 100); 0.9 (and each rounded or turned clip open adds a quarter to what is drawn inside) | |
 | Text and glyphs (their box: the font's size by the text's bytes, three sizes tall; a glyph, the readout's whole value); with a gradient | 7; 23 + the paint's | |
-| `push_opacity`; `push_mask`; `push_blend` (all that can be seen) | 13; 26; 48 | 76; 38; 20 |
+| A font past the frame's first 8 (`draw:text`, `draw:text_size`; not by area) | 45 each | 22 more |
+| `push_opacity`; `push_mask`; `push_blend` (all that can be seen; 190 for hue, saturation, color and luminosity, 100 for color-dodge, color-burn and soft-light) | 13; 26; 48 | 76; 38; 20 |
 | A dash of a dashed `draw:stroke` (an on-interval of the pattern, however little of the layer it covers; the pattern's length over the path's: a path's points and control points joined, a circle or arc as its whole) | 0.2 each, not by area | 5000 |
 | A filled or stroked path's lines (a curve's control points joined) that lie across each other: each pair whose boxes meet (a stroke's grown by half its width; a line and the one it is joined to are no pair), and four for each pair that crosses; not by area | 0.002 a unit stroked; 0.00035 filled | 500 000; 2 800 000 units |
 | `push_blur(r)` | 140 + 1.6 r (0 for no blur) | 3 at 100, 7 at 1 |

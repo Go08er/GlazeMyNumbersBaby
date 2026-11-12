@@ -21,7 +21,7 @@
 //! of the whole window at that size costs at most about 100 ms or 256 MB;
 //! a larger window, more.
 
-use crate::draw::{Filter, Op, Rect, Stroke};
+use crate::draw::{BlendMode, Filter, Op, Rect, Stroke};
 use crate::types::{GradientKind, Paint, Shadow};
 
 /// The area the weights are of: the window they were measured in.
@@ -78,6 +78,11 @@ fn source(filter: Filter) -> f64 {
     }
 }
 const TILE: f64 = 5.5;
+/// And for each [`REFERENCE_AREA`] of the picture's own pixels, however
+/// little of the layer it covers: the software renderer makes a surface of
+/// the whole picture each time it is repeated (50 tiles of 10 × 10 px of a
+/// 2048 × 2048 still: 190 ms, for nothing the area charged; 200: 750 ms).
+const TILE_SOURCE: f64 = 7.0;
 /// Points for each dash of a dashed stroke: the toolkit's stroker makes a
 /// shape of every dash (and of its round caps), and the shapes of a path
 /// that crosses itself cost it more than their number (the software
@@ -96,14 +101,53 @@ const DASH: f64 = 0.2;
 const STRAIN_STROKE: f64 = 0.002;
 const STRAIN_FILL: f64 = 0.00035;
 const BORDER: f64 = 1.3;
-/// `draw:shadow`.
+/// `draw:shadow`, over the whole layer.
 const BOX_SHADOW: f64 = 4.3;
+/// And for each one seen at all, by its blur in the layer's pixels, however
+/// little it covers: the software renderer blurs a surface of its box
+/// grown by the blur, once for each shadow, and that takes more than the
+/// area it covers says (200 shadows of 4 × 4 px, blurred by 100: 1.7 s;
+/// inset ones over the window, 12 ms each, 25 when fully rounded, for the
+/// 0.43 the area charged). Measured over boxes of 4 to 760 px, outset and
+/// inset, the dearest: 0.3 ms for a blur of 10, 3.5 for 30, 20 to 25 for
+/// 100 (10 points a millisecond).
+fn box_shadow_blur(blur: f64) -> f64 {
+    if blur > 0.0 {
+        0.3 * blur.powf(1.45)
+    } else {
+        0.0
+    }
+}
+/// What each open clip that is not a plain box (rounded, or turned) adds to
+/// the cost of what is drawn inside, as a share of it: the software
+/// renderer takes each as a mask of its own, and a rectangle over the
+/// window drawn inside 30 of them took 8 times what it takes inside one
+/// (30 turned, rounded clips and 600 window-sized rectangles: 800 ms for
+/// the 76 ms the area charged).
+const CLIP_DEPTH: f64 = 0.25;
+/// Fonts a frame may set text in (or measure it in) before each further
+/// one is charged: the toolkit finds, instances and loads a font for each
+/// size, weight and variation the first time it is asked for it, 1.4 to 4.5
+/// ms, however little the text covers (64 calls with a weight each: 290 ms
+/// a frame for a theme whose weights move; the area charged nothing).
+const FREE_FONTS: usize = 8;
+/// Points for each font past [`FREE_FONTS`] (4.5 ms).
+const FONT: f64 = 45.0;
 /// A clip with rounded corners.
 const ROUNDED_CLIP: f64 = 0.9;
 /// The effects: what they make and hold beside what is drawn in them.
 const OPACITY: f64 = 13.0;
 const MASK: f64 = 26.0;
-const BLEND: f64 = 48.0;
+/// A blend, by its mode (the whole window, four blends each: multiply 6.4
+/// ms, screen 5.5, overlay 6.6, color-dodge 10, soft-light 9.8, color 10.5,
+/// luminosity 11.5, saturation 13.6, hue 19).
+fn blend_weight(mode: BlendMode) -> f64 {
+    match mode {
+        BlendMode::Hue | BlendMode::Saturation | BlendMode::Color | BlendMode::Luminosity => 190.0,
+        BlendMode::ColorDodge | BlendMode::ColorBurn | BlendMode::SoftLight => 100.0,
+        _ => 48.0,
+    }
+}
 
 /// `push_blur`: the software renderer's blur costs about the same whatever
 /// its radius (14 ms for the window at 1, 30 at 100); GL's grows with it.
@@ -152,6 +196,14 @@ impl Affine {
             e,
             f,
         ];
+    }
+
+    /// Whether it turns or slants (a box stays a box through anything
+    /// else, a quarter turn too).
+    fn turned(&self) -> bool {
+        let [a, b, c, d, ..] = self.0;
+        let small = |x: f64, y: f64| x.abs() <= 1e-9 * (1.0 + y.abs());
+        !((small(b, a) && small(c, d)) || (small(a, b) && small(d, c)))
     }
 
     /// How much it enlarges, at most: a blur's radius in the layer's
@@ -230,6 +282,8 @@ struct Level {
     /// A clip: what is drawn inside reaches no further (in the layer's
     /// coordinates), and its own area is what a rounded one costs.
     clip: Option<[f64; 4]>,
+    /// A clip that is not a plain box on the layer: rounded, or turned.
+    mask: bool,
     /// The box around what was drawn inside, in the layer's coordinates.
     content: Option<[f64; 4]>,
 }
@@ -249,7 +303,13 @@ pub(crate) struct Meter {
     spent: f64,
     /// Points for the picture the next operation draws, by its own size.
     picture: f64,
+    /// The fonts text has been set or measured in this frame.
+    fonts: Vec<FontKey>,
 }
+
+/// What the toolkit makes a font of: a family list, a size, a weight, a
+/// slant and the variations.
+type FontKey = (Vec<String>, u32, u32, bool, Vec<(String, u32)>);
 
 impl Default for Meter {
     fn default() -> Self {
@@ -292,13 +352,46 @@ impl Meter {
             allowance: POINTS * scale * area(Some(visible)).max(REFERENCE_AREA) / REFERENCE_AREA,
             spent: 0.0,
             picture: 0.0,
+            fonts: Vec::new(),
         }
+    }
+
+    /// Text is about to be set (or measured) in `font`: the first few
+    /// fonts of a frame are free, each past them is charged. `Err`: the
+    /// frame is past its allowance (by that share).
+    pub(crate) fn font(&mut self, font: &crate::types::Font) -> Result<(), f64> {
+        let key: FontKey = (
+            font.family.clone(),
+            font.size.to_bits(),
+            font.weight.to_bits(),
+            font.italic,
+            font.variations
+                .iter()
+                .map(|(tag, v)| (tag.clone(), v.to_bits()))
+                .collect(),
+        );
+        if self.fonts.contains(&key) {
+            return Ok(());
+        }
+        self.fonts.push(key);
+        if self.fonts.len() > FREE_FONTS {
+            self.spent += FONT;
+            if self.spent > self.allowance {
+                return Err(self.spent / self.allowance);
+            }
+        }
+        Ok(())
     }
 
     /// The next operation draws a picture of `pixels` of its own, scaled
     /// with `filter`.
     pub(crate) fn picture(&mut self, pixels: f64, filter: Filter) {
         self.picture = source(filter) * pixels / REFERENCE_AREA;
+    }
+
+    /// The next operation repeats a picture of `pixels` of its own.
+    pub(crate) fn tiled(&mut self, pixels: f64) {
+        self.picture = TILE_SOURCE * pixels / REFERENCE_AREA;
     }
 
     /// What the frame has spent, as a share of its allowance.
@@ -322,7 +415,9 @@ impl Meter {
     }
 
     fn charge(&mut self, weight: f64, b: Option<[f64; 4]>) -> Result<(), f64> {
-        self.spent += weight * area(b) / REFERENCE_AREA;
+        // Inside clips that are masks, everything is drawn through each.
+        let masks = self.levels.iter().filter(|l| l.mask).count() as f64;
+        self.spent += weight * (1.0 + CLIP_DEPTH * masks) * area(b) / REFERENCE_AREA;
         if self.spent > self.allowance {
             return Err(self.spent / self.allowance);
         }
@@ -357,7 +452,11 @@ impl Meter {
                 // Nothing drawn inside reaches past it; a rounded one
                 // costs its own area.
                 self.charge(weight, clip.and_then(|c| self.seen_clip(c)))?;
+                let mask = radius.is_some() || self.m.turned();
                 self.open(0.0, 0.0, Some(clip.unwrap_or([0.0; 4])), false);
+                if let Some(level) = self.levels.last_mut() {
+                    level.mask = mask;
+                }
                 return Ok(());
             }
             Op::PushOpacity(_) => {
@@ -382,7 +481,11 @@ impl Meter {
                 // Two parts, each ended by a pop: the effect is charged
                 // when the second ends, for both.
                 let blend = matches!(op, Op::PushBlend(_));
-                self.open(if blend { BLEND } else { MASK }, 0.0, None, blend);
+                let weight = match op {
+                    Op::PushBlend(mode) => blend_weight(*mode),
+                    _ => MASK,
+                };
+                self.open(weight, 0.0, None, blend);
                 self.open(0.0, 0.0, None, false);
                 return Ok(());
             }
@@ -421,13 +524,17 @@ impl Meter {
             }
             Op::Shadow {
                 rect, shadow: s, ..
-            } => (
-                BOX_SHADOW,
-                Some(grow(
+            } => {
+                let b = grow(
                     rect_box(rect),
                     f64::from(s.x.abs().max(s.y.abs()) + s.spread.abs() + 3.0 * s.blur),
-                )),
-            ),
+                );
+                // Its blur, in the layer's pixels, if it is seen at all.
+                if self.seen(b).is_some() {
+                    self.spent += box_shadow_blur(f64::from(s.blur) * self.m.magnitude());
+                }
+                (BOX_SHADOW, Some(b))
+            }
             Op::Text {
                 text,
                 at,
@@ -496,6 +603,7 @@ impl Meter {
             reach,
             whole,
             clip,
+            mask: false,
             content: None,
         });
     }

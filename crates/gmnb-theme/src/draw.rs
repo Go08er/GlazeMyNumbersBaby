@@ -1666,9 +1666,12 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     };
                     drop(pictures);
                     // What it costs: by what it covers, and (scaled) by its
-                    // own pixels. A tile is drawn at its own size.
+                    // own pixels. A tile is drawn at its own size, but the
+                    // toolkit makes a picture of the whole of what it repeats.
                     if let Op::Image { filter, .. } | Op::Animation { filter, .. } = &op {
                         rec.meter.picture(pixels, *filter);
+                    } else if let Op::Tile { .. } = &op {
+                        rec.meter.tiled(pixels);
                     }
                     rec.push(name, op)
                 },
@@ -1943,6 +1946,10 @@ fn text_and_font(
             font
         }
     };
+    // Its font, which the toolkit may have to make.
+    if let Err(share) = rec.meter.font(&font) {
+        return Err(rec.over(what, too_dear(share)));
+    }
     Ok((text.to_string(), font))
 }
 
