@@ -1719,7 +1719,7 @@ is set in: the first 8 of a frame (a size, weight, slant, variations or
 family list each makes one; `draw:text_size` counts as well) are free, each
 further one is 45 points (4.5 ms: 64 texts of 64 weights took 290 ms a
 frame, however little each covered), and for each character a font has not
-yet had in the frame (0.35 points: the toolkit makes a glyph of it, 30 µs;
+yet had in the frame, at each scale and turn (0.35 points: the toolkit makes a glyph of it, 30 µs;
 64 texts of 85 different ideographs, in sizes that change each frame, took
 170 ms) and for each script that needs a font of its own (20 points: ideographs,
 Hangul, emoji, symbols, Arabic's presentation forms, the historic scripts;
@@ -1772,7 +1772,7 @@ itself, takes seconds a frame at the cap for blurs and shadows.)
 | A border; `draw:shadow`; a clip with rounded corners | 1.3; 4.3 (and 0.3 × blur^1.45 for each, not by area: 8 at 10, 40 at 30, 240 at 100; blurred by 3 or more, 0.0007 × the radius squared, 63 at 300); 0.9 (and each rounded or turned clip open adds a quarter to what is drawn inside) | |
 | Text and glyphs (their box: the font's size by the text's bytes, three sizes tall; a glyph, the readout's whole value); with a gradient | 7; 23 + the paint's | |
 | A font past the frame's first 8 (`draw:text`, `draw:text_size`; not by area) | 45 each | 21 more |
-| A character a font has not had yet in the frame; a script with a font of its own, in a font (not by area) | 0.35; 20 | |
+| A character a font has not had yet in the frame, at each scale and turn; a script with a font of its own, in a font (not by area) | 0.35; 20 | |
 | `push_opacity`; `push_mask`; `push_blend` (all that can be seen; 190 for hue, saturation, color and luminosity, 100 for color-dodge, color-burn and soft-light; a mask of `"inverted-alpha"`, 190) | 13; 26; 48 | 76; 38 (5 inverted); 20 |
 | A dash of a dashed `draw:stroke` (an on-interval of the pattern, however little of the layer it covers; the pattern's length over the path's: a path's points and control points joined, a circle or arc as its whole) | 0.2 each, not by area | 5000 |
 | A filled or stroked path's lines (a curve's control points joined) that lie across each other: each pair whose boxes meet (a stroke's grown by half its width; a line and the one it is joined to are no pair), and four for each pair that crosses; not by area | 0.002 a unit stroked; 0.00035 filled | 500 000; 2 800 000 units |

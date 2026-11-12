@@ -155,10 +155,11 @@ const FREE_FONTS: usize = 8;
 /// Points for each font past [`FREE_FONTS`] (4.5 ms).
 const FONT: f64 = 45.0;
 /// Points for each character the frame sets in a font that it hasn't set in
-/// that font yet, however little of the layer it covers: the toolkit makes
-/// the glyph for it, 30 µs a glyph measured, a frame's cost where its
-/// fonts move (64 texts of 85 different CJK characters, in sizes that
-/// change each frame: 170 ms for the 2.4% the area charged).
+/// that font at that scale and turn yet, however little of the layer it
+/// covers: the toolkit makes the glyph for it, 30 µs a glyph measured, a
+/// frame's cost where its fonts move (64 texts of 85 different CJK
+/// characters, in sizes that change each frame: 170 ms for the 2.4% the
+/// area charged; the same text at 64 scales, 69 ms).
 const GLYPH: f64 = 0.35;
 /// Points for each script the frame sets text of in a font that the toolkit
 /// has to find a font for (below), 2 ms measured: a text of a dozen scripts
@@ -372,8 +373,8 @@ pub(crate) struct Meter {
     /// The fonts text has been set or measured in this frame.
     fonts: Vec<FontKey>,
     /// The characters set or measured in each of them (by its place in
-    /// `fonts`), and their scripts.
-    chars: std::collections::HashSet<(usize, char)>,
+    /// `fonts`) at each scale and turn, and their scripts.
+    chars: std::collections::HashSet<(usize, char, [i32; 4])>,
     scripts: std::collections::HashSet<(usize, u32)>,
 }
 
@@ -453,8 +454,12 @@ impl Meter {
                 self.fonts.len() - 1
             }
         };
+        // A glyph is made for each size it is drawn at on the screen: the
+        // transform in force, to a thousandth.
+        let [a, b, c, d, ..] = self.m.0;
+        let at_scale = [a, b, c, d].map(|v| (v * 1000.0).round() as i32);
         for c in text.chars().filter(|c| !c.is_whitespace()) {
-            if self.chars.insert((at, c)) {
+            if self.chars.insert((at, c, at_scale)) {
                 self.spent += GLYPH;
                 let script = script(c);
                 if script != 0 && self.scripts.insert((at, script)) {

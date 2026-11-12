@@ -2795,6 +2795,21 @@ fn characters_and_scripts_are_charged_each_time_a_font_has_them_new() {
         ))
         .unwrap_err(),
     );
+    // ... or one text of them at 64 scales, or turns: a glyph for each.
+    over(
+        cost(&format!(
+            "{ideographs} local s = str(1) for i = 1, 64 do draw:save() draw:scale(1 + i * 0.01) \
+             draw:text(s, 0, 1, {{ size = 12 }}, '#fff') draw:restore() end"
+        ))
+        .unwrap_err(),
+    );
+    over(
+        cost(&format!(
+            "{ideographs} local s = str(1) for i = 1, 64 do draw:save() draw:rotate(i * 0.5) \
+             draw:text(s, 0, 1, {{ size = 12 }}, '#fff') draw:restore() end"
+        ))
+        .unwrap_err(),
+    );
     // ... or measured: the toolkit makes the glyph to say how wide it is.
     over(
         cost(&format!(
