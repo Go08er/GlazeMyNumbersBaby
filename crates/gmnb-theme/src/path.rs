@@ -377,9 +377,27 @@ struct Pen {
     cubic: Option<[f64; 2]>,
     quad: Option<[f64; 2]>,
     bounds: Option<[f64; 4]>,
+    /// The length of the path's points and control points joined in
+    /// order, plus an arc's whole ellipse: at least how long the path is.
+    length: f64,
+    /// The lines those are joined by (an arc: the box around where it
+    /// can go), if they are wanted ([`svg_edges`]).
+    edges: Option<Vec<[f64; 4]>>,
 }
 
 impl Pen {
+    /// The path goes on from the current point along `via` to `to`.
+    fn run(&mut self, via: &[[f64; 2]], to: [f64; 2]) {
+        let mut from = self.at;
+        for p in via.iter().chain([&to]) {
+            self.length += (p[0] - from[0]).hypot(p[1] - from[1]);
+            if let Some(edges) = self.edges.as_mut().filter(|e| e.len() < MAX_EDGES) {
+                edges.push([from[0], from[1], p[0], p[1]]);
+            }
+            from = *p;
+        }
+    }
+
     fn mark(&mut self, [x, y]: [f64; 2], grow: f64) {
         let b = self.bounds.get_or_insert([x, y, x, y]);
         *b = [
@@ -409,15 +427,29 @@ impl Pen {
                 }
                 p
             }
-            b'l' => pt(v[0], v[1]),
-            b'h' => [if rel { x0 + v[0] } else { v[0] }, y0],
-            b'v' => [x0, if rel { y0 + v[0] } else { v[0] }],
+            b'l' => {
+                let end = pt(v[0], v[1]);
+                self.run(&[], end);
+                end
+            }
+            b'h' => {
+                let end = [if rel { x0 + v[0] } else { v[0] }, y0];
+                self.run(&[], end);
+                end
+            }
+            b'v' => {
+                let end = [x0, if rel { y0 + v[0] } else { v[0] }];
+                self.run(&[], end);
+                end
+            }
             b'c' => {
                 let (c1, c2) = (pt(v[0], v[1]), pt(v[2], v[3]));
                 self.mark(c1, 0.0);
                 self.mark(c2, 0.0);
                 cubic = Some(c2);
-                pt(v[4], v[5])
+                let end = pt(v[4], v[5]);
+                self.run(&[c1, c2], end);
+                end
             }
             b's' => {
                 let c1 = self
@@ -427,13 +459,17 @@ impl Pen {
                 self.mark(c1, 0.0);
                 self.mark(c2, 0.0);
                 cubic = Some(c2);
-                pt(v[2], v[3])
+                let end = pt(v[2], v[3]);
+                self.run(&[c1, c2], end);
+                end
             }
             b'q' => {
                 let c = pt(v[0], v[1]);
                 self.mark(c, 0.0);
                 quad = Some(c);
-                pt(v[2], v[3])
+                let end = pt(v[2], v[3]);
+                self.run(&[c], end);
+                end
             }
             b't' => {
                 let c = self
@@ -441,7 +477,9 @@ impl Pen {
                     .map_or(self.at, |c| [2.0 * x0 - c[0], 2.0 * y0 - c[1]]);
                 self.mark(c, 0.0);
                 quad = Some(c);
-                pt(v[0], v[1])
+                let end = pt(v[0], v[1]);
+                self.run(&[c], end);
+                end
             }
             _ => {
                 // An arc: its radii, grown to reach from one end to the
@@ -468,6 +506,18 @@ impl Pen {
                     ));
                 }
                 grown = r;
+                // An arc is part of its ellipse, which is no longer than
+                // a circle of its larger radius's twice round.
+                self.length += std::f64::consts::TAU * r;
+                if let Some(edges) = self.edges.as_mut().filter(|e| e.len() < MAX_EDGES) {
+                    let b = [
+                        x0.min(end[0]) - r,
+                        y0.min(end[1]) - r,
+                        x0.max(end[0]) + r,
+                        y0.max(end[1]) + r,
+                    ];
+                    edges.extend(box_edges(b));
+                }
                 self.mark(self.at, 2.0 * r);
                 self.mark(end, 2.0 * r);
                 end
@@ -482,6 +532,7 @@ impl Pen {
     }
 
     fn close(&mut self) {
+        self.run(&[], self.start);
         self.at = self.start;
         self.cubic = None;
         self.quad = None;
@@ -490,7 +541,30 @@ impl Pen {
 
 /// [`svg_reach`], and the box around the path's points: `(x0, y0, x1, y1)`.
 pub fn svg_shape(d: &str) -> Result<(usize, f64, Option<[f64; 4]>), String> {
-    let mut pen = Pen::default();
+    svg_walk(d, false).map(|(count, reach, pen)| (count, reach, pen.bounds))
+}
+
+/// How long SVG path data is, at most (its points and control points
+/// joined in order, an arc counted as its whole ellipse): what a dashed
+/// stroke of it is charged by.
+pub fn svg_length(d: &str) -> Result<f64, String> {
+    svg_walk(d, false).map(|(_, _, pen)| pen.length)
+}
+
+/// The lines SVG path data is joined of, for [`crossings`]: each
+/// curve's control points joined, an arc as the box around where it can go.
+fn svg_edges(d: &str) -> Vec<[f64; 4]> {
+    svg_walk(d, true)
+        .ok()
+        .and_then(|(_, _, pen)| pen.edges)
+        .unwrap_or_default()
+}
+
+fn svg_walk(d: &str, edges: bool) -> Result<(usize, f64, Pen), String> {
+    let mut pen = Pen {
+        edges: edges.then(Vec::new),
+        ..Pen::default()
+    };
     let b = d.as_bytes();
     let mut i = 0;
     let mut count = 0usize;
@@ -667,7 +741,7 @@ pub fn svg_shape(d: &str) -> Result<(usize, f64, Option<[f64; 4]>), String> {
     if count == 0 {
         return Err("empty path data".into());
     }
-    Ok((count, furthest, pen.bounds))
+    Ok((count, furthest, pen))
 }
 
 /// The box around a path's points and control points, in its own units:
@@ -705,6 +779,224 @@ pub fn bounds(path: &Path) -> Option<[f32; 4]> {
     b
 }
 
+/// How long a path is, at most, in its own units: its points and control
+/// points joined in order (a curve is no longer than the lines through
+/// its control points), a circle or an arc as its whole ellipse. A dashed
+/// stroke's dashes are as many as this is long over the dash's period.
+pub fn length(path: &Path) -> f64 {
+    let (mut at, mut start) = ([0.0f64; 2], [0.0f64; 2]);
+    let mut total = 0.0;
+    let mut go = |at: &mut [f64; 2], p: [f32; 2]| {
+        let p = p.map(f64::from);
+        total += (p[0] - at[0]).hypot(p[1] - at[1]);
+        *at = p;
+    };
+    let mut sum = 0.0;
+    for s in &path.segments {
+        match s {
+            Segment::MoveTo(x, y) => {
+                at = [f64::from(*x), f64::from(*y)];
+                start = at;
+            }
+            Segment::LineTo(x, y) => go(&mut at, [*x, *y]),
+            Segment::QuadTo(a, b, x, y) => {
+                go(&mut at, [*a, *b]);
+                go(&mut at, [*x, *y]);
+            }
+            Segment::CurveTo(a, b, c, d, x, y) => {
+                go(&mut at, [*a, *b]);
+                go(&mut at, [*c, *d]);
+                go(&mut at, [*x, *y]);
+            }
+            Segment::Close => {
+                go(&mut at, [start[0] as f32, start[1] as f32]);
+            }
+            Segment::Rect(_, _, w, h) | Segment::RoundedRect(_, _, w, h, _) => {
+                sum += 2.0 * f64::from(*w + *h);
+            }
+            Segment::Circle(_, _, r) => sum += std::f64::consts::TAU * f64::from(*r),
+            Segment::Svg(d) => sum += svg_length(d).unwrap_or(0.0),
+        }
+    }
+    total + sum
+}
+
+/// The most edges one path is taken to have when its crossings are
+/// counted (more are left out).
+const MAX_EDGES: usize = 70_000;
+
+/// The four sides of a box `(x0, y0, x1, y1)`.
+fn box_edges([x0, y0, x1, y1]: [f64; 4]) -> [[f64; 4]; 4] {
+    [
+        [x0, y0, x1, y0],
+        [x1, y0, x1, y1],
+        [x1, y1, x0, y1],
+        [x0, y1, x0, y0],
+    ]
+}
+
+/// The lines a path is joined of: a line is itself, a curve its control
+/// points joined, a rectangle, a rounded one or a circle the box around it,
+/// SVG data as [`svg_edges`] has it.
+fn edges(path: &Path) -> Vec<[f64; 4]> {
+    let (mut at, mut start) = ([0.0f64; 2], [0.0f64; 2]);
+    let mut out: Vec<[f64; 4]> = Vec::new();
+    fn to(out: &mut Vec<[f64; 4]>, at: &mut [f64; 2], p: [f32; 2]) {
+        let p = p.map(f64::from);
+        out.push([at[0], at[1], p[0], p[1]]);
+        *at = p;
+    }
+    let mut boxes: Vec<[f64; 4]> = Vec::new();
+    let mut svg: Vec<[f64; 4]> = Vec::new();
+    for s in &path.segments {
+        match s {
+            Segment::MoveTo(x, y) => {
+                at = [f64::from(*x), f64::from(*y)];
+                start = at;
+            }
+            Segment::LineTo(x, y) => to(&mut out, &mut at, [*x, *y]),
+            Segment::QuadTo(a, b, x, y) => {
+                to(&mut out, &mut at, [*a, *b]);
+                to(&mut out, &mut at, [*x, *y]);
+            }
+            Segment::CurveTo(a, b, c, d, x, y) => {
+                to(&mut out, &mut at, [*a, *b]);
+                to(&mut out, &mut at, [*c, *d]);
+                to(&mut out, &mut at, [*x, *y]);
+            }
+            Segment::Close => {
+                out.push([at[0], at[1], start[0], start[1]]);
+                at = start;
+            }
+            Segment::Rect(x, y, w, h) | Segment::RoundedRect(x, y, w, h, _) => {
+                let [x, y, w, h] = [*x, *y, *w, *h].map(f64::from);
+                boxes.extend(box_edges([x, y, x + w, y + h]));
+            }
+            Segment::Circle(x, y, r) => {
+                let [x, y, r] = [*x, *y, *r].map(f64::from);
+                boxes.extend(box_edges([x - r, y - r, x + r, y + r]));
+            }
+            Segment::Svg(d) => svg.extend(svg_edges(d)),
+        }
+        if out.len() + boxes.len() + svg.len() > MAX_EDGES {
+            break;
+        }
+    }
+    out.extend(boxes);
+    out.extend(svg);
+    out
+}
+
+/// Steps [`strain`] makes, at most: a path that needs more is counted as
+/// the worst. (Some two milliseconds.)
+const SWEEP_STEPS: usize = 1_000_000;
+/// The strips of a path's height its lines are sorted into.
+const BANDS: usize = 64;
+
+/// How hard a path is for the toolkit to fill or stroke, in units: one for
+/// each pair of its lines whose boxes meet (`half`, half a stroke's width,
+/// grown on every side: thick lines that lie across each other make the
+/// tessellator's work too, as a fan of them does at its hub), and three
+/// more for a pair that crosses. A line and the one it is joined to are not
+/// a pair. Counted to `limit` and no further (then `limit` is what it
+/// says); a path whose lines need more than [`SWEEP_STEPS`] to be told
+/// apart is given as having `limit`.
+///
+/// The tessellator spends time on each crossing of a path, and a path of 16
+/// 000 lines that all cross has 64 million of them: a stroke of one took it
+/// two minutes, a fill three seconds. Lines whose boxes meet are the ones
+/// that can cross, a curve's control points joined standing for the curve
+/// (it may cross where they don't, but within their boxes).
+pub fn strain(path: &Path, half: f64, limit: f64) -> f64 {
+    count_pairs(&edges(path), half, limit)
+}
+
+fn count_pairs(edges: &[[f64; 4]], half: f64, limit: f64) -> f64 {
+    // A line with no length (`close` at the point the path is at) meets
+    // nothing.
+    let lines: Vec<[f64; 4]> = edges
+        .iter()
+        .copied()
+        .filter(|e| e[0] != e[2] || e[1] != e[3])
+        .collect();
+    // A path of a few lines has few pairs, and they are cheap.
+    if lines.len() < 16 {
+        return 0.0;
+    }
+    // (x0, x1, y0, y1) of each line's box.
+    let boxes: Vec<[f64; 4]> = lines
+        .iter()
+        .map(|e| {
+            [
+                e[0].min(e[2]) - half,
+                e[0].max(e[2]) + half,
+                e[1].min(e[3]) - half,
+                e[1].max(e[3]) + half,
+            ]
+        })
+        .collect();
+    let lowest = boxes.iter().fold(f64::INFINITY, |m, b| m.min(b[2]));
+    let highest = boxes.iter().fold(f64::NEG_INFINITY, |m, b| m.max(b[3]));
+    // Sorted into strips of the height unless most lines run across many of
+    // them (then each pair would be tried in every strip they share).
+    let tall = ((highest - lowest) / BANDS as f64).max(f64::MIN_POSITIVE);
+    let band = |y: f64| (((y - lowest) / tall) as usize).min(BANDS - 1);
+    let across: usize = boxes.iter().map(|b| band(b[3]) - band(b[2]) + 1).sum();
+    let strips = if across > 8 * boxes.len() { 1 } else { BANDS };
+    let band = |y: f64| if strips == 1 { 0 } else { band(y) };
+    let mut bands: Vec<Vec<usize>> = vec![Vec::new(); strips];
+    let mut steps = 0usize;
+    for (i, b) in boxes.iter().enumerate() {
+        let (first, last) = (band(b[2]), band(b[3]));
+        steps += last - first + 1;
+        if steps > SWEEP_STEPS {
+            return limit;
+        }
+        for strip in &mut bands[first..=last] {
+            strip.push(i);
+        }
+    }
+    let joined = |i: usize, j: usize| {
+        let (a, b) = if i < j { (i, j) } else { (j, i) };
+        b == a + 1 && lines[a][2] == lines[b][0] && lines[a][3] == lines[b][1]
+    };
+    let side =
+        |e: &[f64; 4], x: f64, y: f64| (e[2] - e[0]) * (y - e[1]) - (e[3] - e[1]) * (x - e[0]);
+    let mut found = 0.0;
+    for (k, strip) in bands.iter_mut().enumerate() {
+        strip.sort_by(|a, b| boxes[*a][0].total_cmp(&boxes[*b][0]));
+        let mut active: Vec<usize> = Vec::new();
+        for &i in strip.iter() {
+            let b = boxes[i];
+            active.retain(|j| boxes[*j][1] >= b[0]);
+            steps += active.len() + 1;
+            if steps > SWEEP_STEPS {
+                return limit;
+            }
+            for &j in &active {
+                let c = boxes[j];
+                // Boxes that meet, counted in the strip of the higher top
+                // (both are in it).
+                if c[2] > b[3] || c[3] < b[2] || band(b[2].max(c[2])) != k || joined(i, j) {
+                    continue;
+                }
+                found += 1.0;
+                let (e, f) = (&lines[i], &lines[j]);
+                let (s1, s2) = (side(e, f[0], f[1]), side(e, f[2], f[3]));
+                let (s3, s4) = (side(f, e[0], e[1]), side(f, e[2], e[3]));
+                if s1 * s2 < 0.0 && s3 * s4 < 0.0 {
+                    found += 3.0;
+                }
+                if found >= limit {
+                    return limit;
+                }
+            }
+            active.push(i);
+        }
+    }
+    found
+}
+
 /// How far from the origin, in its own units, a point of the path can be,
 /// at most.
 pub fn reach(path: &Path) -> f32 {
@@ -727,7 +1019,97 @@ pub fn reach(path: &Path) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::svg_segments;
+    use super::{Path, Segment, count_pairs, length, svg_length, svg_segments};
+
+    /// Pairs of lines whose boxes meet are a unit each, and a pair that
+    /// crosses four: a grid of 20 by 20 lines has 400 of those; parallel
+    /// lines apart, a polyline's neighbours and lines of no length none;
+    /// and counting stops at the limit.
+    #[test]
+    fn pairs_of_lines_are_counted_to_a_limit() {
+        let mut grid = Vec::new();
+        for i in 0..20 {
+            let i = f64::from(i);
+            grid.push([-1.0, i, 21.0, i]);
+            grid.push([i, -1.0, i, 21.0]);
+        }
+        assert_eq!(count_pairs(&grid, 0.0, 1e9), 400.0 * 4.0);
+        assert_eq!(count_pairs(&grid, 0.0, 50.0), 50.0);
+        // Thick lines side by side meet; thin ones that far apart don't.
+        let apart: Vec<[f64; 4]> = (0..40)
+            .map(|i| [0.0, f64::from(i) * 3.0, 9.0, f64::from(i) * 3.0])
+            .collect();
+        assert_eq!(count_pairs(&apart, 0.0, 1e9), 0.0);
+        assert_eq!(count_pairs(&apart, 1.5, 1e9), 39.0);
+        // A fan from one point crosses nowhere, and its lines' boxes meet.
+        let fan: Vec<[f64; 4]> = (0..40)
+            .map(|i| {
+                let a = f64::from(i) * 0.01;
+                [0.0, 0.0, 100.0 * a.cos(), 100.0 * a.sin()]
+            })
+            .collect();
+        assert_eq!(count_pairs(&fan, 0.0, 1e9), 40.0 * 39.0 / 2.0);
+        let polyline: Vec<[f64; 4]> = (0..40)
+            .map(|i| {
+                [
+                    f64::from(i),
+                    f64::from(i % 2),
+                    f64::from(i + 1),
+                    f64::from((i + 1) % 2),
+                ]
+            })
+            .collect();
+        assert_eq!(count_pairs(&polyline, 0.0, 1e9), 0.0);
+        // A few lines are not counted at all, nor are lines of no length
+        // (16 384 `close`s of a path at its start).
+        assert_eq!(count_pairs(&grid[..10], 0.0, 1e9), 0.0);
+        assert_eq!(
+            count_pairs(&vec![[3.0, 4.0, 3.0, 4.0]; 16384], 0.0, 10.0),
+            0.0
+        );
+        // Lines that need more telling apart than there is time for are the
+        // worst.
+        let stacked: Vec<[f64; 4]> = (0..4000)
+            .map(|i| [0.0, 0.0, 10.0, f64::from(i % 7) * 1e-9])
+            .collect();
+        assert_eq!(count_pairs(&stacked, 0.0, 77.0), 77.0);
+    }
+
+    /// How long a path is, at most (a dashed stroke is charged by it): the
+    /// points and control points joined in order, a closed path back to
+    /// its start, a circle or an arc as its whole.
+    #[test]
+    fn a_path_is_never_longer_than_its_length() {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        assert!(near(
+            svg_length("M0 0 L3 4 h5 v-12z").unwrap(),
+            5.0 + 5.0 + 12.0 + 8.0f64.hypot(8.0)
+        ));
+        // A relative step is the step's length; a curve its control polygon.
+        assert!(near(svg_length("m1 1 l3 4").unwrap(), 5.0));
+        assert!(near(
+            svg_length("M0 0 C 0 3 4 3 4 0").unwrap(),
+            3.0 + 4.0 + 3.0
+        ));
+        assert!(near(svg_length("M0 0 Q 0 3 4 0").unwrap(), 3.0 + 5.0));
+        // An arc: a circle of its radius twice round at most.
+        assert!(svg_length("M0 0 A 10 10 0 0 1 20 0").unwrap() >= std::f64::consts::PI * 10.0);
+        assert!(svg_length("M0 0").unwrap() == 0.0);
+        let path = Path {
+            segments: vec![
+                Segment::MoveTo(0.0, 0.0),
+                Segment::LineTo(3.0, 4.0),
+                Segment::Close,
+                Segment::Rect(0.0, 0.0, 10.0, 20.0),
+                Segment::Circle(0.0, 0.0, 1.0),
+                Segment::Svg("M0 0 L0 7".into()),
+            ],
+        };
+        assert!(near(
+            length(&path),
+            5.0 + 5.0 + 60.0 + std::f64::consts::TAU + 7.0
+        ));
+    }
 
     #[test]
     fn svg_data_is_checked_and_counted() {

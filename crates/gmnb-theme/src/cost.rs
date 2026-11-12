@@ -21,7 +21,7 @@
 //! of the whole window at that size costs at most about 100 ms or 256 MB;
 //! a larger window, more.
 
-use crate::draw::{Filter, Op, Rect};
+use crate::draw::{Filter, Op, Rect, Stroke};
 use crate::types::{GradientKind, Paint, Shadow};
 
 /// The area the weights are of: the window they were measured in.
@@ -78,6 +78,23 @@ fn source(filter: Filter) -> f64 {
     }
 }
 const TILE: f64 = 5.5;
+/// Points for each dash of a dashed stroke: the toolkit's stroker makes a
+/// shape of every dash (and of its round caps), and the shapes of a path
+/// that crosses itself cost it more than their number (the software
+/// renderer, 100 000 dashes of a zigzag of 2000 lines: 0.9 s; 560 000 of
+/// 400: 2 s; 1 120 000 of 800: 25 s and 460 MB; round caps, 1 400 000
+/// of parallel lines: 15 s and 2.1 GB). However much of it lies beyond
+/// the layer, so this is not by what can be seen.
+const DASH: f64 = 0.2;
+/// Points for each unit of a path's strain (`path::strain`: a pair of its
+/// lines whose boxes meet is one, and a pair that crosses four). The
+/// tessellator spends time on each crossing: 16 million of them, the lines
+/// of a star of 8000 corners, took the software renderer 12 s stroked and
+/// 1.5 s filled, 0.75 µs and 0.1 µs each. (A fan of 8000 thick lines from
+/// one point, which cross nowhere, took it 1.9 s; 3000 arches of one span
+/// and as many short lines through their crowns, 3.2 s.)
+const STRAIN_STROKE: f64 = 0.002;
+const STRAIN_FILL: f64 = 0.00035;
 const BORDER: f64 = 1.3;
 /// `draw:shadow`.
 const BOX_SHADOW: f64 = 4.3;
@@ -379,18 +396,26 @@ impl Meter {
                 let ([x, y], r) = (center.map(f64::from), f64::from(*radius));
                 (masked(p), Some([x - r, y - r, x + r, y + r]))
             }
-            Op::Fill { path, paint: p, .. } => (
-                masked(p),
-                crate::path::bounds(path).map(|b| b.map(f64::from)),
-            ),
+            Op::Fill { path, paint: p, .. } => {
+                self.cross(path, 0.0, STRAIN_FILL)?;
+                (
+                    masked(p),
+                    crate::path::bounds(path).map(|b| b.map(f64::from)),
+                )
+            }
             Op::Stroke {
                 path,
                 stroke,
                 paint: p,
-            } => (
-                masked(p),
-                crate::path::bounds(path).map(|b| grow(b.map(f64::from), f64::from(stroke.width))),
-            ),
+            } => {
+                self.spent += DASH * dashes(stroke, crate::path::length(path));
+                self.cross(path, f64::from(stroke.width) / 2.0, STRAIN_STROKE)?;
+                (
+                    masked(p),
+                    crate::path::bounds(path)
+                        .map(|b| grow(b.map(f64::from), f64::from(stroke.width))),
+                )
+            }
             Op::Border { rect, width, .. } => {
                 (BORDER, Some(grow(rect_box(rect), f64::from(*width))))
             }
@@ -438,6 +463,19 @@ impl Meter {
             level.content = Some(union(level.content, b));
         }
         self.charge(weight, b)
+    }
+
+    /// A path about to be filled or stroked (`half`: half the stroke's
+    /// width): its strain charged at `price` a unit, counted as far as the
+    /// frame has points for. `Err`: the frame is past its allowance (by
+    /// that share).
+    fn cross(&mut self, path: &crate::path::Path, half: f64, price: f64) -> Result<(), f64> {
+        let room = ((self.allowance - self.spent) / price).max(0.0) + 1.0;
+        self.spent += price * crate::path::strain(path, half, room);
+        if self.spent > self.allowance {
+            return Err(self.spent / self.allowance);
+        }
+        Ok(())
     }
 
     /// A clip's box, cut to the clips already open.
@@ -495,6 +533,28 @@ impl Meter {
             self.close()?;
         }
         Ok(())
+    }
+}
+
+/// How many dashes a stroke of a path `length` long has, at most. The
+/// pattern's numbers are on, off, on, off...; an odd list is gone through
+/// twice, so that its numbers are on and off in turn. A dash of no length
+/// is still a dash (a round cap makes a dot of it).
+fn dashes(stroke: &Stroke, length: f64) -> f64 {
+    let n = stroke.dash.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let sum: f64 = stroke.dash.iter().map(|d| f64::from(*d)).sum();
+    let (period, on) = if n.is_multiple_of(2) {
+        (sum, n / 2)
+    } else {
+        (2.0 * sum, n)
+    };
+    if period > 0.0 {
+        length / period * on as f64
+    } else {
+        0.0
     }
 }
 

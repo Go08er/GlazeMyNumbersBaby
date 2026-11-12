@@ -1062,6 +1062,180 @@ fn what_a_frame_costs_to_draw_is_capped() {
     assert!(e.contains("what one may to draw"), "{e}");
 }
 
+/// A path that crosses itself is charged by its crossings (R5-D-2): the
+/// toolkit's tessellator spends time on each, and a polygon of 8000 corners
+/// that all cross is 16 million of them, 12 s of the software renderer to
+/// stroke it and 1.5 s to fill it (16 000 corners: two minutes, 3 s), at
+/// 1.3% of what a frame may cost by the area alone.
+#[test]
+fn a_path_that_crosses_itself_is_charged_by_its_crossings() {
+    let window = Frame::sized(760.0, 640.0);
+    let cost = |body: &str| -> Result<f64, String> {
+        let (theme, _d) = background("crossings", "", body);
+        match theme.draw(LayerKind::Background, &Ctx::default(), &window) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let over = |e: String| assert!(e.contains("what one may to draw"), "{e}");
+    // A star: each corner joined to the one almost opposite, so each line
+    // crosses nearly all the others.
+    let star = |n: u32, call: &str| {
+        format!(
+            "local n = {n} local p = gmnb.path() local k = n // 2 - 1 \
+             for i = 0, n - 1 do local a = (i * k % n) / n * 2 * math.pi \
+                 local x, y = 300 + 280 * math.cos(a), 300 + 280 * math.sin(a) \
+                 if i == 0 then p:move_to(x, y) else p:line_to(x, y) end end \
+             p:close() {call}"
+        )
+    };
+    let stroke = "draw:stroke(p, 1, '#ff000080')";
+    let fill = "draw:fill(p, '#ff000080', 'even-odd')";
+    assert!(cost(&star(400, stroke)).is_ok());
+    over(cost(&star(1000, stroke)).unwrap_err());
+    over(cost(&star(16000, stroke)).unwrap_err());
+    assert!(cost(&star(1000, fill)).is_ok());
+    over(cost(&star(2400, fill)).unwrap_err());
+    over(cost(&star(16000, fill)).unwrap_err());
+    // ... through a curve's control points, and SVG data.
+    over(
+        cost(
+            "local p = gmnb.path() for i = 0, 3000 do p:move_to(0, 0) p:curve_to(700, i % 600, 0, i % 500, 700, 600 - i % 600) end \
+             draw:stroke(p, 1, '#fff')",
+        )
+        .unwrap_err(),
+    );
+    over(
+        cost(
+            "local d = {'M0 0'} for i = 0, 2000 do d[#d + 1] = ('L%d %d'):format((i * 337) % 700, (i % 2) * 600) end \
+             draw:stroke(gmnb.svg_path(table.concat(d, ' ')), 1, '#fff')",
+        )
+        .unwrap_err(),
+    );
+    // ... and lines that cross nowhere but lie across each other: a fan of
+    // thick lines from one point (8000 of them took the software renderer
+    // 1.9 s), arches of one span with short lines through their crowns,
+    // which cross the curves where the control points joined don't (3000
+    // of each took it 3.2 s), concentric circles with radial lines.
+    over(
+        cost(
+            "local n = 1000 local p = gmnb.path() for i = 0, n - 1 do local a = i / n * 2 * math.pi \
+                 p:move_to(300, 300) p:line_to(300 + 280 * math.cos(a), 300 + 280 * math.sin(a)) end \
+             draw:stroke(p, 2, '#ff000080')",
+        )
+        .unwrap_err(),
+    );
+    over(
+        cost(
+            "local n = 3000 local p = gmnb.path() \
+             for i = 0, n - 1 do p:move_to(100, 400) p:quad_to(300, i * 0.01, 500, 400) end \
+             for i = 0, n - 1 do local x = 290 + (i / n) * 20 p:move_to(x, 195) p:line_to(x + 0.01, 225) end \
+             draw:stroke(p, 1, '#ff000080')",
+        )
+        .unwrap_err(),
+    );
+    over(
+        cost(
+            "local n = 3000 local p = gmnb.path() for i = 1, n do p:circle(300, 300, i * 280 / n) end \
+             for i = 0, n - 1 do local a = i / n * 2 * math.pi \
+                 p:move_to(300 + 10 * math.cos(a), 300 + 10 * math.sin(a)) p:line_to(300 + 270 * math.cos(a), 300 + 270 * math.sin(a)) end \
+             draw:stroke(p, 1, '#ff000080')",
+        )
+        .unwrap_err(),
+    );
+    // What doesn't cross is as before, however many lines: a sine of 16 000,
+    // a regular polygon of 5000 corners, a thousand parallel lines, scanlines, a sunburst of 300 rays.
+    for body in [
+        "local p = gmnb.path():move_to(0, 300) for i = 1, 16000 do p:line_to(i * 0.045, 300 + 100 * math.sin(i * 0.01)) end draw:stroke(p, 2, '#fff')",
+        "local p = gmnb.path():move_to(500, 300) for i = 1, 5000 do local a = i / 5000 * 2 * math.pi p:line_to(300 + 200 * math.cos(a), 300 + 200 * math.sin(a)) end p:close() draw:fill(p, '#fff') draw:stroke(p, 2, '#000')",
+        "local p = gmnb.path() for i = 1, 1000 do p:move_to(0, i * 0.5) p:line_to(700, i * 0.5 + 100) end draw:stroke(p, 1, '#fff')",
+        "local n = 300 local p = gmnb.path() for i = 0, n - 1 do local a = i / n * 2 * math.pi p:move_to(300, 300) p:line_to(300 + 280 * math.cos(a), 300 + 280 * math.sin(a)) end draw:stroke(p, 2, '#fff')",
+        "local p = gmnb.path() for i = 1, 2160 do p:move_to(0, i * 0.3) p:line_to(700, i * 0.3) end draw:stroke(p, 0.25, '#fff')",
+    ] {
+        let c = cost(body).unwrap();
+        assert!(c < 0.5, "{body}: {c}");
+    }
+}
+
+/// A dashed stroke is charged by its dashes (R5-D-1): the toolkit's stroker
+/// makes a shape of each, and a zigzag of 2000 lines dashed 0.5 on, 0.5 off
+/// was 14 million of them, a minute of the main thread (the software
+/// renderer; round caps, gigabytes) in a frame that covered a window's
+/// worth, which the area charge alone let through.
+#[test]
+fn a_dashed_stroke_is_charged_by_its_dashes() {
+    let window = Frame::sized(760.0, 640.0);
+    let cost = |body: &str| -> Result<f64, String> {
+        let (theme, _d) = background("dashes", "", body);
+        match theme.draw(LayerKind::Background, &Ctx::default(), &window) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let over = |e: String| assert!(e.contains("what one may to draw"), "{e}");
+    let zigzag = |lines: u32, stroke: &str| {
+        format!(
+            "local p = gmnb.path():move_to(0, 100) \
+             for i = 1, {lines} do p:line_to(i % 2 == 0 and 0 or 700, 100 + (i % 7) * 40) end \
+             draw:stroke(p, {stroke}, '#ff0000')"
+        )
+    };
+    // The hostile frames: butt caps, round caps, an odd list (gone through
+    // twice), and a long line, mostly beyond the layer.
+    for stroke in [
+        "{ width = 2, dash = { 0.5, 0.5 } }",
+        "{ width = 2, cap = 'round', join = 'round', dash = { 0.5, 0.5 } }",
+        "{ width = 2, dash = { 0.5 } }",
+        "{ width = 2, dash = { 0, 0.001 } }",
+    ] {
+        over(cost(&zigzag(2000, stroke)).unwrap_err());
+    }
+    over(
+        cost("draw:stroke(gmnb.path():move_to(0, 0):line_to(1e6, 0), { width = 1, dash = { 1, 1 } }, '#fff')")
+            .unwrap_err(),
+    );
+    // Many strokes, each fewer dashes than a frame has: together over.
+    over(
+        cost("for i = 1, 100 do draw:stroke(gmnb.path():move_to(0, i):line_to(700, i), { width = 1, dash = { 0.2, 0.2 } }, '#fff') end")
+            .unwrap_err(),
+    );
+    // SVG data, a rectangle, a circle, a curve: counted as long as they are.
+    for path in [
+        "gmnb.svg_path('M0 0 L1e5 0')",
+        "gmnb.svg_path('M0 0 C 0 3e5 3e5 3e5 3e5 0')",
+        "gmnb.svg_path('M0 0 A 4e5 4e5 0 1 1 1 1')",
+        "gmnb.path():rect(0, 0, 3e4, 3e4)",
+        "gmnb.path():circle(0, 0, 1e5)",
+        "gmnb.path():move_to(0, 0):line_to(1e5, 0):close()",
+    ] {
+        over(
+            cost(&format!(
+                "draw:stroke({path}, {{ width = 1, dash = {{ 1, 1 }} }}, '#fff')"
+            ))
+            .unwrap_err(),
+        );
+    }
+    // What themes use is cheap: a dashed rectangle (Layer tests use one),
+    // a long dashed line, a dotted circle.
+    for body in [
+        "draw:stroke(gmnb.path():rounded_rect(4.5, 4.5, 60, 40, 3), { width = 1, dash = { 3, 2 } }, '#fff')",
+        "draw:stroke(gmnb.path():move_to(0, 0):line_to(2000, 0), { width = 2, dash = { 4, 4 } }, '#fff')",
+        "draw:stroke(gmnb.path():circle(300, 300, 200), { width = 2, cap = 'round', dash = { 0, 8 } }, '#fff')",
+    ] {
+        let c = cost(body).unwrap();
+        assert!(c < 0.2, "{body}: {c}");
+    }
+    // 3000 dashes are drawn; 6000 are not.
+    let line = |dashes: u32| {
+        format!(
+            "draw:stroke(gmnb.path():move_to(0, 0):line_to({}, 0), {{ width = 1, dash = {{ 1, 1 }} }}, '#fff')",
+            dashes * 2
+        )
+    };
+    assert!(cost(&line(3000)).is_ok());
+    over(cost(&line(6000)).unwrap_err());
+}
+
 #[test]
 fn frames_at_the_caps_are_drawn() {
     let (theme, _d) = background(
