@@ -4,6 +4,7 @@ mod inert;
 mod keymap;
 mod launch;
 mod layers;
+mod memory;
 mod paced;
 mod pages;
 mod paste;
@@ -95,6 +96,9 @@ static RENDERER_SET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 
 fn main() -> glib::ExitCode {
     launch::mark("main");
+    // GMNB's memory ceiling, 4 GiB whatever the theme or the calculation:
+    // first, before any thread starts or program is started.
+    memory::set_ceiling();
     // SAFETY: first thing in main, before GTK or any other thread starts.
     unsafe { appcore::tz::fix_sandbox_timezone() };
     // NVIDIA's driver busy-waits on GPU fences by default, which turned the
