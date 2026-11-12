@@ -380,6 +380,9 @@ struct Pen {
     /// The length of the path's points and control points joined in
     /// order, plus an arc's whole ellipse: at least how long the path is.
     length: f64,
+    /// The lines those are joined by (an arc: the box around where it
+    /// can go), if they are wanted ([`svg_edges`]).
+    edges: Option<Vec<[f64; 4]>>,
 }
 
 impl Pen {
@@ -388,6 +391,9 @@ impl Pen {
         let mut from = self.at;
         for p in via.iter().chain([&to]) {
             self.length += (p[0] - from[0]).hypot(p[1] - from[1]);
+            if let Some(edges) = self.edges.as_mut().filter(|e| e.len() < MAX_EDGES) {
+                edges.push([from[0], from[1], p[0], p[1]]);
+            }
             from = *p;
         }
     }
@@ -503,6 +509,15 @@ impl Pen {
                 // An arc is part of its ellipse, which is no longer than
                 // a circle of its larger radius's twice round.
                 self.length += std::f64::consts::TAU * r;
+                if let Some(edges) = self.edges.as_mut().filter(|e| e.len() < MAX_EDGES) {
+                    let b = [
+                        x0.min(end[0]) - r,
+                        y0.min(end[1]) - r,
+                        x0.max(end[0]) + r,
+                        y0.max(end[1]) + r,
+                    ];
+                    edges.extend(box_edges(b));
+                }
                 self.mark(self.at, 2.0 * r);
                 self.mark(end, 2.0 * r);
                 end
@@ -526,18 +541,30 @@ impl Pen {
 
 /// [`svg_reach`], and the box around the path's points: `(x0, y0, x1, y1)`.
 pub fn svg_shape(d: &str) -> Result<(usize, f64, Option<[f64; 4]>), String> {
-    svg_walk(d).map(|(count, reach, pen)| (count, reach, pen.bounds))
+    svg_walk(d, false).map(|(count, reach, pen)| (count, reach, pen.bounds))
 }
 
 /// How long SVG path data is, at most (its points and control points
 /// joined in order, an arc counted as its whole ellipse): what a dashed
 /// stroke of it is charged by.
 pub fn svg_length(d: &str) -> Result<f64, String> {
-    svg_walk(d).map(|(_, _, pen)| pen.length)
+    svg_walk(d, false).map(|(_, _, pen)| pen.length)
 }
 
-fn svg_walk(d: &str) -> Result<(usize, f64, Pen), String> {
-    let mut pen = Pen::default();
+/// The lines SVG path data is joined of, for [`crossings`]: each
+/// curve's control points joined, an arc as the box around where it can go.
+fn svg_edges(d: &str) -> Vec<[f64; 4]> {
+    svg_walk(d, true)
+        .ok()
+        .and_then(|(_, _, pen)| pen.edges)
+        .unwrap_or_default()
+}
+
+fn svg_walk(d: &str, edges: bool) -> Result<(usize, f64, Pen), String> {
+    let mut pen = Pen {
+        edges: edges.then(Vec::new),
+        ..Pen::default()
+    };
     let b = d.as_bytes();
     let mut i = 0;
     let mut count = 0usize;
@@ -794,6 +821,141 @@ pub fn length(path: &Path) -> f64 {
     total + sum
 }
 
+/// The most edges one path is taken to have when its crossings are
+/// counted (more are left out).
+const MAX_EDGES: usize = 70_000;
+
+/// The four sides of a box `(x0, y0, x1, y1)`.
+fn box_edges([x0, y0, x1, y1]: [f64; 4]) -> [[f64; 4]; 4] {
+    [
+        [x0, y0, x1, y0],
+        [x1, y0, x1, y1],
+        [x1, y1, x0, y1],
+        [x0, y1, x0, y0],
+    ]
+}
+
+/// The lines a path is joined of: a line is itself, a curve its control
+/// points joined, a rectangle, a rounded one or a circle the box around it,
+/// SVG data as [`svg_edges`] has it.
+fn edges(path: &Path) -> Vec<[f64; 4]> {
+    let (mut at, mut start) = ([0.0f64; 2], [0.0f64; 2]);
+    let mut out: Vec<[f64; 4]> = Vec::new();
+    fn to(out: &mut Vec<[f64; 4]>, at: &mut [f64; 2], p: [f32; 2]) {
+        let p = p.map(f64::from);
+        out.push([at[0], at[1], p[0], p[1]]);
+        *at = p;
+    }
+    let mut boxes: Vec<[f64; 4]> = Vec::new();
+    let mut svg: Vec<[f64; 4]> = Vec::new();
+    for s in &path.segments {
+        match s {
+            Segment::MoveTo(x, y) => {
+                at = [f64::from(*x), f64::from(*y)];
+                start = at;
+            }
+            Segment::LineTo(x, y) => to(&mut out, &mut at, [*x, *y]),
+            Segment::QuadTo(a, b, x, y) => {
+                to(&mut out, &mut at, [*a, *b]);
+                to(&mut out, &mut at, [*x, *y]);
+            }
+            Segment::CurveTo(a, b, c, d, x, y) => {
+                to(&mut out, &mut at, [*a, *b]);
+                to(&mut out, &mut at, [*c, *d]);
+                to(&mut out, &mut at, [*x, *y]);
+            }
+            Segment::Close => {
+                out.push([at[0], at[1], start[0], start[1]]);
+                at = start;
+            }
+            Segment::Rect(x, y, w, h) | Segment::RoundedRect(x, y, w, h, _) => {
+                let [x, y, w, h] = [*x, *y, *w, *h].map(f64::from);
+                boxes.extend(box_edges([x, y, x + w, y + h]));
+            }
+            Segment::Circle(x, y, r) => {
+                let [x, y, r] = [*x, *y, *r].map(f64::from);
+                boxes.extend(box_edges([x - r, y - r, x + r, y + r]));
+            }
+            Segment::Svg(d) => svg.extend(svg_edges(d)),
+        }
+        if out.len() + boxes.len() + svg.len() > MAX_EDGES {
+            break;
+        }
+    }
+    out.extend(boxes);
+    out.extend(svg);
+    out
+}
+
+/// Steps of the sweep [`crossings`] makes, at most: a path whose edges
+/// need more is counted as the worst.
+const SWEEP_STEPS: usize = 2_000_000;
+
+/// How many pairs of a path's edges cross (`edges`: [`edges`]'s), counted
+/// to `limit` and no further (then `limit` is what it says). A pair is
+/// counted when each edge's ends lie on either side of the other: lines
+/// that only touch, as the neighbours of a polyline do, are not. Which
+/// pairs to try is found by a sweep over the edges' boxes in x, within
+/// [`SWEEP_STEPS`]; a path that needs more than that is given as having
+/// `limit`.
+///
+/// The toolkit's tessellator spends time for each crossing of a path, and
+/// a path of 16 000 lines that all cross is 64 million of them: a stroke
+/// of one took it two minutes, a fill three seconds.
+pub fn crossings(path: &Path, limit: f64) -> f64 {
+    let edges = edges(path);
+    count_crossings(&edges, limit)
+}
+
+fn count_crossings(edges: &[[f64; 4]], limit: f64) -> f64 {
+    // A path of a few lines has few crossings, and they are cheap.
+    if edges.len() < 16 {
+        return 0.0;
+    }
+    // (x0, x1, y0, y1) of each edge's box.
+    let boxes: Vec<[f64; 4]> = edges
+        .iter()
+        .map(|e| {
+            [
+                e[0].min(e[2]),
+                e[0].max(e[2]),
+                e[1].min(e[3]),
+                e[1].max(e[3]),
+            ]
+        })
+        .collect();
+    let mut order: Vec<usize> = (0..edges.len()).collect();
+    order.sort_by(|a, b| boxes[*a][0].total_cmp(&boxes[*b][0]));
+    let side =
+        |e: &[f64; 4], x: f64, y: f64| (e[2] - e[0]) * (y - e[1]) - (e[3] - e[1]) * (x - e[0]);
+    let (mut active, mut found, mut steps): (Vec<usize>, f64, usize) = (Vec::new(), 0.0, 0);
+    for i in order {
+        let b = boxes[i];
+        active.retain(|j| boxes[*j][1] >= b[0]);
+        steps += active.len() + 1;
+        if steps > SWEEP_STEPS {
+            return limit;
+        }
+        for j in &active {
+            let c = boxes[*j];
+            if c[2] > b[3] || c[3] < b[2] {
+                continue;
+            }
+            let (e, f) = (&edges[i], &edges[*j]);
+            let (s1, s2) = (side(e, f[0], f[1]), side(e, f[2], f[3]));
+            let (s3, s4) = (side(f, e[0], e[1]), side(f, e[2], e[3]));
+            if s1 * s2 < 0.0 && s3 * s4 < 0.0 {
+                found += 1.0;
+                if found >= limit {
+                    return limit;
+                }
+            }
+        }
+        active.push(i);
+    }
+    found
+}
+
 /// How far from the origin, in its own units, a point of the path can be,
 /// at most.
 pub fn reach(path: &Path) -> f32 {
@@ -816,7 +978,39 @@ pub fn reach(path: &Path) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Path, Segment, length, svg_length, svg_segments};
+    use super::{Path, Segment, count_crossings, length, svg_length, svg_segments};
+
+    /// Pairs of lines that cross, and only those: a grid of 20 by 20 lines
+    /// has 400; parallel lines, a polyline's neighbours and lines that
+    /// only touch have none; and counting stops at the limit.
+    #[test]
+    fn crossings_are_counted_to_a_limit() {
+        let mut grid = Vec::new();
+        for i in 0..20 {
+            let i = f64::from(i);
+            grid.push([-1.0, i, 21.0, i]);
+            grid.push([i, -1.0, i, 21.0]);
+        }
+        assert_eq!(count_crossings(&grid, 1e9), 400.0);
+        assert_eq!(count_crossings(&grid, 50.0), 50.0);
+        let parallel: Vec<[f64; 4]> = (0..40)
+            .map(|i| [0.0, f64::from(i), 9.0, f64::from(i) + 5.0])
+            .collect();
+        assert_eq!(count_crossings(&parallel, 1e9), 0.0);
+        let polyline: Vec<[f64; 4]> = (0..40)
+            .map(|i| {
+                [
+                    f64::from(i),
+                    f64::from(i % 2),
+                    f64::from(i + 1),
+                    f64::from((i + 1) % 2),
+                ]
+            })
+            .collect();
+        assert_eq!(count_crossings(&polyline, 1e9), 0.0);
+        // A few lines are not counted at all.
+        assert_eq!(count_crossings(&grid[..10], 1e9), 0.0);
+    }
 
     /// How long a path is, at most (a dashed stroke is charged by it): the
     /// points and control points joined in order, a closed path back to

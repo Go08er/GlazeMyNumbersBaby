@@ -86,6 +86,12 @@ const TILE: f64 = 5.5;
 /// of parallel lines: 15 s and 2.1 GB). However much of it lies beyond
 /// the layer, so this is not by what can be seen.
 const DASH: f64 = 0.2;
+/// Points for each crossing of a path's lines with each other (the
+/// tessellator spends time on each: 16 million of them, the lines of a
+/// star of 8000 corners, took the software renderer 12 s stroked and 1.5 s
+/// filled, 0.75 µs and 0.1 µs each).
+const CROSSING_STROKE: f64 = 0.01;
+const CROSSING_FILL: f64 = 0.0015;
 const BORDER: f64 = 1.3;
 /// `draw:shadow`.
 const BOX_SHADOW: f64 = 4.3;
@@ -387,16 +393,20 @@ impl Meter {
                 let ([x, y], r) = (center.map(f64::from), f64::from(*radius));
                 (masked(p), Some([x - r, y - r, x + r, y + r]))
             }
-            Op::Fill { path, paint: p, .. } => (
-                masked(p),
-                crate::path::bounds(path).map(|b| b.map(f64::from)),
-            ),
+            Op::Fill { path, paint: p, .. } => {
+                self.cross(path, CROSSING_FILL)?;
+                (
+                    masked(p),
+                    crate::path::bounds(path).map(|b| b.map(f64::from)),
+                )
+            }
             Op::Stroke {
                 path,
                 stroke,
                 paint: p,
             } => {
                 self.spent += DASH * dashes(stroke, crate::path::length(path));
+                self.cross(path, CROSSING_STROKE)?;
                 (
                     masked(p),
                     crate::path::bounds(path)
@@ -450,6 +460,18 @@ impl Meter {
             level.content = Some(union(level.content, b));
         }
         self.charge(weight, b)
+    }
+
+    /// A path about to be filled or stroked: its crossings charged at
+    /// `price` each, counted as far as the frame has points for. `Err`:
+    /// the frame is past its allowance (by that share).
+    fn cross(&mut self, path: &crate::path::Path, price: f64) -> Result<(), f64> {
+        let room = ((self.allowance - self.spent) / price).max(0.0) + 1.0;
+        self.spent += price * crate::path::crossings(path, room);
+        if self.spent > self.allowance {
+            return Err(self.spent / self.allowance);
+        }
+        Ok(())
     }
 
     /// A clip's box, cut to the clips already open.

@@ -1062,6 +1062,68 @@ fn what_a_frame_costs_to_draw_is_capped() {
     assert!(e.contains("what one may to draw"), "{e}");
 }
 
+/// A path that crosses itself is charged by its crossings (R5-D-2): the
+/// toolkit's tessellator spends time on each, and a polygon of 8000 corners
+/// that all cross is 16 million of them, 12 s of the software renderer to
+/// stroke it and 1.5 s to fill it (16 000 corners: two minutes, 3 s), at
+/// 1.3% of what a frame may cost by the area alone.
+#[test]
+fn a_path_that_crosses_itself_is_charged_by_its_crossings() {
+    let window = Frame::sized(760.0, 640.0);
+    let cost = |body: &str| -> Result<f64, String> {
+        let (theme, _d) = background("crossings", "", body);
+        match theme.draw(LayerKind::Background, &Ctx::default(), &window) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let over = |e: String| assert!(e.contains("what one may to draw"), "{e}");
+    // A star: each corner joined to the one almost opposite, so each line
+    // crosses nearly all the others.
+    let star = |n: u32, call: &str| {
+        format!(
+            "local n = {n} local p = gmnb.path() local k = n // 2 - 1 \
+             for i = 0, n - 1 do local a = (i * k % n) / n * 2 * math.pi \
+                 local x, y = 300 + 280 * math.cos(a), 300 + 280 * math.sin(a) \
+                 if i == 0 then p:move_to(x, y) else p:line_to(x, y) end end \
+             p:close() {call}"
+        )
+    };
+    let stroke = "draw:stroke(p, 1, '#ff000080')";
+    let fill = "draw:fill(p, '#ff000080', 'even-odd')";
+    assert!(cost(&star(400, stroke)).is_ok());
+    over(cost(&star(1000, stroke)).unwrap_err());
+    over(cost(&star(16000, stroke)).unwrap_err());
+    assert!(cost(&star(1000, fill)).is_ok());
+    over(cost(&star(2400, fill)).unwrap_err());
+    over(cost(&star(16000, fill)).unwrap_err());
+    // ... through a curve's control points, and SVG data.
+    over(
+        cost(
+            "local p = gmnb.path() for i = 0, 3000 do p:move_to(0, 0) p:curve_to(700, i % 600, 0, i % 500, 700, 600 - i % 600) end \
+             draw:stroke(p, 1, '#fff')",
+        )
+        .unwrap_err(),
+    );
+    over(
+        cost(
+            "local d = {'M0 0'} for i = 0, 2000 do d[#d + 1] = ('L%d %d'):format((i * 337) % 700, (i % 2) * 600) end \
+             draw:stroke(gmnb.svg_path(table.concat(d, ' ')), 1, '#fff')",
+        )
+        .unwrap_err(),
+    );
+    // What doesn't cross is as before, however many lines: a sine of 16 000,
+    // a regular polygon of 5000 corners, a thousand parallel lines.
+    for body in [
+        "local p = gmnb.path():move_to(0, 300) for i = 1, 16000 do p:line_to(i * 0.045, 300 + 100 * math.sin(i * 0.01)) end draw:stroke(p, 2, '#fff')",
+        "local p = gmnb.path():move_to(500, 300) for i = 1, 5000 do local a = i / 5000 * 2 * math.pi p:line_to(300 + 200 * math.cos(a), 300 + 200 * math.sin(a)) end p:close() draw:fill(p, '#fff') draw:stroke(p, 2, '#000')",
+        "local p = gmnb.path() for i = 1, 1000 do p:move_to(0, i * 0.5) p:line_to(700, i * 0.5 + 100) end draw:stroke(p, 1, '#fff')",
+    ] {
+        let c = cost(body).unwrap();
+        assert!(c < 0.5, "{body}: {c}");
+    }
+}
+
 /// A dashed stroke is charged by its dashes (R5-D-1): the toolkit's stroker
 /// makes a shape of each, and a zigzag of 2000 lines dashed 0.5 on, 0.5 off
 /// was 14 million of them, a minute of the main thread (the software
@@ -1139,8 +1201,6 @@ fn a_dashed_stroke_is_charged_by_its_dashes() {
     };
     assert!(cost(&line(3000)).is_ok());
     over(cost(&line(6000)).unwrap_err());
-    // A stroke that isn't dashed is as before, however long.
-    assert!(cost(&zigzag(2000, "{ width = 2 }")).is_ok());
 }
 
 #[test]
