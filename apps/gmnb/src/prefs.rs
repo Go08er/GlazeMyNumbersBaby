@@ -300,6 +300,36 @@ pub fn show(win: &Rc<Window>) {
 /// (160 px elsewhere).
 const NARROW_SLIDER: i32 = 80;
 
+/// A slider built after Settings' breakpoint was added (a theme's option
+/// rows are built again whenever the options change, so a setter of the
+/// breakpoint can't hold them): it asks for [`NARROW_SLIDER`] while the
+/// breakpoint holds, and for 160 px otherwise, as the sliders it has setters
+/// for do. In the least window a theme's slider row (Swirls' Flow) left its
+/// text some 40 px: "Flo-w", a subtitle a word to a line (R7-A-5).
+fn narrow_in_least_window(dialog: &adw::PreferencesDialog, scale: &gtk::Scale) {
+    fn width(dialog: &adw::PreferencesDialog) -> i32 {
+        if dialog.current_breakpoint().is_some() {
+            NARROW_SLIDER
+        } else {
+            160
+        }
+    }
+    scale.set_width_request(width(dialog));
+    let slider = scale.downgrade();
+    let handler = dialog.connect_current_breakpoint_notify(move |d| {
+        if let Some(scale) = slider.upgrade() {
+            scale.set_width_request(width(d));
+        }
+    });
+    // The handler goes with the slider (the dialog outlives many).
+    let (dialog, handler) = (dialog.downgrade(), std::cell::RefCell::new(Some(handler)));
+    scale.connect_destroy(move |_| {
+        if let (Some(dialog), Some(handler)) = (dialog.upgrade(), handler.take()) {
+            dialog.disconnect(handler);
+        }
+    });
+}
+
 /// The first widget under `root` with the style class `class`.
 fn find_by_class(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
     if root.has_css_class(class) {
@@ -1168,6 +1198,11 @@ impl ThemeSettings {
                 scale.set_hexpand(true);
                 scale.set_valign(gtk::Align::Center);
                 scale.set_width_request(160);
+                // Built after Settings' breakpoint was added: the least
+                // window's width it follows itself (R7-A-5).
+                if let Some(dialog) = self.dialog.upgrade() {
+                    narrow_in_least_window(&dialog, &scale);
+                }
                 scale.update_property(&[
                     gtk::accessible::Property::Label(&def.label),
                     gtk::accessible::Property::ValueText(&show(now)),
