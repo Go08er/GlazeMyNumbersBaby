@@ -582,7 +582,7 @@ fn scales_one_inside_another_stay_within_what_can_be_drawn() {
         ("draw:scale(1e4) draw:circle(0, 0, 1e5, '#fff')", false),
         ("draw:scale(1e4) draw:circle(9e3, 0, 1e3, '#fff')", true),
         (
-            "draw:scale(1e3) draw:fill(gmnb.svg_path('M0 0 L1e6 0 L0 1 Z'), '#fff')",
+            "draw:scale(1e3) draw:fill(gmnb.svg_path('M0 0 L9e5 0 L0 1 Z'), '#fff')",
             false,
         ),
         (
@@ -1248,12 +1248,12 @@ fn a_dashed_stroke_is_charged_by_its_dashes() {
     );
     // SVG data, a rectangle, a circle, a curve: counted as long as they are.
     for path in [
-        "gmnb.svg_path('M0 0 L1e5 0')",
-        "gmnb.svg_path('M0 0 C 0 3e5 3e5 3e5 3e5 0')",
+        "gmnb.svg_path('M0 0 L9e5 0')",
+        "gmnb.svg_path('M0 0 C 0 9e5 9e5 9e5 9e5 0')",
         "gmnb.svg_path('M0 0 A 4e5 4e5 0 1 1 1 1')",
-        "gmnb.path():rect(0, 0, 3e4, 3e4)",
-        "gmnb.path():circle(0, 0, 1e5)",
-        "gmnb.path():move_to(0, 0):line_to(1e5, 0):close()",
+        "gmnb.path():rect(0, 0, 3e5, 3e5)",
+        "gmnb.path():circle(0, 0, 1e6)",
+        "gmnb.path():move_to(0, 0):line_to(1e6, 0):close()",
     ] {
         over(
             cost(&format!(
@@ -1272,15 +1272,109 @@ fn a_dashed_stroke_is_charged_by_its_dashes() {
         let c = cost(body).unwrap();
         assert!(c < 0.2, "{body}: {c}");
     }
-    // 3000 dashes are drawn; 6000 are not.
+    // 60 000 butt-capped dashes are drawn (66 000 are what a 760 x 640
+    // frame has points for); 80 000 are not.
     let line = |dashes: u32| {
         format!(
             "draw:stroke(gmnb.path():move_to(0, 0):line_to({}, 0), {{ width = 1, dash = {{ 1, 1 }} }}, '#fff')",
             dashes * 2
         )
     };
-    assert!(cost(&line(3000)).is_ok());
-    over(cost(&line(6000)).unwrap_err());
+    assert!(cost(&line(60_000)).is_ok());
+    over(cost(&line(80_000)).unwrap_err());
+}
+
+/// R7-D-1: a dashed stroke was charged 0.2 points a dash whatever it was,
+/// 5000 dashes to a 760 x 640 frame: a dot grid (a dot every 8 px, 7600
+/// dashes), a dotted graph paper (a line every 8 px, dashed 1 on, 2 off:
+/// 40 000) and a field of round dots were all refused. Measured on the
+/// software renderer (processor time, the app at 760 x 640 and 1920 x 1080)
+/// a butt-capped dash costs 0.13 to 0.26 us, however many cross (the dotted
+/// graph paper's 40 000: 5 ms of a frame, charged 650 ms), and a round-capped
+/// one 1.3 to 2 us (7600: 13 ms; 83 000: 105 ms). The weights keep a frame
+/// of them inside its allowance, a frame has at most 262 144 units of them
+/// at the cheap weight in a window of any size (a butt cap is one unit,
+/// another cap three), and the hostile frames of R5-D-1 are as refused as
+/// before.
+#[test]
+fn dashed_grids_and_dotted_papers_are_drawn() {
+    let cost = |w: f32, h: f32, body: &str| -> Result<f64, String> {
+        let (theme, _d) = background("dotgrid", "", body);
+        match theme.draw(LayerKind::Background, &Ctx::default(), &Frame::sized(w, h)) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let over = |e: String| assert!(e.contains("what one may to draw"), "{e}");
+    // A dot every `gap` px, a dashed line for each row of them.
+    let dots = |gap: u32, cap: &str, w: u32, h: u32| {
+        format!(
+            "local p = gmnb.path() for y = {gap}, {h}, {gap} do p:move_to(0, y):line_to({w}, y) end \
+             draw:stroke(p, {{ width = 2, cap = '{cap}', dash = {{ 0.01, {gap} }} }}, '#888')"
+        )
+    };
+    // 760 x 640: 7600 round dots (a dot every 8 px) and 19 000 butt dashes (a
+    // dot every 5 px) are drawn.
+    assert!(cost(760.0, 640.0, &dots(8, "round", 760, 640)).unwrap() < 0.9);
+    assert!(cost(760.0, 640.0, &dots(5, "butt", 760, 640)).unwrap() < 0.4);
+    // 1920 x 1080: a round dot every 8 px (32 000) too.
+    assert!(cost(1920.0, 1080.0, &dots(8, "round", 1920, 1080)).unwrap() < 0.9);
+    // A graph paper in one path, its fine lines (a horizontal and a vertical
+    // for every 8 px) dotted 1 on, 2 off: 40 000 dashes crossing each other.
+    let paper = "local p = gmnb.path() \
+        for x = 0, 760, 8 do p:move_to(x + 0.5, 0):line_to(x + 0.5, 640) end \
+        for y = 0, 640, 8 do p:move_to(0, y + 0.5):line_to(760, y + 0.5) end \
+        draw:stroke(p, { width = 1, dash = { 1, 2 } }, '#3aa0a0')";
+    assert!(cost(760.0, 640.0, paper).unwrap() < 0.9);
+    // Still refused: round dots every 3 px, and what no window has room for,
+    // in the largest: 1 120 000 dashes of an 800-line zigzag, 1 400 000 round
+    // ones in parallel (R5-D-1).
+    over(cost(760.0, 640.0, &dots(3, "round", 760, 640)).unwrap_err());
+    let zigzag = "local p = gmnb.path():move_to(0, 100) \
+        for i = 1, 800 do p:line_to(i % 2 == 0 and 0 or 7600, 100 + (i % 7) * 400) end \
+        draw:stroke(p, { width = 2, dash = { 0.5, 0.5 } }, '#f00')";
+    over(cost(7680.0, 4320.0, zigzag).unwrap_err());
+    over(cost(7680.0, 4320.0, &dots(1, "round", 7680, 4320)).unwrap_err());
+    // The units are a frame's, not a window's: 20 000 px of dashes 0.01 on,
+    // 0.01 off are a million, which 8K, where 1000 points make 68 000, does
+    // not draw.
+    over(
+        cost(
+            7680.0,
+            4320.0,
+            "draw:stroke(gmnb.path():move_to(0, 0):line_to(20000, 0), { width = 1, dash = { 0.01, 0.01 } }, '#fff')",
+        )
+        .unwrap_err(),
+    );
+}
+
+/// R7-D-2: a round-capped dash costs the software renderer the more the
+/// wider its stroke is, its disc being that wide: 4560 dashes (12 lines of
+/// 380) of a stroke 1.5 px wide took 27 ms of a 760 x 640 frame, 20 px 130
+/// ms, 100 px 1 s and 600 px 5 s (on the first weights, 1.3 s at 600 px of
+/// 4560, which they charged 93% of a frame's 100 ms). A butt cap costs no
+/// more wide.
+#[test]
+fn wide_round_dashes_are_charged_by_their_width() {
+    let cost = |w: f32, h: f32, body: &str| -> Result<f64, String> {
+        let (theme, _d) = background("widedash", "", body);
+        match theme.draw(LayerKind::Background, &Ctx::default(), &Frame::sized(w, h)) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let over = |e: String| assert!(e.contains("what one may to draw"), "{e}");
+    let wide = |cap: &str, width: u32| {
+        format!(
+            "local p = gmnb.path() for y = 30, 580, 50 do p:move_to(0, y):line_to(760, y) end \
+             draw:stroke(p, {{ width = {width}, cap = '{cap}', dash = {{ 1, 1 }} }}, '#888')"
+        )
+    };
+    over(cost(760.0, 640.0, &wide("round", 600)).unwrap_err());
+    over(cost(760.0, 640.0, &wide("round", 100)).unwrap_err());
+    over(cost(760.0, 640.0, &wide("square", 600)).unwrap_err());
+    assert!(cost(760.0, 640.0, &wide("butt", 600)).unwrap() < 0.9);
+    assert!(cost(760.0, 640.0, &wide("round", 6)).unwrap() < 0.9);
 }
 
 #[test]

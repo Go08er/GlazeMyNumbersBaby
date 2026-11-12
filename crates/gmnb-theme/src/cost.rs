@@ -21,7 +21,7 @@
 //! of the whole window at that size costs at most about 100 ms or 256 MB;
 //! a larger window, more.
 
-use crate::draw::{BlendMode, Filter, Op, Rect, Stroke};
+use crate::draw::{BlendMode, Filter, LineCap, Op, Rect, Stroke};
 use crate::types::{GradientKind, Paint, Shadow};
 
 /// The area the weights are of: the window they were measured in.
@@ -83,14 +83,32 @@ const TILE: f64 = 5.5;
 /// the whole picture each time it is repeated (50 tiles of 10 × 10 px of a
 /// 2048 × 2048 still: 190 ms, for nothing the area charged; 200: 750 ms).
 const TILE_SOURCE: f64 = 7.0;
-/// Points for each dash of a dashed stroke: the toolkit's stroker makes a
-/// shape of every dash (and of its round caps), and the shapes of a path
-/// that crosses itself cost it more than their number (the software
-/// renderer, 100 000 dashes of a zigzag of 2000 lines: 0.9 s; 560 000 of
-/// 400: 2 s; 1 120 000 of 800: 25 s and 460 MB; round caps, 1 400 000
-/// of parallel lines: 15 s and 2.1 GB). However much of it lies beyond
-/// the layer, so this is not by what can be seen.
-const DASH: f64 = 0.2;
+/// Points for each dash of a dashed stroke, up to [`DASH_UNITS`] of them in
+/// a frame: a butt-capped dash is one unit, a round- or square-capped one
+/// [`DASH_CAPPED`] (the software renderer, in parallel dashes of a stroke
+/// 1.5 px wide: 0.1 to 0.2 us for a butt-capped dash up to 230 000 of them
+/// in a frame of 1920 x 1080 and 0.3 us at 520 000 in 3840 x 2160, 13 MB;
+/// 1.9 to 2 us for a round-capped one at 83 000 and 520 000, 100 MB; a
+/// graph paper's grid of 40 000 dotted lines dashed 1 on, 2 off, each
+/// crossing the others, 5 ms; in dashed lines that cross, 65 000 butt-capped
+/// in 100 lines took 56 ms of a 760 x 640 frame, 16 000 round-capped 55 ms).
+/// Past the units each costs [`DASH_OVER`], the weight the dashes had
+/// before they were measured at those counts, for the toolkit's stroker
+/// makes a shape of every dash, and the shapes of a path that crosses
+/// itself cost it more than their number (the software renderer, 100 000
+/// dashes of a zigzag of 2000 lines: 0.9 s; 560 000 of 400: 2 s; 1 120 000
+/// of 800: 25 s and 460 MB; round caps, 1 400 000 of parallel lines: 15 s
+/// and 2.1 GB). The units are not by the size of the layer, so that no
+/// window is allowed more dashes than were measured; the points are not by
+/// what can be seen, for dashes beyond the layer cost as much.
+const DASH: f64 = 0.015;
+const DASH_CAPPED: f64 = 3.0;
+const DASH_UNITS: f64 = 262_144.0;
+const DASH_OVER: f64 = 0.2;
+/// And for each pixel of width of a stroke of round or square caps, for each
+/// dash: 1.8 us a dash at 1.5 px, 8.6 at 20, 70 at 100, 340 at 600 (round
+/// caps, 15 000 parallel dashes in a 760 x 640 frame).
+const DASH_WIDE: f64 = 0.01;
 /// Points for each unit of a path's strain (`path::strain`: a pair of its
 /// lines whose boxes meet is one, and a pair that crosses four). The
 /// tessellator spends time on each crossing: 16 million of them, the lines
@@ -301,6 +319,8 @@ pub(crate) struct Meter {
     glyphs: [f64; 4],
     allowance: f64,
     spent: f64,
+    /// The dashes of this frame's strokes so far, in [`DASH`] units.
+    dash_units: f64,
     /// Points for the picture the next operation draws, by its own size.
     picture: f64,
     /// The fonts text has been set or measured in this frame.
@@ -351,6 +371,7 @@ impl Meter {
             // what it can show.
             allowance: POINTS * scale * area(Some(visible)).max(REFERENCE_AREA) / REFERENCE_AREA,
             spent: 0.0,
+            dash_units: 0.0,
             picture: 0.0,
             fonts: Vec::new(),
         }
@@ -511,7 +532,20 @@ impl Meter {
                 stroke,
                 paint: p,
             } => {
-                self.spent += DASH * dashes(stroke, crate::path::length(path));
+                let n = dashes(stroke, crate::path::length(path));
+                // A butt-capped dash is one unit at DASH points; another
+                // cap's is DASH_CAPPED units, and its disc is drawn as wide
+                // as the stroke, which costs the wider it is.
+                let (each, price) = if matches!(stroke.cap, LineCap::Butt) {
+                    (1.0, DASH)
+                } else {
+                    let wide = f64::from(stroke.width) * self.m.magnitude();
+                    (DASH_CAPPED, DASH * DASH_CAPPED + DASH_WIDE * wide)
+                };
+                let units = each * n;
+                let cheap = (DASH_UNITS - self.dash_units).clamp(0.0, units) / each;
+                self.spent += price * cheap + DASH_OVER.max(price) * (n - cheap);
+                self.dash_units += units;
                 self.cross(path, f64::from(stroke.width) / 2.0, STRAIN_STROKE)?;
                 (
                     masked(p),

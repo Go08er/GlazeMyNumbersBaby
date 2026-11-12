@@ -1718,7 +1718,15 @@ frame, however little each covered). A `push_blend` is charged by its mode
 soft-light, 100; the rest, 48). A dashed stroke is also charged for each of its dashes, whatever
 they cover (the toolkit's stroker makes a shape of each, and shapes that
 cross cost more than their number: a zigzag of 2000 lines dashed 0.5 on,
-0.5 off was 14 million of them, a minute of the software renderer). So is
+0.5 off was 14 million of them, a minute of the software renderer). A
+butt-capped dash is one unit and a round- or square-capped one three, at
+0.015 points a unit for the first 262 144 units of a frame, in a window of
+any size, and 0.2 a dash after them; a round or square cap, whose disc is
+as wide as the stroke, also 0.01 for each pixel of the stroke's width
+(measured on the software renderer: a butt-capped dash 0.1 to 0.3 µs, in
+parallel lines or in a graph paper's grid of them crossing, up to 520 000;
+a round-capped one 1.9 to 2 µs at 1.5 px wide, 8.6 at 20, 70 at 100 and
+340 at 600; a dotted graph paper of 40 000 dashes, 5 ms of a frame). So is
 a path whose lines lie across each other, for each pair whose boxes meet
 and more for each pair that crosses (a star of 8000 corners, each joined to
 the one almost opposite, has 16 million crossings: 12 s stroked, 1.5 s
@@ -1760,7 +1768,7 @@ itself, takes seconds a frame at the cap for blurs and shadows.)
 | Text and glyphs (their box: the font's size by the text's bytes, three sizes tall; a glyph, the readout's whole value); with a gradient | 7; 23 + the paint's | |
 | A font past the frame's first 8 (`draw:text`, `draw:text_size`; not by area) | 45 each | 22 more |
 | `push_opacity`; `push_mask`; `push_blend` (all that can be seen; 190 for hue, saturation, color and luminosity, 100 for color-dodge, color-burn and soft-light) | 13; 26; 48 | 76; 38; 20 |
-| A dash of a dashed `draw:stroke` (an on-interval of the pattern, however little of the layer it covers; the pattern's length over the path's: a path's points and control points joined, a circle or arc as its whole) | 0.2 each, not by area | 5000 |
+| A dash of a dashed `draw:stroke` (an on-interval of the pattern, however little of the layer it covers; the pattern's length over the path's: a path's points and control points joined, a circle or arc as its whole) | 0.015 a unit (a butt-capped dash is 1, another cap's 3) up to 262 144 units a frame, 0.2 a dash past them, and 0.01 more for each pixel of width of a round or square cap; not by area | 66 000 butt-capped; 15 000 round at 2 px, 1000 at 100 px |
 | A filled or stroked path's lines (a curve's control points joined) that lie across each other: each pair whose boxes meet (a stroke's grown by half its width; a line and the one it is joined to are no pair), and four for each pair that crosses; not by area | 0.002 a unit stroked; 0.00035 filled | 500 000; 2 800 000 units |
 | `push_blur(r)` | 140 + 1.6 r (0 for no blur) | 3 at 100, 7 at 1 |
 | `push_shadow`: each shadow of blur b | 71 + 0.87 b; 13 unblurred | 6 at 100 |
