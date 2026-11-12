@@ -249,12 +249,11 @@ impl Layers {
             .filter(|i| !std::ptr::eq(Rc::as_ptr(i), except))
             .filter(|i| i.widget.upgrade().is_some_and(|w| w.is_mapped()))
             .filter_map(|i| {
-                i.state
-                    .try_borrow()
-                    .ok()?
-                    .picture
-                    .as_ref()
-                    .map(|p| p.offscreen)
+                let st = i.state.try_borrow().ok()?;
+                // (A picture of a theme since unloaded counts for nothing.)
+                (st.generation == self.generation.get())
+                    .then(|| st.picture.as_ref().map(|p| p.offscreen))
+                    .flatten()
             })
             .sum();
         (OFFSCREEN_BYTES - others).max(0.0)

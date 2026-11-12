@@ -187,6 +187,13 @@ impl Backstop {
         self.trips(used()?)
     }
 
+    /// A theme was loaded: the next reading past the threshold is acted on
+    /// again, even if GMNB never came back under it (what the allocator
+    /// keeps mapped after a theme is switched off still counts).
+    pub fn rearm(&self) {
+        self.over.set(false);
+    }
+
     fn trips(&self, used: u64) -> Option<u64> {
         let over = used >= self.threshold;
         let was = self.over.replace(over);
@@ -232,5 +239,9 @@ mod tests {
         assert_eq!(b.trips(160), None);
         assert_eq!(b.trips(90), None);
         assert_eq!(b.trips(120), Some(120));
+        // A theme loaded while still past it: acted on again.
+        assert_eq!(b.trips(130), None);
+        b.rearm();
+        assert_eq!(b.trips(130), Some(130));
     }
 }

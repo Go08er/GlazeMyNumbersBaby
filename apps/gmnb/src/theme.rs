@@ -695,8 +695,10 @@ impl Hub {
             }
         }
         // Nothing of the theme that was keeps running; the layers of the
-        // one that is start afresh, and its sounds are made.
+        // one that is start afresh, and its sounds are made. The memory
+        // backstop watches it as it did the first.
         self.told_off.borrow_mut().clear();
+        self.layers.backstop.rearm();
         self.layers.theme_changed();
         self.sounds_changed();
         self.apply(false);
