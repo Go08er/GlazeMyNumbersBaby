@@ -19,8 +19,6 @@
 //! [`Layers::listen`]s (theme sounds, while a theme with sounds is on:
 //! [`Layers::set_heard`]), under reduced motion too.
 
-#[cfg(test)]
-mod costprobe;
 pub mod replay;
 pub mod tile;
 
@@ -1766,3 +1764,7 @@ end } } }
         near(100, 200, [0, 0, 0]);
     }
 }
+
+/// The frame-cost probe (an ignored test; `tools/theming/README.md`).
+#[cfg(test)]
+mod costprobe;
