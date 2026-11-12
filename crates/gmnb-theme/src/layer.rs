@@ -571,6 +571,42 @@ pub(crate) fn preview_table(
     })
 }
 
+/// The most `place` may scale a cell: what a style's `scale` allows too.
+pub const PLACE_SCALE: f32 = 4.0;
+/// The most the keys may cover together once `place` has scaled them, as a
+/// multiple of what they cover at rest. The toolkit draws each key, its
+/// shadows and its text again at the size it is placed, and none of that
+/// is charged to `draw`: 35 keys of 8 shadows of a blur of 30 scaled by 20
+/// took the software renderer 16 s a frame (by 50, over two minutes).
+pub const PLACE_AREA: f32 = 2.25;
+
+/// Keeps what `place` asked for within [`PLACE_AREA`]: when the cells it
+/// scales would cover more than that, all it scaled are scaled less, by
+/// as much as it takes. A show or a hop (all the keys at 1.3, say) is left
+/// alone.
+pub fn bound_places(cells: &[KeyCell], places: &mut [Option<Placement>]) {
+    let area = |c: &KeyCell| f64::from(c.rect[2].max(0.0)) * f64::from(c.rect[3].max(0.0));
+    let own: f64 = cells.iter().map(area).sum();
+    let (mut plain, mut scaled) = (0.0, 0.0);
+    for (i, cell) in cells.iter().enumerate() {
+        match places.get(i).copied().flatten() {
+            None => plain += area(cell),
+            Some(p) if p.opacity > 0.0 && p.scale > 0.0 => {
+                scaled += area(cell) * f64::from(p.scale).powi(2);
+            }
+            Some(_) => {}
+        }
+    }
+    let room = f64::from(PLACE_AREA) * own - plain;
+    if scaled <= room || scaled <= 0.0 {
+        return;
+    }
+    let by = (room.max(0.0) / scaled).sqrt() as f32;
+    for p in places.iter_mut().flatten() {
+        p.scale *= by;
+    }
+}
+
 /// What `place` returned for one cell.
 pub(crate) fn placement(v: &crate::ThemeValue) -> Option<Placement> {
     let crate::ThemeValue::Map(m) = v else {
@@ -584,7 +620,7 @@ pub(crate) fn placement(v: &crate::ThemeValue) -> Option<Placement> {
     Some(Placement {
         dx: get("dx", 0.0).clamp(-10_000.0, 10_000.0),
         dy: get("dy", 0.0).clamp(-10_000.0, 10_000.0),
-        scale: get("scale", 1.0).clamp(0.0, 100.0),
+        scale: get("scale", 1.0).clamp(0.0, PLACE_SCALE),
         opacity: get("opacity", 1.0).clamp(0.0, 1.0),
     })
 }
