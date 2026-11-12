@@ -837,6 +837,11 @@ desktop's own `gtk.css` cannot repaint it.
 | `stock.destructive` | `danger` | `destructive_color`, `destructive_bg_color` |
 | `stock.error` | `danger` | `error_color`, `error_bg_color` |
 
+Settings and About are drawn on `stock.window` (libadwaita's
+`window_bg_color`, also in the floating dialog of a wide window), with
+their rows on `stock.card`; `stock.dialog` is libadwaita's for its alert
+dialogs, not these.
+
 ### Native families
 
 | Token | Base | Meaning |
