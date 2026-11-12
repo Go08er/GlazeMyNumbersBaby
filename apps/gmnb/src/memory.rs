@@ -16,9 +16,11 @@
 //!    the process's private writable memory (its heap, its threads' stacks,
 //!    the driver's own data) may come to, set first thing in `main` (the
 //!    launcher and the Flatpak run it alike). Past it an allocation fails and
-//!    GMNB exits (Rust and GLib abort on a failed allocation): the settings
-//!    are saved as they change, and the session (History, Memory, the
-//!    equations) when the backstop trips, so a restart has them.
+//!    GMNB exits (Rust and GLib abort on a failed allocation; the software
+//!    renderer leaves out, with a warning, what it can't draw until then):
+//!    the settings are saved as they change, and the session (History,
+//!    Memory, the equations) when the backstop trips, so a restart has
+//!    them.
 //!
 //! `RLIMIT_AS` would count the address space the GPU drivers reserve and
 //! never touch (under the base look, 1.6 GB on NVIDIA's Vulkan, 2.1 GB on

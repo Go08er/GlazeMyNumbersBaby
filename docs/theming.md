@@ -1639,6 +1639,8 @@ says so beside *Open themes folder*.
 | One library call's own work, which the time limit can't stop midway: a plain search (`string.find` with `plain` or a pattern of no magic characters, `string.split`); a pattern search (`find`, `match`, `gmatch`, `gsub`); `table.move` | 2^30 bytes (string × pattern); 2^26 (string bytes × the pattern's longest `[set]`); 2^20 elements. Past them the call is an error. |
 | Draw calls per `draw` | 4096 |
 | What a frame costs to draw | 1000 points for each 760 × 640 of what the layer is charged over (a keypad's or a readout's, the window too), and never fewer than 1000 ([Drawing per frame](#drawing-per-frame)) |
+| What the window's layers hold off-screen | 1 GiB for all the layers on screen together, whatever the window's size: the masks GL makes of what is filled, and the surfaces the effects are drawn into, by the window's device pixels ([What the layers hold off-screen](#what-the-layers-hold-off-screen)) |
+| The memory of the whole of GMNB | 4 GiB, whatever the theme or the calculation (the kernel's `RLIMIT_DATA`); past 3.5 GiB the session is saved and the theme switched off ([The memory of the whole of GMNB](#the-memory-of-the-whole-of-gmnb)) |
 | Open pushes / saves at once | 32 each |
 | Path segments per frame | 16 384 |
 | Text per `draw:text` call; text calls per frame | 256 bytes; 64 |
@@ -1690,6 +1692,9 @@ for a picture of 2 MiB).
 | A `draw` takes more than four times its limit | Switched off at once (a library call the app couldn't interrupt). |
 | `place` fails or runs out of time | The keys stay where they are that frame; `draw` still runs. After 3 failures `place` is switched off. |
 | The memory limit is hit | The theme is unloaded: the base look, and a toast. |
+| A frame would have the renderer hold more off-screen than the window's other layers leave it | As past any cap: nothing is drawn for that layer that frame, and its note says how much it would have held. After 3, the hook is switched off. |
+| GMNB's memory passes 3.5 GiB, read after a frame that drew a theme's layer or the graph | The session (History, Memory, the equations, the window's size) is saved at once, and the theme switched off: the base look, a toast ("Theme ‘Name’ was switched off: GMNB's memory reached 3.6 GB"), and Settings says why. The theme stays chosen: the next start loads it again. |
+| GMNB's memory reaches 4 GiB all the same | An allocation fails, and GMNB exits (Rust and GLib end the program when they can't allocate; on the software renderer, what can't be drawn for want of memory is left out, with a warning, until then). The settings were saved as they changed, and the session when the backstop tripped. |
 | A font or image can't be read or is too big | The theme loads without it; a note. |
 | An animation or sound can't be read, is too big, or isn't what its first bytes promise | The same: drawing it draws nothing, playing it plays nothing; a note. |
 | A picture's file has a sound header and can't be decoded | It has its size and draws nothing; a note, when it is first drawn. |
@@ -1811,6 +1816,118 @@ same moment costs 44%. 0.2's four blobs and two arcs, radial gradients
 all, were a fifth standing and 56% at their dearest).
 `Api::frame_cost` and `Api::busiest_frame` (in `gmnb-theme`) say what the
 last frame cost, and the dearest since the theme was loaded, as a share.
+
+### What the layers hold off-screen
+
+The points a frame may spend grow with the window, and so did what the
+renderer holds while the frame is drawn: GL fills a path or a circle
+through a mask of what it covers, and an effect is drawn into a surface of
+its own. Round 7 measured 64 circles over the window, 0.90 of a frame's
+points at any size: 253 MB more on GL at 760 × 640, 790 MB at
+1600 × 1080, and over 3 GB at 3840 × 2160 (it was stopped there). So the
+layers on screen share **1 GiB** of it, whatever the window's size, and
+whatever its scale (counted in the window's device pixels: a window of
+1920 × 1080 at twice the scale holds what one of 3840 × 2160 does). Each
+frame is told what the window's other layers on screen leave it (their
+pictures stand, and are drawn again with every frame of the window); a
+call that takes it past that is an error, and the frame is dropped, as
+past any cap, its note saying how much it would have held. A picture that
+holds more than the others leave it once they hold more (a page shown
+again) is drawn again, within what is left.
+
+Each kind holds, for each device pixel of what it covers (its box, as
+[Drawing per frame](#drawing-per-frame) counts it: cut to the clips open
+and to what can be seen, an effect's the box around what was drawn inside
+it, a blur's and a shadow's grown by their reach), what it was measured to
+hold on GL on llvmpipe, the whole of a window of 760 × 640 and of
+1600 × 1080 drawn up to 64 times (the software renderer holds a surface
+only while it draws into it: a tenth or less):
+
+| Kind | Bytes a device pixel |
+|---|---|
+| A path filled or stroked, a circle: in a colour; with a gradient | 8 (7 to 7.9 measured); 11 (10.5) |
+| A linear gradient of more than 6 stops (GL draws one through a picture of its own), more | 7 |
+| `push_opacity` below 1 | 7 (6.7 to 6.9) |
+| `push_blur` above 0 | 13 (11.6 to 13) |
+| `push_shadow`: 7, and 9 for each of its shadows that is blurred | 7 unblurred (6.9 to 7); 16 with one blurred (15 to 16.4) |
+| `push_mask`, `push_blend`; text or a glyph in a gradient (drawn through itself as a mask) | 14 (13.1 to 13.6) |
+| A rectangle, a rounded one, a picture, a border, a `draw:shadow`, a clip (rounded or turned: 0.5 to 1.5 held, however many were open) | nothing |
+
+An opacity of 1 and a blur of 0 are drawn straight through, and hold
+nothing. What a frame holds is
+`Api::frame_offscreen` (in `gmnb-theme`), in bytes.
+
+Measured in the app at 3840 × 2160 on GL on llvmpipe, where what the
+renderer holds is the process's own memory: Round 7's 64 circles are
+refused (they would hold 1128 MB), and GMNB stays at the base look's 430
+MB; a background asking for 1040 MB of the 1074 every frame (opacity
+groups, blurs and circles over the window) settled at 2.0 GB in all (1.6
+GB more than the base look: the renderer keeps the surfaces of a frame or
+two in flight); a frosted-glass theme (five lights as large as the window,
+blurred behind three to six panes of glass) holds 500 to 550 MB by this
+count, half of what may be held, and drew at 1920 × 1080 and 3840 × 2160
+with nothing refused (1.15 GB in all at 3840 × 2160; 180 MB on the software
+renderer). On NVIDIA's Vulkan the same frames held as much in the process's
+resident memory (the driver's own buffers, shared with the card), and
+nothing more on the card. The built-in themes hold little of it: every
+layer at its dearest together, over the frame-cost sweep's windows up to
+3840 × 2160 (`frame_budget.rs`, which holds it under a quarter), Aurora
+188 MB (its sky drawn through one mask over the window, 174 MB, and its
+readout's glow), Sprinkles 61 and Swirls 10.
+
+### The memory of the whole of GMNB
+
+GMNB may not grow past **4 GiB**, whatever the theme or the calculation.
+Three things hold it there:
+
+1. At the source, the limit above: what a theme's frames can make the
+   renderer hold, the most a theme could otherwise grow GMNB by.
+2. A backstop. After a frame that painted a theme's layer, or the graph,
+   at most four times a second, GMNB reads its own memory
+   (`/proc/self/statm`: the larger of what is resident and what the
+   ceiling counts). Past 3.5 GiB it saves the session, as closing the
+   window does, and switches the theme off: the base look, a toast, and
+   Settings says why; once the base look is drawn, the allocator's free
+   memory is given back. Nothing is read at rest: only a painted frame
+   asks. (Measured on GL on llvmpipe at 3840 × 2160, the backstop lowered
+   to 1.5 GiB: the background above that asks for all it may was switched
+   off at 1.6 GB, and GMNB's resident memory fell to 0.75 GB; without the
+   giving back, 1.3 GB. What its allocator keeps mapped, 1.4 GB, still
+   counts against the ceiling.)
+   The graph's plots are drawn in frames like any other and meet the same
+   reading; the analysis of a function runs on a worker within its own
+   budget of work and time, and is read only by the frames after it.
+3. The ceiling itself: the kernel's `RLIMIT_DATA` (what the process's
+   private writable memory may come to: its heap, its threads' stacks,
+   the Luau machine, the software renderer's surfaces), set to 4 GiB first
+   thing in `main`, so the installed launcher and the Flatpak, which run
+   the same `main`, have it alike (a lower limit GMNB was started with is
+   kept; the hard limit is left as it was). Past it an allocation fails,
+   and GMNB exits: Rust and GLib end a program that can't allocate (on GL
+   on llvmpipe, at a ceiling lowered to 2 GiB for the measurement:
+   `GLib-ERROR: failed to allocate 33177600 bytes`), and the kernel logs
+   `mmap: gmnb (pid): VmData … exceed data ulimit`. The software renderer
+   leaves out what it can't draw for want of memory, with a warning for
+   each, until then. The
+   settings were saved as they changed, and the session when the backstop
+   tripped; a restart has them. A program GMNB starts (the app for
+   folders, from *Open themes folder*) is given back the limit GMNB was
+   started with.
+
+`RLIMIT_AS` would count the address space the GPU drivers reserve and
+never touch (GMNB's address space under the base look: 1.6 GB on NVIDIA's
+Vulkan, 2.1 GB on GL on llvmpipe, 0.6 GB on the software renderer), not
+what they hold. `RLIMIT_DATA` doesn't break them: with the ceiling in force, GMNB on
+NVIDIA's Vulkan (an RTX 3070, driver 595.112.07) ran the base look and the
+three built-in themes at 760 × 640 and 3840 × 2160 with its private
+writable memory at 161 to 187 MB, as without it, and the 4K frosted glass
+and the 1040 MB background above at 160 to 180 MB. Most of that is the
+driver's own: 62 MB on the software renderer; on GL on llvmpipe, 515 MB,
+most of it its forty-odd threads' stacks. NVIDIA's buffers for what the
+renderer draws are shared with the card, and the ceiling doesn't count
+them (the 1040 MB background: 160 MB counted, 1.2 GB resident): there the
+limit at the source bounds them, and the backstop, which reads what is
+resident, sees them.
 
 To get out of a theme that makes the window unusable, start GMNB with
 `--theme base` (or `GMNB_THEME=base`): it starts in the base look without
