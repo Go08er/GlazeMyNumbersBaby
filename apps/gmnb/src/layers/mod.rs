@@ -19,6 +19,8 @@
 //! [`Layers::listen`]s (theme sounds, while a theme with sounds is on:
 //! [`Layers::set_heard`]), under reduced motion too.
 
+#[cfg(test)]
+mod costprobe;
 pub mod replay;
 pub mod tile;
 
