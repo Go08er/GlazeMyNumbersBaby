@@ -36,7 +36,9 @@ Out of the box GMNB looks exactly like DGMNB, and can be made see-through
 other look is a **theme**: a small [Luau](https://luau.org) script in a
 folder of its own that restyles the calculator and can draw on it, with
 pictures, animations and sounds of its own, run in a sandbox with time and
-memory limits ([`docs/theming.md`](docs/theming.md)). GMNB comes with
+memory limits ([`docs/theming.md`](docs/theming.md)). No protection is
+complete: GMNB is not responsible for the actions of third-party themes, so
+make sure you trust a theme's author before you use it. GMNB comes with
 three:
 
 - **Aurora**, the look GMNB was born with: an aurora behind glass keys,

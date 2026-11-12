@@ -287,8 +287,27 @@ fn activate(app: &adw::Application) {
 /// would (DGMNB: `DGMNB_KEYS` with `{tab}`s).
 fn focus_by_class(win: adw::ApplicationWindow, class: String) {
     glib::timeout_add_local_once(Duration::from_millis(600), move || {
+        focus_now(win, class, 50)
+    });
+}
+
+/// [`focus_by_class`] at once; while the widget isn't laid out yet (on a
+/// loaded machine Settings can still be unallocated at 600 ms, and where it
+/// is said would be nothing), tries again a tenth of a second later, `tries`
+/// more times.
+fn focus_now(win: adw::ApplicationWindow, class: String, tries: u32) {
+    {
         let mut todo = vec![win.clone().upcast::<gtk::Widget>()];
         while let Some(w) = todo.pop() {
+            if w.has_css_class(&class)
+                && tries > 0
+                && (!w.is_mapped() || w.width() == 0 || w.height() == 0)
+            {
+                glib::timeout_add_local_once(Duration::from_millis(100), move || {
+                    focus_now(win, class, tries - 1);
+                });
+                return;
+            }
             // (A text field takes it in its text, which grab_focus says.)
             if w.has_css_class(&class) && w.grab_focus() {
                 win.set_focus_visible(true);
@@ -312,7 +331,7 @@ fn focus_by_class(win: adw::ApplicationWindow, class: String) {
             }
         }
         eprintln!("GMNB_FOCUS: nothing focusable with class {class}");
-    });
+    }
 }
 
 /// Whether another GMNB owns the application's bus name.
@@ -405,29 +424,49 @@ fn schedule_screenshot(win: adw::ApplicationWindow, path: PathBuf) {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1600);
     glib::timeout_add_local_once(Duration::from_millis(delay), move || {
-        let (w, h) = (win.width(), win.height());
-        let paintable = gtk::WidgetPaintable::new(Some(&win));
-        let snapshot = gtk::Snapshot::new();
-        paintable.snapshot(&snapshot, w as f64, h as f64);
-        let result = snapshot
-            .to_node()
-            .zip(win.renderer())
-            .map(|(node, renderer)| {
-                renderer.render_texture(
-                    &node,
-                    Some(&graphene::Rect::new(0.0, 0.0, w as f32, h as f32)),
-                )
-            })
-            .ok_or("nothing rendered")
-            .and_then(|tex| tex.save_to_png(&path).map_err(|_| "save failed"));
-        match result {
-            Ok(()) => eprintln!("screenshot: {} ({w}x{h})", path.display()),
-            Err(e) => eprintln!("screenshot failed: {e}"),
-        }
-        if let Some(app) = win.application() {
-            app.quit();
-        }
+        take_screenshot(win, path, SCREENSHOT_RETRIES);
     });
+}
+
+/// How many times more a screenshot is tried, a quarter second apart,
+/// while the window has nothing to render yet.
+const SCREENSHOT_RETRIES: u32 = 20;
+
+/// Renders the window to `path` and quits; while it has nothing to render
+/// yet (on a loaded machine it can be unmapped still after the delay: the
+/// least-window tests failed now and then, "nothing rendered"), tries again
+/// a quarter second later, `tries` more times.
+fn take_screenshot(win: adw::ApplicationWindow, path: PathBuf, tries: u32) {
+    let (w, h) = (win.width(), win.height());
+    let paintable = gtk::WidgetPaintable::new(Some(&win));
+    let snapshot = gtk::Snapshot::new();
+    paintable.snapshot(&snapshot, w as f64, h as f64);
+    let rendered = snapshot
+        .to_node()
+        .zip(win.renderer())
+        .map(|(node, renderer)| {
+            renderer.render_texture(
+                &node,
+                Some(&graphene::Rect::new(0.0, 0.0, w as f32, h as f32)),
+            )
+        });
+    let result = match rendered {
+        None if tries > 0 => {
+            glib::timeout_add_local_once(Duration::from_millis(250), move || {
+                take_screenshot(win, path, tries - 1);
+            });
+            return;
+        }
+        None => Err("nothing rendered"),
+        Some(tex) => tex.save_to_png(&path).map_err(|_| "save failed"),
+    };
+    match result {
+        Ok(()) => eprintln!("screenshot: {} ({w}x{h})", path.display()),
+        Err(e) => eprintln!("screenshot failed: {e}"),
+    }
+    if let Some(app) = win.application() {
+        app.quit();
+    }
 }
 
 #[cfg(test)]
