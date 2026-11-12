@@ -167,9 +167,33 @@ pub fn grounds(
             for key in ["keys.number", "keys.func", "keys.operator", "keys.equals"] {
                 inside.extend(over_all(&fill(key), &backdrop));
             }
+            // What Settings' controls lie on (R5-C-2): the card its rows
+            // lie on, the theme's own `card` or, where it hands that
+            // family to the toolkit (`native`), libadwaita's in
+            // `stock.card`;
+            let native_card = matches!(get("native"), Some(Value::Words(w)) if w.contains(&"card"));
+            let card = if native_card {
+                match get("stock.card") {
+                    Some(Value::Color(c)) => Some(Fill::color(c)),
+                    _ => None,
+                }
+            } else {
+                fill("card")
+            };
+            // and the window it is drawn on, the toolkit's (`stock.window`).
+            let window = match get("stock.window") {
+                Some(Value::Color(c)) => Some(Fill::color(c)),
+                _ => None,
+            };
+            // (A card lies on that window, or on the backdrop in the
+            // narrow window's sheet.)
+            let window_over = over_all(&window, &backdrop);
+            let card_under: Vec<Rgba> = backdrop.iter().chain(&window_over).copied().collect();
             let surfaces = SURFACES
                 .iter()
                 .flat_map(|s| over_all(&fill(s), &backdrop))
+                .chain(over_all(&card, &card_under))
+                .chain(window_over)
                 .collect();
             Grounds {
                 outside: backdrop,
