@@ -33,6 +33,8 @@
 //!   line `GMNB_STEPS: focus header` when the focus is in the header bar,
 //!   `GMNB_STEPS: focus <widget type>` for another widget, `GMNB_STEPS:
 //!   focus none` otherwise;
+//! - `sidebar`: a line `GMNB_STEPS: sidebar open` or `GMNB_STEPS: sidebar
+//!   closed`;
 //! - `quit`: what sound has done, a line on stderr (as `GMNB_THEME_STATS`
 //!   writes it), then a line `note: ...` for each of the theme's notes
 //!   (what Settings lists under the themes), and the window closed (its
@@ -61,6 +63,7 @@ enum Step {
     Themes,
     Tab,
     Focused,
+    Sidebar,
     Slide(String, Vec<f64>),
     Quit,
 }
@@ -75,6 +78,7 @@ fn parse(spec: &str) -> VecDeque<Step> {
                 "themes" => return Some(Step::Themes),
                 "tab" => return Some(Step::Tab),
                 "focused" => return Some(Step::Focused),
+                "sidebar" => return Some(Step::Sidebar),
                 _ => {}
             }
             let (what, arg) = part.trim().split_once(':')?;
@@ -171,6 +175,10 @@ fn next(win: Rc<Window>, steps: std::cell::RefCell<VecDeque<Step>>, gap: u64) {
                 None => eprintln!("GMNB_STEPS: no button with class {class}"),
             }
         }
+        Step::Sidebar => eprintln!(
+            "GMNB_STEPS: sidebar {}",
+            if win.sidebar_open() { "open" } else { "closed" }
+        ),
         Step::Choose(id) => {
             // The row of Settings' list that names the theme, chosen as a
             // click on it chooses it (`base`: the base look).
