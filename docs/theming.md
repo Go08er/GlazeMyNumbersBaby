@@ -1845,8 +1845,9 @@ again) is drawn again, within what is left.
 
 Each kind holds, for each device pixel of what it covers (its box, as
 [Drawing per frame](#drawing-per-frame) counts it: cut to the clips open
-and to what can be seen, an effect's the box around what was drawn inside
-it, a blur's and a shadow's grown by their reach), what it was measured to
+and to what can be seen, the window, or the layer where the window isn't
+known; an effect's the box around what was drawn inside it, a blur's and a
+shadow's grown by their reach), what it was measured to
 hold on GL on llvmpipe, the whole of a window of 760 × 640 and of
 1600 × 1080 drawn up to 64 times (the software renderer holds a surface
 only while it draws into it: a tenth or less):

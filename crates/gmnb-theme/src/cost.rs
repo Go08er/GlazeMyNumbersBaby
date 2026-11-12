@@ -905,6 +905,10 @@ struct Offscreen {
     /// screen leave), and the device pixels to the layer's pixel (each way).
     limit: f64,
     density: f64,
+    /// Where the renderer can make a surface, in the layer's coordinates:
+    /// the window (as far as it is known; else the layer itself), for it
+    /// makes none larger than what it draws on.
+    surface: [f64; 4],
     /// For each level open, the bytes it holds for each device pixel of
     /// what is drawn in it.
     levels: Vec<f64>,
@@ -945,8 +949,27 @@ const HELD_TWO: f64 = 14.0;
 
 impl Meter {
     /// The window's layers on screen leave this frame `limit` bytes to hold
-    /// off-screen, at `density` device pixels to the layer's pixel.
-    pub(crate) fn set_offscreen(&mut self, limit: f64, density: f64) {
+    /// off-screen, at `density` device pixels to the layer's pixel, for a
+    /// layer of `size` (`whole`: it covers its window; else the window is
+    /// `window`, in the layer's coordinates, if known).
+    pub(crate) fn set_offscreen(
+        &mut self,
+        limit: f64,
+        density: f64,
+        size: [f32; 2],
+        whole: bool,
+        window: Option<[f32; 4]>,
+    ) {
+        let layer = [
+            0.0,
+            0.0,
+            f64::from(size[0].max(1.0)),
+            f64::from(size[1].max(1.0)),
+        ];
+        self.offscreen.surface = match (whole, window) {
+            (false, Some(window)) => union(Some(layer), rect_box(&window)),
+            _ => layer,
+        };
         self.offscreen.limit = limit.max(0.0);
         self.offscreen.density = if density.is_finite() && density > 0.0 {
             density
@@ -968,6 +991,7 @@ impl Meter {
     /// Bytes for the device pixels of `b` (layer pixels), at `per` a pixel.
     fn offscreen_hold(&mut self, per: f64, b: Option<[f64; 4]>) {
         let d = self.offscreen.density;
+        let b = b.and_then(|b| meet(b, self.offscreen.surface));
         self.offscreen.held += per * area(b) * d * d;
     }
 

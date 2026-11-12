@@ -1213,7 +1213,8 @@ impl Api {
         rec.glyphs = glyphs;
         rec.notes.clear();
         rec.meter = crate::cost::Meter::new(size, whole, window, glyph_box, 1.0);
-        rec.meter.set_offscreen(offscreen, f64::from(density));
+        rec.meter
+            .set_offscreen(offscreen, f64::from(density), size, whole, window);
         rec.offscreen = 0.0;
     }
 
