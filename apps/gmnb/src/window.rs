@@ -1266,6 +1266,9 @@ impl Window {
                     }
                 });
             });
+            // And as it was once it closes: a focusable popover keeps the
+            // focus itself when the keys open it next, not on its first key.
+            flyout.connect_unmap(|popover| popover.set_focusable(false));
         }));
         // Popovers of the page's controls: the page switch alone is the
         // window's (their other keys are their controls' own,
