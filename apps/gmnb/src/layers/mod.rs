@@ -1764,3 +1764,7 @@ end } } }
         near(100, 200, [0, 0, 0]);
     }
 }
+
+/// The frame-cost probe (an ignored test; `tools/theming/README.md`).
+#[cfg(test)]
+mod costprobe;
