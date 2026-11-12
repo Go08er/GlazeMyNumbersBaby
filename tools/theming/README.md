@@ -130,3 +130,53 @@ with `compare --batch OUT OUT --map pages.map`.
 Tests: `cargo test` and `cargo clippy -- -D warnings` in `tools/theming`
 (synthetic images: identical passes, a 3 px shift fails the flat rule, a 1 px
 border shift passes, a recoloured text box fails the text rule).
+
+## The frame-cost probe
+
+`crates/gmnb-theme/src/cost.rs` charges each call a theme records against a
+frame's allowance (1000 points a 760 x 640, about 100 ms of the software
+renderer). The probe, `apps/gmnb/src/layers/costprobe.rs`, is how those
+weights are checked: an `#[ignore]` test that records a layer of
+repeats of one kind of call through the app's own replay
+(`replay::replay`), renders the picture with `gsk::CairoRenderer`, and
+prints for each case the repeats, the charge in ms, the real ms (median of
+several warm frames, this thread's CPU time, above an empty frame's) and
+their ratio. It ends with a summary: the dearest ratios (calls the charge
+under-states: over 1.5 is a finding), the cheapest (over-charged), and the
+worst of each group. Kinds covered: rect and gradients, rounded rects by
+radius, circle, fill, stroke, dashes (butt, round, square, wide), path
+strain, border, outset and inset shadows over sizes, blurs, radii, spreads,
+bars and keys, `push_shadow`, blur, opacity, the four masks, the fifteen
+blends, rounded and turned clips, text (Latin, many characters, CJK, Arabic,
+emoji, moving sizes and weights), glyph, pictures, tiles.
+
+It needs a display (the private weston) and, as every run of this project,
+the limits and isolation in `theming-work/briefs/house-rules.md`:
+
+    export CARGO_INCREMENTAL=0
+    env -u DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY=wincalc-shot GMNB_SOUND=null \
+        XDG_CONFIG_HOME=$T/c XDG_DATA_HOME=$T/d XDG_CACHE_HOME=$T/k XDG_STATE_HOME=$T/s \
+        LIM_JOBS=2 theming-work/tools/lim nix develop -c \
+        dbus-run-session --config-file=tools/theming/privbus.conf -- \
+        cargo test --release -p gmnb --bin gmnb costprobe -- --ignored --nocapture \
+        | grep '^PROBE'
+
+(`$T` a temporary folder.) Always `--release` for numbers: the first build is
+long, a full run about 40 s. Settings, all environment variables:
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `GMNB_PROBE_ONLY` | Comma-separated substrings of `group/case`, to run only those (`shadow/`, `shadow/out_s200,dash/`) | all |
+| `GMNB_PROBE_TARGET` | The charge, as a share of the allowance, each case is sized to by its repeats (a larger one makes small real times less noisy) | 0.3 |
+| `GMNB_PROBE_FRAMES` | Warm frames timed (the first, a warm-up, is not) | 5 |
+| `GMNB_PROBE_SIZE` | The layer's size, `WxH` | 760x640 |
+| `GMNB_PROBE_DIR` | Scratch folder (the theme and the font) | a temporary one |
+
+Reading it: a case under 3 ms real is marked noisy (raise the target); a
+case that is cheap in absolute terms may have a large ratio just because it
+is charged almost nothing (a 4 x 4 shadow of no blur: 8 us real a call, so
+at most 4096 calls, 33 ms); look at ratios of cases that fill a good part of
+a frame. The timings move with the machine (a fifth, run to run) and with
+what else it is doing; the shape (which kinds and parameters are dear) is
+what to trust. Translucent paints are used so the toolkit can't skip what is
+covered over.

@@ -104,7 +104,11 @@ local w, h = frame.width, frame.height
 {body}
 end }} }} }}"##,
             pre = self.pre,
-            layer = if self.display { "display" } else { "background" },
+            layer = if self.display {
+                "display"
+            } else {
+                "background"
+            },
             body = self.body.replace("@N@", &reps.to_string()),
         )
     }
@@ -135,33 +139,93 @@ fn cases() -> Vec<Case> {
 
     // Rectangles: the whole layer, and small ones.
     for (n, p) in paints {
-        v.push(case("rect", format!("full_{n}"), rep(&format!("draw:rect(0, 0, w, h, {p})"))));
+        v.push(case(
+            "rect",
+            format!("full_{n}"),
+            rep(&format!("draw:rect(0, 0, w, h, {p})")),
+        ));
     }
     // The same gradient axis-aligned, and opaque: the cost is the paint's.
     v.push(case("rect", "full_lin2_axis", rep(r##"draw:rect(0, 0, w, h, gmnb.linear({ angle = 90, colors = { "#336699cc", "#cc9933cc" } }))"##)));
     v.push(case("rect", "full_lin2_opaque", rep(r##"draw:rect(0, 0, w, h, gmnb.linear({ angle = 30, colors = { "#336699", "#cc9933" } }))"##)));
     v.push(case("rect", "full_lin2_axis_opaque", rep(r##"draw:rect(0, 0, w, h, gmnb.linear({ angle = 90, colors = { "#336699", "#cc9933" } }))"##)));
-    v.push(case("rect", "small20_color", rep(&format!("draw:rect((i * 7) % 700, (i * 5) % 600, 20, 20, {COLOR})"))));
-    v.push(case("rect", "small20_conic", rep(&format!("draw:rect((i * 7) % 700, (i * 5) % 600, 20, 20, {CONIC})"))));
+    v.push(case(
+        "rect",
+        "small20_color",
+        rep(&format!(
+            "draw:rect((i * 7) % 700, (i * 5) % 600, 20, 20, {COLOR})"
+        )),
+    ));
+    v.push(case(
+        "rect",
+        "small20_conic",
+        rep(&format!(
+            "draw:rect((i * 7) % 700, (i * 5) % 600, 20, 20, {CONIC})"
+        )),
+    ));
 
     // Rounded rectangles, by radius (200 x 200 with a gradient).
     for r in [0, 4, 10, 30, 100, 999] {
-        v.push(case("rrect", format!("200_r{r}_color"), rep(&format!("draw:rounded_rect(40 + i % 400, 40, 200, 200, {r}, {COLOR})"))));
-        v.push(case("rrect", format!("200_r{r}_lin2"), rep(&format!("draw:rounded_rect(40 + i % 400, 40, 200, 200, {r}, {LIN2})"))));
+        v.push(case(
+            "rrect",
+            format!("200_r{r}_color"),
+            rep(&format!(
+                "draw:rounded_rect(40 + i % 400, 40, 200, 200, {r}, {COLOR})"
+            )),
+        ));
+        v.push(case(
+            "rrect",
+            format!("200_r{r}_lin2"),
+            rep(&format!(
+                "draw:rounded_rect(40 + i % 400, 40, 200, 200, {r}, {LIN2})"
+            )),
+        ));
     }
-    v.push(case("rrect", "full_r30_color", rep(&format!("draw:rounded_rect(0, 0, w, h, 30, {COLOR})"))));
-    v.push(case("rrect", "tiny_r4_color", rep(&format!("draw:rounded_rect((i * 7) % 700, (i * 5) % 600, 20, 20, 4, {COLOR})"))));
+    v.push(case(
+        "rrect",
+        "full_r30_color",
+        rep(&format!("draw:rounded_rect(0, 0, w, h, 30, {COLOR})")),
+    ));
+    v.push(case(
+        "rrect",
+        "tiny_r4_color",
+        rep(&format!(
+            "draw:rounded_rect((i * 7) % 700, (i * 5) % 600, 20, 20, 4, {COLOR})"
+        )),
+    ));
 
     // Circles.
-    v.push(case("circle", "r300_color", rep(&format!("draw:circle(380, 320, 300, {COLOR})"))));
-    v.push(case("circle", "r300_lin2", rep(&format!("draw:circle(380, 320, 300, {LIN2})"))));
-    v.push(case("circle", "r300_radial", rep(&format!("draw:circle(380, 320, 300, {RADIAL})"))));
-    v.push(case("circle", "r10_color", rep(&format!("draw:circle((i * 7) % 700 + 10, (i * 5) % 600 + 10, 10, {COLOR})"))));
+    v.push(case(
+        "circle",
+        "r300_color",
+        rep(&format!("draw:circle(380, 320, 300, {COLOR})")),
+    ));
+    v.push(case(
+        "circle",
+        "r300_lin2",
+        rep(&format!("draw:circle(380, 320, 300, {LIN2})")),
+    ));
+    v.push(case(
+        "circle",
+        "r300_radial",
+        rep(&format!("draw:circle(380, 320, 300, {RADIAL})")),
+    ));
+    v.push(case(
+        "circle",
+        "r10_color",
+        rep(&format!(
+            "draw:circle((i * 7) % 700 + 10, (i * 5) % 600 + 10, 10, {COLOR})"
+        )),
+    ));
 
     // Fills: a path with curves, filled over the window.
     let blob = r#"gmnb.path():move_to(10, 10):line_to(w - 10, 20):quad_to(w, h / 2, w - 20, h - 10):curve_to(w / 2, h, 100, h - 40, 10, h - 10):close()"#;
     for (n, p) in [("color", COLOR), ("lin2", LIN2)] {
-        v.push(case("fill", format!("blob_{n}"), rep(&format!("draw:fill({blob}, {p})"))));
+        v.push(case(
+            "fill",
+            format!("blob_{n}"),
+            rep(&format!("draw:fill({blob}, {p})")),
+        ));
     }
     v.push(case("fill", "evenodd_color", rep(&format!(
         "draw:fill(gmnb.path():rect(10, 10, w - 20, h - 20):circle(w / 2, h / 2, 250), {COLOR}, \"even-odd\")"
@@ -172,13 +236,49 @@ fn cases() -> Vec<Case> {
 for k = 1, 40 do p = p:quad_to((k - 0.5) * w / 40, h / 2 + (if k % 2 == 0 then 200 else -200), k * w / 40, h / 2) end"#;
     for (n, stroke) in [
         ("w4", "{ width = 4 }"),
-        ("w30_round", "{ width = 30, cap = \"round\", join = \"round\" }"),
-        ("dash4", "{ width = 2, dash = { 4, 4 } }"),
-        ("dash1_round", "{ width = 3, cap = \"round\", dash = { 0, 4 } }"),
+        (
+            "w30_round",
+            "{ width = 30, cap = \"round\", join = \"round\" }",
+        ),
     ] {
-        v.push(case("stroke", n, format!("{wave}\nfor i = 1, @N@ do draw:stroke(p, {stroke}, {COLOR}) end")));
+        v.push(case(
+            "stroke",
+            n,
+            format!("{wave}\nfor i = 1, @N@ do draw:stroke(p, {stroke}, {COLOR}) end"),
+        ));
     }
-    v.push(case("stroke", "w4_lin2", format!("{wave}\nfor i = 1, @N@ do draw:stroke(p, {{ width = 4 }}, {LIN2}) end")));
+    v.push(case(
+        "stroke",
+        "w4_lin2",
+        format!("{wave}\nfor i = 1, @N@ do draw:stroke(p, {{ width = 4 }}, {LIN2}) end"),
+    ));
+
+    // Dashes: parallel lines across the layer, dashed (a butt dash is a
+    // unit of the charge, a capped one three, and a wide cap its width).
+    for (n, stroke) in [
+        ("butt_w1.5_2on2", "{ width = 1.5, dash = { 2, 2 } }"),
+        ("butt_w1.5_1on1", "{ width = 1.5, dash = { 1, 1 } }"),
+        (
+            "round_w1.5",
+            "{ width = 1.5, cap = \"round\", dash = { 0, 4 } }",
+        ),
+        (
+            "square_w1.5",
+            "{ width = 1.5, cap = \"square\", dash = { 2, 4 } }",
+        ),
+        (
+            "round_w20",
+            "{ width = 20, cap = \"round\", dash = { 0, 30 } }",
+        ),
+        (
+            "round_w100",
+            "{ width = 100, cap = \"round\", dash = { 0, 150 } }",
+        ),
+    ] {
+        v.push(case("dash", n, format!(
+            "for i = 1, @N@ do local y = 5 + (i * 3) % 630\ndraw:stroke(gmnb.path():move_to(0, y):line_to(w, y), {stroke}, {COLOR}) end"
+        )));
+    }
 
     // Path strain: a star whose lines cross one another, filled and stroked.
     let star = |n: usize, k: usize| {
@@ -189,20 +289,54 @@ for k = 1, 40 do p = p:quad_to((k - 0.5) * w / 40, h / 2 + (if k % 2 == 0 then 2
         )
     };
     for (n, k) in [(101, 40), (401, 160)] {
-        v.push(case("strain", format!("fill_star{n}"), format!("{}\nfor i = 1, @N@ do draw:fill(p, {COLOR}) end", star(n, k))));
-        v.push(case("strain", format!("stroke_star{n}"), format!("{}\nfor i = 1, @N@ do draw:stroke(p, {{ width = 2 }}, {COLOR}) end", star(n, k))));
+        v.push(case(
+            "strain",
+            format!("fill_star{n}"),
+            format!(
+                "{}\nfor i = 1, @N@ do draw:fill(p, {COLOR}) end",
+                star(n, k)
+            ),
+        ));
+        v.push(case(
+            "strain",
+            format!("stroke_star{n}"),
+            format!(
+                "{}\nfor i = 1, @N@ do draw:stroke(p, {{ width = 2 }}, {COLOR}) end",
+                star(n, k)
+            ),
+        ));
     }
 
     // Borders.
-    v.push(case("border", "full_r0_w2", rep("draw:border(0, 0, w, h, 0, 2, \"#ffffff\")")));
-    v.push(case("border", "full_r30_w2", rep("draw:border(0, 0, w, h, 30, 2, \"#ffffff\")")));
-    v.push(case("border", "full_r300_w60", rep("draw:border(0, 0, w, h, 300, 60, \"#ffffff\")")));
+    v.push(case(
+        "border",
+        "full_r0_w2",
+        rep("draw:border(0, 0, w, h, 0, 2, \"#ffffff\")"),
+    ));
+    v.push(case(
+        "border",
+        "full_r30_w2",
+        rep("draw:border(0, 0, w, h, 30, 2, \"#ffffff\")"),
+    ));
+    v.push(case(
+        "border",
+        "full_r300_w60",
+        rep("draw:border(0, 0, w, h, 300, 60, \"#ffffff\")"),
+    ));
 
     // Box shadows: what drives the cost (inset against outset, size, blur,
     // radius and spread).
     let shadow = |name: String, inset: bool, size: i32, blur: i32, radius: i32, spread: i32| {
-        let x = if size >= 700 { "10".to_string() } else { format!("(i * 37) % {}", 760 - size.min(740)) };
-        let y = if size >= 600 { "10".to_string() } else { format!("(i * 53) % {}", 640 - size.min(620)) };
+        let x = if size >= 700 {
+            "10".to_string()
+        } else {
+            format!("(i * 37) % {}", 760 - size.min(740))
+        };
+        let y = if size >= 600 {
+            "10".to_string()
+        } else {
+            format!("(i * 53) % {}", 640 - size.min(620))
+        };
         case(
             "shadow",
             name,
@@ -216,22 +350,88 @@ for k = 1, 40 do p = p:quad_to((k - 0.5) * w / 40, h / 2 + (if k % 2 == 0 then 2
         for size in [4, 20, 50, 100, 200, 400, 740] {
             for blur in [0, 3, 10, 20, 30, 50, 100] {
                 let radius = 8.min(size / 2);
-                v.push(shadow(format!("{io}_s{size}_b{blur}_r{radius}"), inset, size, blur, radius, 0));
+                v.push(shadow(
+                    format!("{io}_s{size}_b{blur}_r{radius}"),
+                    inset,
+                    size,
+                    blur,
+                    radius,
+                    0,
+                ));
                 if size / 2 > radius {
                     // The corners as large as the box lets them be.
-                    v.push(shadow(format!("{io}_s{size}_b{blur}_rmax"), inset, size, blur, size / 2, 0));
+                    v.push(shadow(
+                        format!("{io}_s{size}_b{blur}_rmax"),
+                        inset,
+                        size,
+                        blur,
+                        size / 2,
+                        0,
+                    ));
                 }
             }
         }
         for size in [200, 740] {
             for radius in [0, 20, 100, 200, 370] {
                 if radius <= size / 2 {
-                    v.push(shadow(format!("{io}_s{size}_b30_r{radius}"), inset, size, 30, radius, 0));
+                    v.push(shadow(
+                        format!("{io}_s{size}_b30_r{radius}"),
+                        inset,
+                        size,
+                        30,
+                        radius,
+                        0,
+                    ));
                 }
             }
         }
         for spread in [-20, 20, 60] {
-            v.push(shadow(format!("{io}_s200_b30_r8_p{spread}"), inset, 200, 30, 8, spread));
+            v.push(shadow(
+                format!("{io}_s200_b30_r8_p{spread}"),
+                inset,
+                200,
+                30,
+                8,
+                spread,
+            ));
+        }
+        // How near the corners are to the most the box lets them be.
+        for size in [200, 740] {
+            for pc in [50, 70, 90, 99] {
+                let r = size / 2 * pc / 100;
+                v.push(shadow(
+                    format!("{io}_s{size}_b30_r{r}"),
+                    inset,
+                    size,
+                    30,
+                    r,
+                    0,
+                ));
+            }
+        }
+        // Boxes that are not square: a bar, a pill, a key.
+        for (w, h, r) in [
+            (740, 40, 8),
+            (740, 40, 20),
+            (200, 40, 20),
+            (110, 60, 8),
+            (110, 60, 30),
+            (400, 300, 20),
+        ] {
+            let x = if w >= 400 {
+                "10".to_string()
+            } else {
+                "(i * 37) % 500".to_string()
+            };
+            for blur in [3, 10, 30] {
+                v.push(case(
+                    "shadow",
+                    format!("{io}_{w}x{h}_b{blur}_r{r}"),
+                    rep(&format!(
+                        "draw:shadow({x}, 10 + (i * 53) % 400, {w}, {h}, {r}, {{ inset = {inset}, blur = {blur}, color = \"#000000c0\" }})"
+                    )),
+                ));
+            }
         }
         // A key: 70 x 50, rounded 6.
         for blur in [10, 30, 100] {
@@ -291,8 +491,20 @@ for k = 1, 40 do p = p:quad_to((k - 0.5) * w / 40, h / 2 + (if k % 2 == 0 then 2
 
     // Blend modes, each over the window.
     for mode in [
-        "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn",
-        "hard-light", "soft-light", "difference", "exclusion", "color", "hue", "saturation",
+        "multiply",
+        "screen",
+        "overlay",
+        "darken",
+        "lighten",
+        "color-dodge",
+        "color-burn",
+        "hard-light",
+        "soft-light",
+        "difference",
+        "exclusion",
+        "color",
+        "hue",
+        "saturation",
         "luminosity",
     ] {
         v.push(case("blend", mode, format!(
@@ -315,14 +527,30 @@ for k = 1, 40 do p = p:quad_to((k - 0.5) * w / 40, h / 2 + (if k % 2 == 0 then 2
     )));
 
     // Text: Latin; many characters; a heavy script; a font for each size.
-    v.push(case("text", "latin_short", rep(&format!("draw:text(\"Hello world 123\", (i * 7) % 600, (i * 5) % 600, inter, {COLOR})"))));
-    v.push(case("text", "latin_gradient", rep(&format!("draw:text(\"Hello world 123\", (i * 7) % 600, (i * 5) % 600, inter, {LIN2})"))));
+    v.push(case(
+        "text",
+        "latin_short",
+        rep(&format!(
+            "draw:text(\"Hello world 123\", (i * 7) % 600, (i * 5) % 600, inter, {COLOR})"
+        )),
+    ));
+    v.push(case(
+        "text",
+        "latin_gradient",
+        rep(&format!(
+            "draw:text(\"Hello world 123\", (i * 7) % 600, (i * 5) % 600, inter, {LIN2})"
+        )),
+    ));
     v.push(case("text", "latin_big200", rep(&format!("draw:text(\"Hello\", 10, (i * 5) % 400, {{ family = \"Inter Variable\", size = 200 }}, {COLOR})"))));
     v.push(case("text", "latin_many_chars", rep(&format!(
         "draw:text(\"The quick brown fox jumps over the lazy dog; PACK MY BOX WITH FIVE DOZEN LIQUOR JUGS 0123456789\", 10, (i * 7) % 600, inter, {COLOR})"
     ))));
     let cjk = "local s = ''\nfor c = 0x4E00, 0x4E00 + 84 do s = s .. utf8.char(c) end";
-    v.push(case("text", "cjk_85_warm", format!("{cjk}\nfor i = 1, @N@ do draw:text(s, 10, (i * 7) % 600, inter, {COLOR}) end")));
+    v.push(case(
+        "text",
+        "cjk_85_warm",
+        format!("{cjk}\nfor i = 1, @N@ do draw:text(s, 10, (i * 7) % 600, inter, {COLOR}) end"),
+    ));
     // The sizes move each frame: the glyphs are made anew.
     v.push(case("text", "cjk_85_moving", format!(
         "{cjk}\nlocal size = 10 + (frame.time * 1000) % 40\nfor i = 1, @N@ do draw:text(s, 10, (i * 7) % 600, {{ family = \"Inter Variable\", size = size }}, {COLOR}) end"
@@ -338,19 +566,56 @@ for k = 1, 40 do p = p:quad_to((k - 0.5) * w / 40, h / 2 + (if k % 2 == 0 then 2
 
     // A glyph of the display layer.
     v.push(case("glyph", "color_size120", "for i = 1, @N@ do for _, g in frame.value.glyphs do draw:glyph(g, \"#ffffff\") end end").display());
-    v.push(case("glyph", "gradient_size120", format!("for i = 1, @N@ do for _, g in frame.value.glyphs do draw:glyph(g, {LIN2}) end end")).display());
+    v.push(
+        case(
+            "glyph",
+            "gradient_size120",
+            format!(
+                "for i = 1, @N@ do for _, g in frame.value.glyphs do draw:glyph(g, {LIN2}) end end"
+            ),
+        )
+        .display(),
+    );
 
     // Pictures: scaled into a rectangle, by the picture's own size and
     // filter; repeated.
-    for (size, filter) in [(512, "trilinear"), (512, "nearest"), (2048, "trilinear"), (2048, "linear")] {
+    for (size, filter) in [
+        (512, "trilinear"),
+        (512, "nearest"),
+        (2048, "trilinear"),
+        (2048, "linear"),
+    ] {
         let pre = format!("local pic = gmnb.noise({{ size = {size}, seed = 3 }})");
-        v.push(case("picture", format!("{size}_full_{filter}"), format!("for i = 1, @N@ do draw:image(pic, 0, 0, w, h, {{ filter = \"{filter}\" }}) end")).pre(&pre));
+        v.push(
+            case(
+                "picture",
+                format!("{size}_full_{filter}"),
+                format!(
+                    "for i = 1, @N@ do draw:image(pic, 0, 0, w, h, {{ filter = \"{filter}\" }}) end"
+                ),
+            )
+            .pre(&pre),
+        );
         v.push(case("picture", format!("{size}_small76_{filter}"), format!("for i = 1, @N@ do draw:image(pic, (i * 7) % 600, 10, 76, 64, {{ filter = \"{filter}\" }}) end")).pre(&pre));
     }
     for size in [16, 128, 512, 2048] {
         let pre = format!("local pic = gmnb.noise({{ size = {size}, seed = 3 }})");
-        v.push(case("tile", format!("{size}_full"), "for i = 1, @N@ do draw:tile(pic, 0, 0, w, h) end").pre(&pre));
-        v.push(case("tile", format!("{size}_small10"), "for i = 1, @N@ do draw:tile(pic, (i * 7) % 600, 10, 10, 10) end").pre(&pre));
+        v.push(
+            case(
+                "tile",
+                format!("{size}_full"),
+                "for i = 1, @N@ do draw:tile(pic, 0, 0, w, h) end",
+            )
+            .pre(&pre),
+        );
+        v.push(
+            case(
+                "tile",
+                format!("{size}_small10"),
+                "for i = 1, @N@ do draw:tile(pic, (i * 7) % 600, 10, 10, 10) end",
+            )
+            .pre(&pre),
+        );
     }
     v
 }
@@ -368,7 +633,11 @@ struct Row {
 
 impl Row {
     fn ratio(&self) -> f64 {
-        if self.charge > 0.0 { self.real / self.charge } else { f64::INFINITY }
+        if self.charge > 0.0 {
+            self.real / self.charge
+        } else {
+            f64::INFINITY
+        }
     }
 }
 
@@ -399,14 +668,23 @@ impl Rig {
             frame: Duration::from_secs(60),
             ..Limits::default()
         };
-        let theme = Theme::load(Source::folder("t", &self.dir), limits).map_err(|e| e.to_string())?;
-        theme.api().set_measure(Rc::new(replay::Measure(self.pango.clone())));
+        let theme =
+            Theme::load(Source::folder("t", &self.dir), limits).map_err(|e| e.to_string())?;
+        theme
+            .api()
+            .set_measure(Rc::new(replay::Measure(self.pango.clone())));
         Ok(theme)
     }
 
     /// One frame recorded and (if `render`) drawn: its charge as a share,
     /// and the milliseconds the toolkit took.
-    fn frame(&self, theme: &Theme, display: bool, n: usize, render: bool) -> Result<(f64, f64), String> {
+    fn frame(
+        &self,
+        theme: &Theme,
+        display: bool,
+        n: usize,
+        render: bool,
+    ) -> Result<(f64, f64), String> {
         let (w, h) = self.size;
         let mut frame = Frame::sized(w, h);
         frame.time = n as f64 * 0.37;
@@ -424,8 +702,14 @@ impl Rig {
                 previous: None,
             });
         }
-        let kind = if display { LayerKind::Display } else { LayerKind::Background };
-        let drawn = theme.draw(kind, &Ctx::default(), &frame).map_err(|e| format!("{e:?}"))?;
+        let kind = if display {
+            LayerKind::Display
+        } else {
+            LayerKind::Background
+        };
+        let drawn = theme
+            .draw(kind, &Ctx::default(), &frame)
+            .map_err(|e| format!("{e:?}"))?;
         let share = theme.api().frame_cost();
         if !render {
             return Ok((share, 0.0));
@@ -461,7 +745,10 @@ impl Rig {
             note: String::new(),
         };
         // Once, to see what one repeat is charged.
-        let one = match self.theme(&c.source(1)).and_then(|t| self.frame(&t, c.display, 0, false)) {
+        let one = match self
+            .theme(&c.source(1))
+            .and_then(|t| self.frame(&t, c.display, 0, false))
+        {
             Ok((share, _)) => share,
             Err(e) => {
                 row.note = format!("N=1 refused: {}", e.chars().take(60).collect::<String>());
@@ -469,7 +756,11 @@ impl Rig {
             }
         };
         let mut reps = c.fixed.unwrap_or_else(|| {
-            if one > 0.0 { ((target / one) as usize).clamp(1, 3000) } else { 200 }
+            if one > 0.0 {
+                ((target / one) as usize).clamp(1, 3000)
+            } else {
+                200
+            }
         });
         for _ in 0..6 {
             let theme = match self.theme(&c.source(reps)) {
@@ -528,7 +819,15 @@ fn glyph_fixtures(pango: &gtk::pango::Context) -> (Glyphs, Vec<replay::Glyph>) {
         })
         .collect();
     let told = Glyphs {
-        glyphs: glyphs.iter().map(|g| GlyphBox { x: g.x, y: g.y, w: 85.0, h: 140.0 }).collect(),
+        glyphs: glyphs
+            .iter()
+            .map(|g| GlyphBox {
+                x: g.x,
+                y: g.y,
+                w: 85.0,
+                h: 140.0,
+            })
+            .collect(),
         size: 120.0,
         rect: [20.0, 30.0, 180.0, 140.0],
     };
@@ -541,7 +840,9 @@ fn probe() {
     gtk::init().expect("GTK on the test's display");
     let dir = std::env::var_os("GMNB_PROBE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("gmnb-costprobe-{}", std::process::id())));
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("gmnb-costprobe-{}", std::process::id()))
+        });
     std::fs::create_dir_all(&dir).expect("a folder");
     let font = dir.join("Inter.ttf");
     std::fs::write(&font, crate::INTER).expect("the font");
@@ -552,14 +853,22 @@ fn probe() {
         .split('x')
         .map(|s| s.parse().expect("GMNB_PROBE_SIZE=WxH"))
         .collect();
-    let frames: usize = std::env::var("GMNB_PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(5);
+    let frames: usize = std::env::var("GMNB_PROBE_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
     // The charge each case is sized to (as a share of the allowance).
-    let target: f64 = std::env::var("GMNB_PROBE_TARGET").ok().and_then(|v| v.parse().ok()).unwrap_or(0.3);
+    let target: f64 = std::env::var("GMNB_PROBE_TARGET")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.3);
     let only: Vec<String> = std::env::var("GMNB_PROBE_ONLY")
         .map(|v| v.split(',').map(str::to_string).collect())
         .unwrap_or_default();
     let renderer = gsk::CairoRenderer::new();
-    renderer.realize(None::<&gdk::Surface>).expect("the cairo renderer");
+    renderer
+        .realize(None::<&gdk::Surface>)
+        .expect("the cairo renderer");
     let (told, glyphs) = glyph_fixtures(&pango);
     let mut rig = Rig {
         dir: dir.join("theme"),
@@ -579,8 +888,14 @@ fn probe() {
         .map(|n| rig.frame(&theme, false, n, true).expect("an empty frame").1)
         .collect();
     rig.base = median(&mut times[1..]);
-    println!("PROBE size {}x{}, frames {frames}, target {target}, an empty frame {:.2} ms", size[0], size[1], rig.base);
-    println!("PROBE {:12} {:28} {:>5} {:>9} {:>9} {:>7}  note", "group", "case", "reps", "charge ms", "real ms", "ratio");
+    println!(
+        "PROBE size {}x{}, frames {frames}, target {target}, an empty frame {:.2} ms",
+        size[0], size[1], rig.base
+    );
+    println!(
+        "PROBE {:12} {:28} {:>5} {:>9} {:>9} {:>7}  note",
+        "group", "case", "reps", "charge ms", "real ms", "ratio"
+    );
     let mut rows = Vec::new();
     for c in cases() {
         let id = format!("{}/{}", c.group, c.name);
@@ -590,7 +905,13 @@ fn probe() {
         let row = rig.run(&c, target);
         println!(
             "PROBE {:12} {:28} {:>5} {:>9.2} {:>9.2} {:>7.2}  {}",
-            row.group, row.name, row.reps, row.charge, row.real, row.ratio(), row.note
+            row.group,
+            row.name,
+            row.reps,
+            row.charge,
+            row.real,
+            row.ratio(),
+            row.note
         );
         rows.push(row);
     }
@@ -601,27 +922,64 @@ fn probe() {
 /// The worst of each kind: what the charge under-states (real over
 /// charge, at least 3 ms real) and what it over-states.
 fn summary(rows: &[Row]) {
-    let mut real: Vec<&Row> = rows.iter().filter(|r| r.charge > 0.0 && r.real >= 3.0).collect();
+    let mut real: Vec<&Row> = rows
+        .iter()
+        .filter(|r| r.charge > 0.0 && r.real >= 3.0)
+        .collect();
     real.sort_by(|a, b| b.ratio().total_cmp(&a.ratio()));
     println!("PROBE");
-    println!("PROBE SUMMARY: under-charged (real / charge), the dearest first; a ratio over 1.5 is a call the charge under-states");
-    println!("PROBE {:12} {:28} {:>5} {:>9} {:>9} {:>7}", "group", "case", "reps", "charge ms", "real ms", "ratio");
+    println!(
+        "PROBE SUMMARY: under-charged (real / charge), the dearest first; a ratio over 1.5 is a call the charge under-states"
+    );
+    println!(
+        "PROBE {:12} {:28} {:>5} {:>9} {:>9} {:>7}",
+        "group", "case", "reps", "charge ms", "real ms", "ratio"
+    );
     for r in real.iter().take(25) {
-        println!("PROBE {:12} {:28} {:>5} {:>9.2} {:>9.2} {:>7.2}", r.group, r.name, r.reps, r.charge, r.real, r.ratio());
+        println!(
+            "PROBE {:12} {:28} {:>5} {:>9.2} {:>9.2} {:>7.2}",
+            r.group,
+            r.name,
+            r.reps,
+            r.charge,
+            r.real,
+            r.ratio()
+        );
     }
     println!("PROBE");
-    println!("PROBE SUMMARY: over-charged (the cheapest ratios; a ratio under 0.3 is a call the charge over-states)");
+    println!(
+        "PROBE SUMMARY: over-charged (the cheapest ratios; a ratio under 0.3 is a call the charge over-states)"
+    );
     for r in real.iter().rev().take(15) {
-        println!("PROBE {:12} {:28} {:>5} {:>9.2} {:>9.2} {:>7.2}", r.group, r.name, r.reps, r.charge, r.real, r.ratio());
+        println!(
+            "PROBE {:12} {:28} {:>5} {:>9.2} {:>9.2} {:>7.2}",
+            r.group,
+            r.name,
+            r.reps,
+            r.charge,
+            r.real,
+            r.ratio()
+        );
     }
     println!("PROBE");
     println!("PROBE SUMMARY: the worst ratio of each group");
     let mut groups: Vec<&'static str> = rows.iter().map(|r| r.group).collect();
     groups.dedup();
     for g in groups {
-        let worst = real.iter().filter(|r| r.group == g).max_by(|a, b| a.ratio().total_cmp(&b.ratio()));
+        let worst = real
+            .iter()
+            .filter(|r| r.group == g)
+            .max_by(|a, b| a.ratio().total_cmp(&b.ratio()));
         if let Some(r) = worst {
-            println!("PROBE {:12} {:28} {:>5} {:>9.2} {:>9.2} {:>7.2}", r.group, r.name, r.reps, r.charge, r.real, r.ratio());
+            println!(
+                "PROBE {:12} {:28} {:>5} {:>9.2} {:>9.2} {:>7.2}",
+                r.group,
+                r.name,
+                r.reps,
+                r.charge,
+                r.real,
+                r.ratio()
+            );
         }
     }
     let refused: Vec<_> = rows.iter().filter(|r| r.charge == 0.0).collect();

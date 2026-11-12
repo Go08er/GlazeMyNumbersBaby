@@ -2751,12 +2751,12 @@ fn what_a_call_costs_is_more_than_what_it_covers() {
     over(cost(&shadows(200, "", 4, 100)).unwrap_err());
     over(cost(&shadows(20, "inset = true, ", 760, 100)).unwrap_err());
     over(cost(&shadows(20, "inset = true, ", 200, 100)).unwrap_err());
-    // Three over the window are drawn, six are not.
+    // Three over the window are drawn, twelve (8 ms each, 98 in all) are not.
     assert!(cost(&shadows(3, "inset = true, ", 760, 100)).is_ok());
-    over(cost(&shadows(6, "inset = true, ", 760, 100)).unwrap_err());
-    // A small blur is cheap: thirty of 18 px, a key's.
+    over(cost(&shadows(12, "inset = true, ", 760, 100)).unwrap_err());
+    // A small blur is cheap: thirty of 18 px, a key's (0.45 ms each).
     let keys = cost(&shadows(30, "", 60, 18)).unwrap();
-    assert!((0.4..0.9).contains(&keys), "{keys}");
+    assert!((0.1..0.35).contains(&keys), "{keys}");
     assert!(cost(&shadows(300, "", 60, 2)).unwrap() < 0.9);
     // What can't be seen costs nothing: off the layer.
     assert_eq!(
@@ -3015,6 +3015,103 @@ fn characters_and_scripts_are_charged_each_time_a_font_has_them_new() {
     )
     .unwrap();
     assert!(digits < 0.1, "{digits}");
+}
+
+/// What a shadow costs the software renderer is what the probe measures
+/// (`apps/gmnb/src/layers/costprobe.rs`, `tools/theming/README.md`), by its
+/// blur, its corners and whether it is inset, not by its blur alone: a
+/// shadow under each of 36 keys at a blur of 30 (1.1 ms each, 40 in all) is
+/// drawn, as is a glass keypad's two for each of 30 keys (an ambient blur of
+/// 24 and a contact blur of 6, 27 ms); what really takes the toolkit long
+/// is not: 20 window-sized inset shadows blurred by 100 (8 ms each), a
+/// hundred tiny outset ones blurred by 100 (5.8 ms each), a hundred
+/// 110 x 60 px ones with a blur of 50 (3 ms each).
+#[test]
+fn a_shadow_under_every_key_is_drawn_and_a_hostile_one_is_not() {
+    let window = Frame::sized(760.0, 640.0);
+    let cost = |body: &str| -> Result<f64, String> {
+        let (theme, _d) = background("keys", "", body);
+        match theme.draw(LayerKind::Background, &Ctx::default(), &window) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let over = |e: String| assert!(e.contains("what one may to draw"), "{e}");
+
+    // A shadow under each of 36 keys at a blur of 30, 40 ms of the 100.
+    let keys = cost(
+        "for i = 0, 35 do draw:shadow(10 + (i % 6) * 120, 10 + (i // 6) * 100, 110, 90, 6, { blur = 30, y = 4, color = '#00000080' }) end",
+    )
+    .unwrap();
+    assert!((0.2..0.7).contains(&keys), "{keys}");
+    // The same, inset.
+    assert!(
+        cost("for i = 0, 35 do draw:shadow(10 + (i % 6) * 120, 10 + (i // 6) * 100, 110, 90, 6, { blur = 30, inset = true, color = '#00000080' }) end")
+            .unwrap()
+            < 0.7
+    );
+    // A glass keypad: two shadows a key, 30 keys.
+    let glass = cost(
+        "for i = 0, 29 do local x, y = 10 + (i % 6) * 120, 10 + (i // 6) * 100 \
+         draw:shadow(x, y, 110, 60, 8, { blur = 24, y = 8, color = '#00000060' }) \
+         draw:shadow(x, y, 110, 60, 8, { blur = 6, y = 2, color = '#00000080' }) end",
+    )
+    .unwrap();
+    assert!((0.2..0.6).contains(&glass), "{glass}");
+    // Panels: a few large shadows with a wide blur are drawn the way the
+    // toolkit draws them, by their corners.
+    assert!(
+        cost("for i = 0, 1 do draw:shadow(10, 10 + i * 310, 700, 300, 12, { blur = 40, y = 8, color = '#00000080' }) end")
+            .unwrap()
+            < 0.1
+    );
+
+    // The hostile ones.
+    over(
+        cost("for i = 1, 20 do draw:shadow(0, 0, 760, 640, 8, { blur = 100, inset = true, color = '#000' }) end")
+            .unwrap_err(),
+    );
+    over(
+        cost(
+            "for i = 1, 100 do draw:shadow(100, 100, 4, 4, 2, { blur = 100, color = '#000' }) end",
+        )
+        .unwrap_err(),
+    );
+    over(
+        cost("for i = 1, 100 do draw:shadow(100, 100, 110, 60, 8, { blur = 50, color = '#000' }) end")
+            .unwrap_err(),
+    );
+    // Corners as large as a box lets them be, outset: the toolkit blurs the
+    // whole of it (740 x 740 at a blur of 30, 8 ms; 12 of them, 100).
+    over(
+        cost("for i = 1, 20 do draw:shadow(10, 10, 740, 620, 310, { blur = 30, color = '#000' }) end")
+            .unwrap_err(),
+    );
+}
+
+/// A glass keypad (round 7's hunter D): two shadows a key, an ambient one
+/// with a blur of 24 and a contact one with a blur of 6, on 30 keys of
+/// 110 x 60 px, radius 12 (27 ms in all, refused at 102% before).
+#[test]
+fn a_glass_keypad_with_two_shadows_a_key_is_drawn() {
+    let (theme, _d) = background(
+        "glasskeys",
+        "",
+        r##"for i = 0, 29 do
+            local x, y, w, h, r = (i % 6) * 118 + 6, (i // 6) * 68 + 6, 110, 60, 12
+            draw:shadow(x, y, w, h, r, { y = 10, blur = 24, spread = -6, color = gmnb.alpha("#000000", 0.30) })
+            draw:shadow(x, y, w, h, r, { y = 2, blur = 6, spread = 0, color = gmnb.alpha("#000000", 0.35) })
+            draw:rounded_rect(x, y, w, h, r, gmnb.linear({ angle = 180, colors = { "#ffffff30", "#ffffff20" } }))
+            draw:border(x, y, w, h, r, 1, "#ffffff40")
+        end"##,
+    );
+    let f = Frame::sized(760.0, 640.0);
+    if let Err(e) = theme.draw(LayerKind::Background, &Ctx::default(), &f) {
+        panic!("{}", message(e));
+    }
+    let share = theme.api().frame_cost();
+    // 27 ms of the 100 it may spend.
+    assert!((0.2..0.7).contains(&share), "{share}");
 }
 
 /// R7-A-3, R7-A-4: the large corners of a box shadow and of a rounded
