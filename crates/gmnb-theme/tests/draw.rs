@@ -2649,7 +2649,7 @@ fn what_a_call_costs_is_more_than_what_it_covers() {
         )
     };
     over(cost(&weights(64, "draw:text")).unwrap_err());
-    assert!(cost(&weights(8, "draw:text")).unwrap() < 0.01);
+    assert!(cost(&weights(8, "draw:text")).unwrap() < 0.02);
     assert!(cost(&weights(20, "draw:text")).unwrap() < 0.7);
     over(cost(&weights(40, "draw:text")).unwrap_err());
     // Measuring is making it too.
@@ -2717,4 +2717,193 @@ fn what_a_call_costs_is_more_than_what_it_covers() {
         .draw(LayerKind::Background, &Ctx::default(), &window)
         .unwrap();
     assert_eq!(theme.api().frame_cost(), 0.0);
+}
+
+/// R7-A-1: a mask that is the inverse of its alpha takes the software
+/// renderer far more than a plain one, and more the smaller the mask is:
+/// the window drawn through a mask of 4 × 4 px, 15 to 19 ms each (36 of
+/// them, 0.6 s of the main thread, for the 2.7% each the plain mask's
+/// charge gave them); through a mask of the window's size, 5.7 ms; through
+/// an alpha one, 0.3. Each is charged by its mode.
+#[test]
+fn an_inverted_alpha_mask_is_charged_by_what_it_costs() {
+    let window = Frame::sized(760.0, 640.0);
+    let cost = |body: &str| -> Result<f64, String> {
+        let (theme, _d) = background("masks", "", body);
+        match theme.draw(LayerKind::Background, &Ctx::default(), &window) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let over = |e: String| assert!(e.contains("what one may to draw"), "{e}");
+    let masks = |mode: &str, n: u32| {
+        format!(
+            "for _ = 1, {n} do draw:push_mask('{mode}') draw:rect(0, 0, 4, 4, '#fff') draw:pop() \
+             draw:rect(0, 0, frame.width, frame.height, '#00f') draw:pop() end"
+        )
+    };
+    // Plain ones are as they were: dozens of the window.
+    for mode in ["alpha", "luminance", "inverted-luminance"] {
+        assert!(cost(&masks(mode, 30)).is_ok(), "{mode}");
+    }
+    // The inverse of alpha: five of the window are drawn, six are not.
+    assert!(cost(&masks("inverted-alpha", 5)).is_ok());
+    over(cost(&masks("inverted-alpha", 6)).unwrap_err());
+    over(cost(&masks("inverted-alpha", 36)).unwrap_err());
+    // What is drawn small through it costs little.
+    assert!(
+        cost(
+            "for i = 1, 30 do draw:push_mask('inverted-alpha') draw:rect(0, 0, 4, 4, '#fff') draw:pop() \
+             draw:rect(i, 0, 20, 20, '#00f') draw:pop() end"
+        )
+        .unwrap()
+            < 0.2
+    );
+}
+
+/// R7-A-2: the toolkit makes a glyph of each character a frame sets in a
+/// font the first time, and a font for each script it finds in them: 64
+/// texts of 85 different ideographs, in sizes that change each frame, took
+/// 170 ms of the main thread for the 2.4% the area charged; a text of a
+/// dozen scripts in each of the 8 free fonts, 100 ms for 0.4%. Each
+/// character a font hasn't had, and each script that needs a font of its
+/// own, is charged.
+#[test]
+fn characters_and_scripts_are_charged_each_time_a_font_has_them_new() {
+    let window = Frame::sized(760.0, 640.0);
+    let cost = |body: &str| -> Result<f64, String> {
+        let (theme, _d) = background("chars", "", body);
+        match theme.draw(LayerKind::Background, &Ctx::default(), &window) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let over = |e: String| assert!(e.contains("what one may to draw"), "{e}");
+    let ideographs = "local function str(i) local t = {} \
+         for k = 0, 84 do t[#t + 1] = utf8.char(0x4E00 + i * 97 + k * 3) end \
+         return table.concat(t) end";
+    // 5440 ideographs, in 8 sizes or in one.
+    over(
+        cost(&format!(
+            "{ideographs} for i = 1, 64 do draw:text(str(i), 0, 1, {{ size = 8 + i % 8 }}, '#fff') end"
+        ))
+        .unwrap_err(),
+    );
+    over(
+        cost(&format!(
+            "{ideographs} for i = 1, 64 do draw:text(str(i), 0, 1, {{ size = 12 }}, '#fff') end"
+        ))
+        .unwrap_err(),
+    );
+    // ... or measured: the toolkit makes the glyph to say how wide it is.
+    over(
+        cost(&format!(
+            "{ideographs} for i = 1, 64 do draw:text_size(str(i), {{ size = 12 }}) end \
+             draw:rect(0, 0, 1, 1, '#fff')"
+        ))
+        .unwrap_err(),
+    );
+    // A page of Latin, a label of ideographs, in one font: little.
+    let page = cost(
+        "local t = {} for k = 0, 255 do t[#t + 1] = string.char(33 + k % 90) end \
+         for i = 1, 64 do draw:text(table.concat(t), 0, 1, { size = 12 }, '#fff') end",
+    )
+    .unwrap();
+    assert!(page < 0.1, "{page}");
+    let label = cost(&format!(
+        "{ideographs} for i = 1, 4 do draw:text(str(1), 0, 1, {{ size = 12 }}, '#fff') end"
+    ))
+    .unwrap();
+    assert!(label < 0.1, "{label}");
+    // Every script in each of the 8 free fonts: 100 ms, almost all a frame
+    // may have; in ten, over.
+    let mix = "漢字かな한글ไทยעבריתहिन्दीالعربية😀🎉🔥ﷺ𓀀∑ℵ";
+    let eight = cost(&format!(
+        "for i = 1, 8 do draw:text('{mix}', 0, 1, {{ size = 12 + i }}, '#fff') end"
+    ))
+    .unwrap();
+    assert!((0.7..1.0).contains(&eight), "{eight}");
+    over(
+        cost(&format!(
+            "for i = 1, 10 do draw:text('{mix}', 0, 1, {{ size = 12 + i }}, '#fff') end"
+        ))
+        .unwrap_err(),
+    );
+    // The scripts the toolkit has fonts for at no cost to speak of are free:
+    // Greek, Cyrillic, the maths and the arrows, in each of 8 sizes.
+    let cheap = cost(
+        "for i = 1, 8 do draw:text('αβγδ абвг −√π⌫÷×≤≥ ←→↑↓ …—', 0, 1, { size = 12 + i }, '#fff') end",
+    )
+    .unwrap();
+    assert!(cheap < 0.2, "{cheap}");
+    // ... but one font may have a few.
+    let few = cost(&format!(
+        "for i = 1, 8 do draw:text('{mix}', 0, 1, {{ size = 12 }}, '#fff') end"
+    ))
+    .unwrap();
+    assert!((0.05..0.4).contains(&few), "{few}");
+    // The characters of a calculator, many times: nothing.
+    let digits = cost(
+        "for i = 1, 64 do draw:text('0123456789.,+-×÷=%', 0, 1, { size = 12 + i % 4 }, '#fff') end",
+    )
+    .unwrap();
+    assert!(digits < 0.1, "{digits}");
+}
+
+/// R7-A-3, R7-A-4: the large corners of a box shadow and of a rounded
+/// rectangle cost the software renderer more than the area they cover:
+/// ten inset shadows of 740 × 620 px with corners of 300, blurred by 3,
+/// took 47 ms (172 of them, 0.8 s, for what the blur's charge and the area
+/// made of them); with corners of 20, 2. 400 gradient rectangles of
+/// 200 × 200 px with corners of 100 took 67 ms, with none 9 (0.17 ms each:
+/// 700 ms of the 4096 calls a frame has, for the 0.8 the area charged).
+#[test]
+fn large_corners_are_charged_by_their_radius() {
+    let window = Frame::sized(760.0, 640.0);
+    let cost = |body: &str| -> Result<f64, String> {
+        let (theme, _d) = background("corners", "", body);
+        match theme.draw(LayerKind::Background, &Ctx::default(), &window) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let over = |e: String| assert!(e.contains("what one may to draw"), "{e}");
+    let shadows = |n: u32, inset: bool, r: u32, blur: u32| {
+        format!(
+            "for _ = 1, {n} do draw:shadow(10, 10, 740, 620, {r}, {{ inset = {inset}, blur = {blur}, color = '#000' }}) end"
+        )
+    };
+    // Corners of 300: 13 inset shadows over the window, not 40.
+    assert!(cost(&shadows(10, true, 300, 3)).is_ok());
+    over(cost(&shadows(40, true, 300, 3)).unwrap_err());
+    over(cost(&shadows(40, false, 300, 10)).unwrap_err());
+    // Corners a panel has, or a blur the toolkit doesn't make: as they were.
+    assert!(cost(&shadows(100, true, 20, 3)).unwrap() < 0.8);
+    assert!(cost(&shadows(20, true, 300, 2)).unwrap() < 0.3);
+    // The radius is what the box leaves it: a thin bar's is its half.
+    assert!(
+        cost("for _ = 1, 40 do draw:shadow(10, 10, 740, 40, 300, { inset = true, blur = 3, color = '#000' }) end")
+            .unwrap()
+            < 0.5
+    );
+
+    // A scale that shrinks doesn't shrink the blur the toolkit makes of it:
+    // 7400 × 6200 px at 0.1, blurred by 20, corners of 3000, took 5.8 ms.
+    over(
+        cost("draw:scale(0.1) for _ = 1, 40 do draw:shadow(100, 100, 7400, 6200, 3000, { inset = true, blur = 20, color = '#000' }) end")
+            .unwrap_err(),
+    );
+
+    let rounded = |n: u32, size: u32, r: u32, paint: &str| {
+        format!(
+            "local g = {paint} for i = 1, {n} do draw:rounded_rect(10 + i % 500, 10, {size}, {size}, {r}, g) end"
+        )
+    };
+    let gradient = "gmnb.linear({ colors = { '#000', '#fff' } })";
+    assert!(cost(&rounded(400, 200, 100, gradient)).is_ok());
+    over(cost(&rounded(1000, 200, 100, gradient)).unwrap_err());
+    over(cost(&rounded(4000, 200, 100, "'#00000080'")).unwrap_err());
+    // Keys: little.
+    let keys = cost(&rounded(100, 60, 8, "'#336699'")).unwrap();
+    assert!(keys < 0.1, "{keys}");
 }

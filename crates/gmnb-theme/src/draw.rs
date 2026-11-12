@@ -1946,8 +1946,8 @@ fn text_and_font(
             font
         }
     };
-    // Its font, which the toolkit may have to make.
-    if let Err(share) = rec.meter.font(&font) {
+    // Its font, which the toolkit may have to make, and its characters.
+    if let Err(share) = rec.meter.text(&font, text) {
         return Err(rec.over(what, too_dear(share)));
     }
     Ok((text.to_string(), font))
