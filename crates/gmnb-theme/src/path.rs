@@ -377,9 +377,21 @@ struct Pen {
     cubic: Option<[f64; 2]>,
     quad: Option<[f64; 2]>,
     bounds: Option<[f64; 4]>,
+    /// The length of the path's points and control points joined in
+    /// order, plus an arc's whole ellipse: at least how long the path is.
+    length: f64,
 }
 
 impl Pen {
+    /// The path goes on from the current point along `via` to `to`.
+    fn run(&mut self, via: &[[f64; 2]], to: [f64; 2]) {
+        let mut from = self.at;
+        for p in via.iter().chain([&to]) {
+            self.length += (p[0] - from[0]).hypot(p[1] - from[1]);
+            from = *p;
+        }
+    }
+
     fn mark(&mut self, [x, y]: [f64; 2], grow: f64) {
         let b = self.bounds.get_or_insert([x, y, x, y]);
         *b = [
@@ -409,15 +421,29 @@ impl Pen {
                 }
                 p
             }
-            b'l' => pt(v[0], v[1]),
-            b'h' => [if rel { x0 + v[0] } else { v[0] }, y0],
-            b'v' => [x0, if rel { y0 + v[0] } else { v[0] }],
+            b'l' => {
+                let end = pt(v[0], v[1]);
+                self.run(&[], end);
+                end
+            }
+            b'h' => {
+                let end = [if rel { x0 + v[0] } else { v[0] }, y0];
+                self.run(&[], end);
+                end
+            }
+            b'v' => {
+                let end = [x0, if rel { y0 + v[0] } else { v[0] }];
+                self.run(&[], end);
+                end
+            }
             b'c' => {
                 let (c1, c2) = (pt(v[0], v[1]), pt(v[2], v[3]));
                 self.mark(c1, 0.0);
                 self.mark(c2, 0.0);
                 cubic = Some(c2);
-                pt(v[4], v[5])
+                let end = pt(v[4], v[5]);
+                self.run(&[c1, c2], end);
+                end
             }
             b's' => {
                 let c1 = self
@@ -427,13 +453,17 @@ impl Pen {
                 self.mark(c1, 0.0);
                 self.mark(c2, 0.0);
                 cubic = Some(c2);
-                pt(v[2], v[3])
+                let end = pt(v[2], v[3]);
+                self.run(&[c1, c2], end);
+                end
             }
             b'q' => {
                 let c = pt(v[0], v[1]);
                 self.mark(c, 0.0);
                 quad = Some(c);
-                pt(v[2], v[3])
+                let end = pt(v[2], v[3]);
+                self.run(&[c], end);
+                end
             }
             b't' => {
                 let c = self
@@ -441,7 +471,9 @@ impl Pen {
                     .map_or(self.at, |c| [2.0 * x0 - c[0], 2.0 * y0 - c[1]]);
                 self.mark(c, 0.0);
                 quad = Some(c);
-                pt(v[0], v[1])
+                let end = pt(v[0], v[1]);
+                self.run(&[c], end);
+                end
             }
             _ => {
                 // An arc: its radii, grown to reach from one end to the
@@ -468,6 +500,9 @@ impl Pen {
                     ));
                 }
                 grown = r;
+                // An arc is part of its ellipse, which is no longer than
+                // a circle of its larger radius's twice round.
+                self.length += std::f64::consts::TAU * r;
                 self.mark(self.at, 2.0 * r);
                 self.mark(end, 2.0 * r);
                 end
@@ -482,6 +517,7 @@ impl Pen {
     }
 
     fn close(&mut self) {
+        self.run(&[], self.start);
         self.at = self.start;
         self.cubic = None;
         self.quad = None;
@@ -490,6 +526,17 @@ impl Pen {
 
 /// [`svg_reach`], and the box around the path's points: `(x0, y0, x1, y1)`.
 pub fn svg_shape(d: &str) -> Result<(usize, f64, Option<[f64; 4]>), String> {
+    svg_walk(d).map(|(count, reach, pen)| (count, reach, pen.bounds))
+}
+
+/// How long SVG path data is, at most (its points and control points
+/// joined in order, an arc counted as its whole ellipse): what a dashed
+/// stroke of it is charged by.
+pub fn svg_length(d: &str) -> Result<f64, String> {
+    svg_walk(d).map(|(_, _, pen)| pen.length)
+}
+
+fn svg_walk(d: &str) -> Result<(usize, f64, Pen), String> {
     let mut pen = Pen::default();
     let b = d.as_bytes();
     let mut i = 0;
@@ -667,7 +714,7 @@ pub fn svg_shape(d: &str) -> Result<(usize, f64, Option<[f64; 4]>), String> {
     if count == 0 {
         return Err("empty path data".into());
     }
-    Ok((count, furthest, pen.bounds))
+    Ok((count, furthest, pen))
 }
 
 /// The box around a path's points and control points, in its own units:
@@ -705,6 +752,48 @@ pub fn bounds(path: &Path) -> Option<[f32; 4]> {
     b
 }
 
+/// How long a path is, at most, in its own units: its points and control
+/// points joined in order (a curve is no longer than the lines through
+/// its control points), a circle or an arc as its whole ellipse. A dashed
+/// stroke's dashes are as many as this is long over the dash's period.
+pub fn length(path: &Path) -> f64 {
+    let (mut at, mut start) = ([0.0f64; 2], [0.0f64; 2]);
+    let mut total = 0.0;
+    let mut go = |at: &mut [f64; 2], p: [f32; 2]| {
+        let p = p.map(f64::from);
+        total += (p[0] - at[0]).hypot(p[1] - at[1]);
+        *at = p;
+    };
+    let mut sum = 0.0;
+    for s in &path.segments {
+        match s {
+            Segment::MoveTo(x, y) => {
+                at = [f64::from(*x), f64::from(*y)];
+                start = at;
+            }
+            Segment::LineTo(x, y) => go(&mut at, [*x, *y]),
+            Segment::QuadTo(a, b, x, y) => {
+                go(&mut at, [*a, *b]);
+                go(&mut at, [*x, *y]);
+            }
+            Segment::CurveTo(a, b, c, d, x, y) => {
+                go(&mut at, [*a, *b]);
+                go(&mut at, [*c, *d]);
+                go(&mut at, [*x, *y]);
+            }
+            Segment::Close => {
+                go(&mut at, [start[0] as f32, start[1] as f32]);
+            }
+            Segment::Rect(_, _, w, h) | Segment::RoundedRect(_, _, w, h, _) => {
+                sum += 2.0 * f64::from(*w + *h);
+            }
+            Segment::Circle(_, _, r) => sum += std::f64::consts::TAU * f64::from(*r),
+            Segment::Svg(d) => sum += svg_length(d).unwrap_or(0.0),
+        }
+    }
+    total + sum
+}
+
 /// How far from the origin, in its own units, a point of the path can be,
 /// at most.
 pub fn reach(path: &Path) -> f32 {
@@ -727,7 +816,43 @@ pub fn reach(path: &Path) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::svg_segments;
+    use super::{Path, Segment, length, svg_length, svg_segments};
+
+    /// How long a path is, at most (a dashed stroke is charged by it): the
+    /// points and control points joined in order, a closed path back to
+    /// its start, a circle or an arc as its whole.
+    #[test]
+    fn a_path_is_never_longer_than_its_length() {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        assert!(near(
+            svg_length("M0 0 L3 4 h5 v-12z").unwrap(),
+            5.0 + 5.0 + 12.0 + 8.0f64.hypot(8.0)
+        ));
+        // A relative step is the step's length; a curve its control polygon.
+        assert!(near(svg_length("m1 1 l3 4").unwrap(), 5.0));
+        assert!(near(
+            svg_length("M0 0 C 0 3 4 3 4 0").unwrap(),
+            3.0 + 4.0 + 3.0
+        ));
+        assert!(near(svg_length("M0 0 Q 0 3 4 0").unwrap(), 3.0 + 5.0));
+        // An arc: a circle of its radius twice round at most.
+        assert!(svg_length("M0 0 A 10 10 0 0 1 20 0").unwrap() >= std::f64::consts::PI * 10.0);
+        assert!(svg_length("M0 0").unwrap() == 0.0);
+        let path = Path {
+            segments: vec![
+                Segment::MoveTo(0.0, 0.0),
+                Segment::LineTo(3.0, 4.0),
+                Segment::Close,
+                Segment::Rect(0.0, 0.0, 10.0, 20.0),
+                Segment::Circle(0.0, 0.0, 1.0),
+                Segment::Svg("M0 0 L0 7".into()),
+            ],
+        };
+        assert!(near(
+            length(&path),
+            5.0 + 5.0 + 60.0 + std::f64::consts::TAU + 7.0
+        ));
+    }
 
     #[test]
     fn svg_data_is_checked_and_counted() {

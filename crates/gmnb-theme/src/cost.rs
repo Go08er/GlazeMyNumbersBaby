@@ -21,7 +21,7 @@
 //! of the whole window at that size costs at most about 100 ms or 256 MB;
 //! a larger window, more.
 
-use crate::draw::{Filter, Op, Rect};
+use crate::draw::{Filter, Op, Rect, Stroke};
 use crate::types::{GradientKind, Paint, Shadow};
 
 /// The area the weights are of: the window they were measured in.
@@ -78,6 +78,14 @@ fn source(filter: Filter) -> f64 {
     }
 }
 const TILE: f64 = 5.5;
+/// Points for each dash of a dashed stroke: the toolkit's stroker makes a
+/// shape of every dash (and of its round caps), and the shapes of a path
+/// that crosses itself cost it more than their number (the software
+/// renderer, 100 000 dashes of a zigzag of 2000 lines: 0.9 s; 560 000 of
+/// 400: 2 s; 1 120 000 of 800: 25 s and 460 MB; round caps, 1 400 000
+/// of parallel lines: 15 s and 2.1 GB). However much of it lies beyond
+/// the layer, so this is not by what can be seen.
+const DASH: f64 = 0.2;
 const BORDER: f64 = 1.3;
 /// `draw:shadow`.
 const BOX_SHADOW: f64 = 4.3;
@@ -387,10 +395,14 @@ impl Meter {
                 path,
                 stroke,
                 paint: p,
-            } => (
-                masked(p),
-                crate::path::bounds(path).map(|b| grow(b.map(f64::from), f64::from(stroke.width))),
-            ),
+            } => {
+                self.spent += DASH * dashes(stroke, crate::path::length(path));
+                (
+                    masked(p),
+                    crate::path::bounds(path)
+                        .map(|b| grow(b.map(f64::from), f64::from(stroke.width))),
+                )
+            }
             Op::Border { rect, width, .. } => {
                 (BORDER, Some(grow(rect_box(rect), f64::from(*width))))
             }
@@ -495,6 +507,28 @@ impl Meter {
             self.close()?;
         }
         Ok(())
+    }
+}
+
+/// How many dashes a stroke of a path `length` long has, at most. The
+/// pattern's numbers are on, off, on, off...; an odd list is gone through
+/// twice, so that its numbers are on and off in turn. A dash of no length
+/// is still a dash (a round cap makes a dot of it).
+fn dashes(stroke: &Stroke, length: f64) -> f64 {
+    let n = stroke.dash.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let sum: f64 = stroke.dash.iter().map(|d| f64::from(*d)).sum();
+    let (period, on) = if n % 2 == 0 {
+        (sum, n / 2)
+    } else {
+        (2.0 * sum, n)
+    };
+    if period > 0.0 {
+        length / period * on as f64
+    } else {
+        0.0
     }
 }
 

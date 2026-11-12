@@ -1062,6 +1062,87 @@ fn what_a_frame_costs_to_draw_is_capped() {
     assert!(e.contains("what one may to draw"), "{e}");
 }
 
+/// A dashed stroke is charged by its dashes (R5-D-1): the toolkit's stroker
+/// makes a shape of each, and a zigzag of 2000 lines dashed 0.5 on, 0.5 off
+/// was 14 million of them, a minute of the main thread (the software
+/// renderer; round caps, gigabytes) in a frame that covered a window's
+/// worth, which the area charge alone let through.
+#[test]
+fn a_dashed_stroke_is_charged_by_its_dashes() {
+    let window = Frame::sized(760.0, 640.0);
+    let cost = |body: &str| -> Result<f64, String> {
+        let (theme, _d) = background("dashes", "", body);
+        match theme.draw(LayerKind::Background, &Ctx::default(), &window) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let over = |e: String| assert!(e.contains("what one may to draw"), "{e}");
+    let zigzag = |lines: u32, stroke: &str| {
+        format!(
+            "local p = gmnb.path():move_to(0, 100) \
+             for i = 1, {lines} do p:line_to(i % 2 == 0 and 0 or 700, 100 + (i % 7) * 40) end \
+             draw:stroke(p, {stroke}, '#ff0000')"
+        )
+    };
+    // The hostile frames: butt caps, round caps, an odd list (gone through
+    // twice), and a long line, mostly beyond the layer.
+    for stroke in [
+        "{ width = 2, dash = { 0.5, 0.5 } }",
+        "{ width = 2, cap = 'round', join = 'round', dash = { 0.5, 0.5 } }",
+        "{ width = 2, dash = { 0.5 } }",
+        "{ width = 2, dash = { 0, 0.001 } }",
+    ] {
+        over(cost(&zigzag(2000, stroke)).unwrap_err());
+    }
+    over(
+        cost("draw:stroke(gmnb.path():move_to(0, 0):line_to(1e6, 0), { width = 1, dash = { 1, 1 } }, '#fff')")
+            .unwrap_err(),
+    );
+    // Many strokes, each fewer dashes than a frame has: together over.
+    over(
+        cost("for i = 1, 100 do draw:stroke(gmnb.path():move_to(0, i):line_to(700, i), { width = 1, dash = { 0.2, 0.2 } }, '#fff') end")
+            .unwrap_err(),
+    );
+    // SVG data, a rectangle, a circle, a curve: counted as long as they are.
+    for path in [
+        "gmnb.svg_path('M0 0 L1e5 0')",
+        "gmnb.svg_path('M0 0 C 0 3e5 3e5 3e5 3e5 0')",
+        "gmnb.svg_path('M0 0 A 4e5 4e5 0 1 1 1 1')",
+        "gmnb.path():rect(0, 0, 3e4, 3e4)",
+        "gmnb.path():circle(0, 0, 1e5)",
+        "gmnb.path():move_to(0, 0):line_to(1e5, 0):close()",
+    ] {
+        over(
+            cost(&format!(
+                "draw:stroke({path}, {{ width = 1, dash = {{ 1, 1 }} }}, '#fff')"
+            ))
+            .unwrap_err(),
+        );
+    }
+    // What themes use is cheap: a dashed rectangle (Layer tests use one),
+    // a long dashed line, a dotted circle.
+    for body in [
+        "draw:stroke(gmnb.path():rounded_rect(4.5, 4.5, 60, 40, 3), { width = 1, dash = { 3, 2 } }, '#fff')",
+        "draw:stroke(gmnb.path():move_to(0, 0):line_to(2000, 0), { width = 2, dash = { 4, 4 } }, '#fff')",
+        "draw:stroke(gmnb.path():circle(300, 300, 200), { width = 2, cap = 'round', dash = { 0, 8 } }, '#fff')",
+    ] {
+        let c = cost(body).unwrap();
+        assert!(c < 0.2, "{body}: {c}");
+    }
+    // 3000 dashes are drawn; 6000 are not.
+    let line = |dashes: u32| {
+        format!(
+            "draw:stroke(gmnb.path():move_to(0, 0):line_to({}, 0), {{ width = 1, dash = {{ 1, 1 }} }}, '#fff')",
+            dashes * 2
+        )
+    };
+    assert!(cost(&line(3000)).is_ok());
+    over(cost(&line(6000)).unwrap_err());
+    // A stroke that isn't dashed is as before, however long.
+    assert!(cost(&zigzag(2000, "{ width = 2 }")).is_ok());
+}
+
 #[test]
 fn frames_at_the_caps_are_drawn() {
     let (theme, _d) = background(
