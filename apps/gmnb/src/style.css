@@ -3325,12 +3325,11 @@ list.wc-panel-list > row.wc-panel-row {
   padding: var(--gmnb-panel-row-padding);
 }
 
-/* text panel.expression .wc-hist-expr line=1 */
-.wc-hist-expr {
+/* text panel.expression fitlabel.wc-hist-expr */
+fitlabel.wc-hist-expr {
   color: var(--gmnb-panel-expression-color);
   font-family: var(--gmnb-panel-expression-font-family);
   font-size: var(--gmnb-panel-expression-font-size);
-  line-height: var(--gmnb-panel-expression-line-height);
   font-weight: var(--gmnb-panel-expression-font-weight);
   font-style: var(--gmnb-panel-expression-font-style);
   letter-spacing: var(--gmnb-panel-expression-letter-spacing);
@@ -3338,16 +3337,14 @@ list.wc-panel-list > row.wc-panel-row {
   font-variation-settings: var(--gmnb-panel-expression-font-variations);
   text-shadow: var(--gmnb-panel-expression-text-shadow);
   margin: var(--gmnb-panel-expression-margin);
-  padding-top: var(--gmnb-panel-expression-text-nudge);
 }
 /* end text */
 
-/* text panel.result .wc-hist-result line=1 */
-.wc-hist-result {
+/* text panel.result fitlabel.wc-hist-result */
+fitlabel.wc-hist-result {
   color: var(--gmnb-panel-result-color);
   font-family: var(--gmnb-panel-result-font-family);
   font-size: var(--gmnb-panel-result-font-size);
-  line-height: var(--gmnb-panel-result-line-height);
   font-weight: var(--gmnb-panel-result-font-weight);
   font-style: var(--gmnb-panel-result-font-style);
   letter-spacing: var(--gmnb-panel-result-letter-spacing);
@@ -3355,7 +3352,6 @@ list.wc-panel-list > row.wc-panel-row {
   font-variation-settings: var(--gmnb-panel-result-font-variations);
   text-shadow: var(--gmnb-panel-result-text-shadow);
   margin: var(--gmnb-panel-result-margin);
-  padding-top: var(--gmnb-panel-result-text-nudge);
 }
 /* end text */
 
@@ -3826,12 +3822,11 @@ button.wc-radix-row.wc-radix-active:disabled {
   color: var(--gmnb-programmer-radix-name-checked);
 }
 
-/* text programmer.radix.value .wc-radix-value line=1 */
-.wc-radix-value {
+/* text programmer.radix.value fitlabel.wc-radix-value */
+fitlabel.wc-radix-value {
   color: var(--gmnb-programmer-radix-value-color);
   font-family: var(--gmnb-programmer-radix-value-font-family);
   font-size: var(--gmnb-programmer-radix-value-font-size);
-  line-height: var(--gmnb-programmer-radix-value-line-height);
   font-weight: var(--gmnb-programmer-radix-value-font-weight);
   font-style: var(--gmnb-programmer-radix-value-font-style);
   letter-spacing: var(--gmnb-programmer-radix-value-letter-spacing);
@@ -3839,7 +3834,6 @@ button.wc-radix-row.wc-radix-active:disabled {
   font-variation-settings: var(--gmnb-programmer-radix-value-font-variations);
   text-shadow: var(--gmnb-programmer-radix-value-text-shadow);
   margin: var(--gmnb-programmer-radix-value-margin);
-  padding-top: var(--gmnb-programmer-radix-value-text-nudge);
 }
 /* end text */
 

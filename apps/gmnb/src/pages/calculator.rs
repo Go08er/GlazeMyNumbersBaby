@@ -51,7 +51,7 @@ pub struct CalculatorPage {
     second: Cell<bool>,
     trig_inv: Cell<bool>,
     hyp: Cell<bool>,
-    radix_rows: RefCell<Vec<(Radix, gtk::Button, gtk::Label)>>,
+    radix_rows: RefCell<Vec<(Radix, gtk::Button, FitLabel)>>,
     word_btn: RefCell<Option<gtk::Button>>,
     prog_stack: RefCell<Option<gtk::Stack>>,
     bitflip: RefCell<Option<Rc<BitFlip>>>,
@@ -631,11 +631,18 @@ impl CalculatorPage {
             name.add_css_class("wc-radix-name");
             name.set_width_request(mpg::RADIX_NAME_W as i32);
             name.set_xalign(0.0);
-            let value = gtk::Label::new(Some("0"));
+            // DGMNB's `label_fit`: a long value shrinks to its room (a 64
+            // digit binary one to 9 px), it isn't cut at its start.
+            let value = FitLabel::drawn();
+            value.set_text("0");
             value.add_css_class("wc-radix-value");
-            value.set_xalign(0.0);
             value.set_hexpand(true);
-            value.set_ellipsize(gtk::pango::EllipsizeMode::Start);
+            fit::follow(
+                &value,
+                "programmer.radix.value",
+                appcore::metrics::text::RADIX_VALUE_MIN_SIZE,
+                None,
+            );
             let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             content.append(&name);
             content.append(&value);

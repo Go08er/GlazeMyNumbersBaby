@@ -364,12 +364,10 @@ impl ConverterPage {
         column.append(&f2.frame);
         column.append(&f2.dropdown);
         column.append(&section);
-        let values = gtk::ScrolledWindow::builder()
-            .child(&column)
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .hexpand(true)
-            .build();
+        // With DGMNB's thumb (`scroller`), shown whenever the values are
+        // longer than the view (a short window).
+        let values = crate::window::scroller(&ctx.hub, &column);
+        values.set_hexpand(true);
 
         let keypad = Keypad::new();
         for (key, r, c, rs, cs) in keys::converter() {
