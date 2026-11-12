@@ -29,6 +29,10 @@
 //!   Settings: `wc-opacity-slider`) set to each value in turn, all at once,
 //!   as a drag the toolkit reports faster than the screen shows it,
 //!   between a line `GMNB_STEPS: sliding` and a line `GMNB_STEPS: slid`;
+//! - `tab`: the keyboard's focus moved on, as Tab moves it; `focused`: a
+//!   line `GMNB_STEPS: focus header` when the focus is in the header bar,
+//!   `GMNB_STEPS: focus <widget type>` for another widget, `GMNB_STEPS:
+//!   focus none` otherwise;
 //! - `quit`: what sound has done, a line on stderr (as `GMNB_THEME_STATS`
 //!   writes it), then a line `note: ...` for each of the theme's notes
 //!   (what Settings lists under the themes), and the window closed (its
@@ -55,6 +59,8 @@ enum Step {
     Press(String),
     Choose(String),
     Themes,
+    Tab,
+    Focused,
     Slide(String, Vec<f64>),
     Quit,
 }
@@ -67,6 +73,8 @@ fn parse(spec: &str) -> VecDeque<Step> {
                 "settings" => return Some(Step::Settings),
                 "close" => return Some(Step::Close),
                 "themes" => return Some(Step::Themes),
+                "tab" => return Some(Step::Tab),
+                "focused" => return Some(Step::Focused),
                 _ => {}
             }
             let (what, arg) = part.trim().split_once(':')?;
@@ -212,6 +220,22 @@ fn next(win: Rc<Window>, steps: std::cell::RefCell<VecDeque<Step>>, gap: u64) {
                 "themes: {}; restore {}",
                 rows.join(" "),
                 if restore { "shown" } else { "hidden" }
+            );
+        }
+        Step::Tab => {
+            win.widget().child_focus(gtk::DirectionType::TabForward);
+        }
+        Step::Focused => {
+            let focus = gtk::prelude::RootExt::focus(win.widget().upcast_ref::<gtk::Window>());
+            let in_header = std::iter::successors(focus.clone(), |w| w.parent())
+                .any(|w| w.is::<adw::HeaderBar>());
+            eprintln!(
+                "GMNB_STEPS: focus {}",
+                match (&focus, in_header) {
+                    (_, true) => "header".to_string(),
+                    (Some(w), _) => w.type_().name().to_string(),
+                    (None, _) => "none".to_string(),
+                }
             );
         }
         Step::Slide(class, values) => {

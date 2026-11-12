@@ -201,6 +201,29 @@ impl CalculatorPage {
             });
         }
 
+        {
+            // Tab stays in the open sheet, as DGMNB's does (its keys reach
+            // only the topmost overlay's layer): the header's buttons are
+            // not in the sheet's tab order while it is open (they took
+            // Tab, and Enter on the window's own buttons, from under it;
+            // round 6, E). A click still reaches them.
+            let history_btn = history_btn.downgrade();
+            let header: std::cell::RefCell<Option<glib::WeakRef<gtk::Widget>>> = Default::default();
+            sheet.connect_open_notify(move |sheet| {
+                if sheet.is_open() {
+                    let bar = history_btn
+                        .upgrade()
+                        .and_then(|b| b.ancestor(adw::HeaderBar::static_type()));
+                    if let Some(bar) = bar {
+                        bar.set_can_focus(false);
+                        header.replace(Some(bar.downgrade()));
+                    }
+                } else if let Some(bar) = header.take().and_then(|w| w.upgrade()) {
+                    bar.set_can_focus(true);
+                }
+            });
+        }
+
         let page = Rc::new(CalculatorPage {
             ctx: ctx.clone(),
             vm: RefCell::new(CalculatorViewModel::new()),

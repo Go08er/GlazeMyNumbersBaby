@@ -753,3 +753,37 @@ return { api = 1, name = W, description = W, options = {
     assert!(err.contains("sound:"), "the steps did not finish: {err}");
     assert!(!err.contains("exceeds AdwBreakpointBin"), "{err}");
 }
+
+/// In a narrow window the open History sheet keeps the keyboard's focus:
+/// Tab went first to the header's buttons under it (menu, keep on top,
+/// History, minimize, maximize, close), where Enter would have minimized
+/// the window, and DGMNB's Tab cycles in the sheet alone (round 6, E).
+#[test]
+fn tab_stays_in_the_open_history_sheet() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    const THEME: &str = r#"return { api = 1, name = "Plain" }"#;
+    let steps = "keys:{ctrl+h};wait:600;tab;focused;tab;focused;tab;focused;tab;focused;quit";
+    let err = run(
+        &display,
+        THEME,
+        &[
+            ("GMNB_STEPS", steps),
+            ("GMNB_SIZE", "360x600"),
+            ("GMNB_MODE", "standard"),
+            ("GMNB_STILL", "1"),
+        ],
+        30_000,
+    );
+    let focus: Vec<&str> = err
+        .lines()
+        .filter_map(|l| l.strip_prefix("GMNB_STEPS: focus "))
+        .collect();
+    assert_eq!(focus.len(), 4, "the steps did not finish: {err}");
+    assert!(
+        !focus.contains(&"header") && !focus.contains(&"none"),
+        "Tab went to the header under the sheet, or nowhere: {focus:?}"
+    );
+}
