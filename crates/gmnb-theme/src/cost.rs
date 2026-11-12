@@ -43,13 +43,35 @@ fn paint(p: &Paint) -> f64 {
             match g.kind {
                 GradientKind::Linear => {
                     let gl = if stops > 6.0 { 13.0 } else { 0.0 };
-                    (2.2 + 2.5 * (stops - 2.0)).max(gl)
+                    let along = (2.2 + 2.5 * (stops - 2.0)).max(gl);
+                    // Across the axes the toolkit can't draw it by rows or
+                    // columns, whatever its stops (the probe, over the window:
+                    // 2 stops at 30 degrees 6.5 ms, as 16; at 90, 0.5 ms
+                    // translucent and 0.08 opaque).
+                    if angled(g.angle) {
+                        along.max(ANGLED)
+                    } else if g.colors.iter().any(|c| c[3] < 1.0) {
+                        along.max(TRANSLUCENT_LINEAR)
+                    } else {
+                        along
+                    }
                 }
                 GradientKind::Radial => 52.0,
                 GradientKind::Conic => 130.0,
             }
         }
     }
+}
+
+/// A linear gradient that runs across the axes, over the window, at least;
+/// and one along them with a colour that isn't opaque.
+const ANGLED: f64 = 65.0;
+const TRANSLUCENT_LINEAR: f64 = 5.0;
+
+/// Whether a linear gradient's angle (CSS degrees) is off the axes.
+fn angled(degrees: f32) -> bool {
+    let off = f64::from(degrees).rem_euclid(90.0);
+    off > 0.01 && off < 89.99
 }
 
 /// A path, a circle or a stroke: the GL renderer makes a mask of it, as
@@ -83,6 +105,9 @@ const TILE: f64 = 5.5;
 /// the whole picture each time it is repeated (50 tiles of 10 × 10 px of a
 /// 2048 × 2048 still: 190 ms, for nothing the area charged; 200: 750 ms).
 const TILE_SOURCE: f64 = 7.0;
+/// And each tile call that is seen, however small (the probe: a 16 or 128
+/// px picture in 10 x 10 rects, 0.1 to 0.4 ms a call).
+const TILE_CALL: f64 = 4.0;
 /// Points for each dash of a dashed stroke, up to [`DASH_UNITS`] of them in
 /// a frame: a butt-capped dash is one unit, a round- or square-capped one
 /// [`DASH_CAPPED`] (the software renderer, in parallel dashes of a stroke
@@ -761,7 +786,11 @@ impl Meter {
                 self.picture(pixels, Filter::Linear);
                 (IMAGE, Some(rect_box(rect)))
             }
-            Op::Tile { rect, .. } => (TILE, Some(rect_box(rect))),
+            Op::Tile { rect, .. } => {
+                // (Charged with the picture's own pixels, if it is seen.)
+                self.picture += TILE_CALL;
+                (TILE, Some(rect_box(rect)))
+            }
         };
         let picture = std::mem::take(&mut self.picture);
         let Some(local) = local else {
