@@ -2522,3 +2522,152 @@ fn auroras_layers_draw_within_their_limits() {
     );
     assert!(busiest > 0.0 && busiest < 0.3, "{busiest}");
 }
+
+/// What a call costs the software renderer is not only what it covers
+/// (R6-B): a box shadow's blur, a clip that is a mask of its own for all
+/// that is drawn inside it, and the font a text is set in, whatever little
+/// each covers. Measured with the cairo renderer, one 760 × 640 frame each:
+/// 200 outset shadows of 4 × 4 px blurred by 100, 1.7 s (the area charged
+/// 3%); 20 inset ones over the window, 2.5 s for 0.86; 600 window-sized
+/// rectangles inside 30 rounded, turned clips, 0.8 s for 0.76; 64 texts of
+/// 64 weights, 0.3 s for nothing.
+#[test]
+fn what_a_call_costs_is_more_than_what_it_covers() {
+    let window = Frame::sized(760.0, 640.0);
+    let cost = |body: &str| -> Result<f64, String> {
+        let (theme, _d) = background("more", "", body);
+        match theme.draw(LayerKind::Background, &Ctx::default(), &window) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    let over = |e: String| assert!(e.contains("what one may to draw"), "{e}");
+
+    // A box shadow's blur: by its radius, however little it covers.
+    let shadows = |n: u32, x: &str, size: u32, blur: u32| {
+        format!(
+            "for _ = 1, {n} do draw:shadow(100, 100, {size}, {size}, 8, {{ {x}blur = {blur}, color = '#000' }}) end"
+        )
+    };
+    over(cost(&shadows(200, "", 4, 100)).unwrap_err());
+    over(cost(&shadows(20, "inset = true, ", 760, 100)).unwrap_err());
+    over(cost(&shadows(20, "inset = true, ", 200, 100)).unwrap_err());
+    // Three over the window are drawn, six are not.
+    assert!(cost(&shadows(3, "inset = true, ", 760, 100)).is_ok());
+    over(cost(&shadows(6, "inset = true, ", 760, 100)).unwrap_err());
+    // A small blur is cheap: thirty of 18 px, a key's.
+    let keys = cost(&shadows(30, "", 60, 18)).unwrap();
+    assert!((0.4..0.9).contains(&keys), "{keys}");
+    assert!(cost(&shadows(300, "", 60, 2)).unwrap() < 0.9);
+    // What can't be seen costs nothing: off the layer.
+    assert_eq!(
+        cost(
+            "for _ = 1, 1000 do draw:shadow(5000, 5000, 20, 20, 4, { blur = 100, color = '#000' }) end"
+        ),
+        Ok(0.0)
+    );
+    // Through the transforms in force: scaled up, a blur is wider.
+    over(
+        cost("draw:scale(10) for _ = 1, 20 do draw:shadow(10, 10, 20, 20, 4, { blur = 10, color = '#000' }) end")
+            .unwrap_err(),
+    );
+
+    // A clip that is a mask: each one open adds to all that is drawn in it.
+    let nest = |clip: &str, depth: u32, rects: u32| {
+        format!(
+            "draw:translate(380, 320) for _ = 1, {depth} do {clip} end \
+             for _ = 1, {rects} do draw:rect(-380, -320, 760, 640, '#f00') end"
+        )
+    };
+    let rounded = "draw:push_clip(-370, -310, 740, 620, 40)";
+    let turned = "draw:rotate(0.1) draw:push_clip(-370, -310, 740, 620)";
+    let both = "draw:rotate(0.1) draw:push_clip(-370, -310, 740, 620, 40)";
+    let plain = "draw:push_clip(-370, -310, 740, 620)";
+    let quarter = "draw:rotate(90) draw:push_clip(-300, -300, 600, 600)";
+    for clip in [rounded, turned, both] {
+        assert!(cost(&nest(clip, 1, 400)).is_ok(), "{clip}");
+        over(cost(&nest(clip, 30, 400)).unwrap_err());
+    }
+    // A box stays a box, however many, and through a quarter turn.
+    for clip in [plain, quarter] {
+        let c = cost(&nest(clip, 30, 400)).unwrap();
+        assert!(c < 0.6, "{clip}: {c}");
+    }
+
+    // Fonts: the first few of a frame are free, the toolkit makes each of
+    // the rest.
+    let weights = |n: u32, call: &str| {
+        format!(
+            "for i = 1, {n} do {call}('Hello', 1, 1, {{ size = 1, weight = 10 + i * 15 }}, '#fff') end"
+        )
+    };
+    over(cost(&weights(64, "draw:text")).unwrap_err());
+    assert!(cost(&weights(8, "draw:text")).unwrap() < 0.01);
+    assert!(cost(&weights(20, "draw:text")).unwrap() < 0.7);
+    over(cost(&weights(40, "draw:text")).unwrap_err());
+    // Measuring is making it too.
+    over(
+        cost("for i = 1, 60 do draw:text_size('Hello', { weight = 10 + i * 15 }) end").unwrap_err(),
+    );
+    // One font as often as a frame likes (the text caps still stand).
+    let one =
+        cost("for _ = 1, 64 do draw:text('Hello', 1, 1, { size = 1, weight = 300 }, '#fff') end")
+            .unwrap();
+    assert!(one < 0.01, "{one}");
+    // A size, an italic, a variation or a family makes another.
+    over(cost("for i = 1, 60 do draw:text('Hi', 1, 1, { size = 1 + i }, '#fff') end").unwrap_err());
+    over(
+        cost(
+            "for i = 1, 60 do draw:text('Hi', 1, 1, { variations = { opsz = 8 + i } }, '#fff') end",
+        )
+        .unwrap_err(),
+    );
+    over(
+        cost("for i = 1, 60 do draw:text('Hi', 1, 1, { family = 'F' .. i }, '#fff') end")
+            .unwrap_err(),
+    );
+
+    // A blend is charged by its mode: hue took 19 ms of the software
+    // renderer over the window, multiply 6.
+    let blends = |mode: &str, n: u32| {
+        format!(
+            "for _ = 1, {n} do draw:push_blend('{mode}') draw:rect(0, 0, 9, 9, '#f00') draw:pop() \
+             draw:rect(0, 0, 9, 9, '#00f') draw:pop() end"
+        )
+    };
+    assert!(cost(&blends("multiply", 18)).is_ok());
+    over(cost(&blends("multiply", 22)).unwrap_err());
+    assert!(cost(&blends("hue", 5)).is_ok());
+    over(cost(&blends("hue", 6)).unwrap_err());
+    assert!(cost(&blends("color-dodge", 9)).is_ok());
+    over(cost(&blends("color-dodge", 11)).unwrap_err());
+
+    // A picture repeated is made whole each time, whatever of it is seen:
+    // 200 tiles of 10 × 10 px of a 2048 × 2048 still took 750 ms.
+    let tiles = |side: u32, n: u32| {
+        let (theme, _d) = background(
+            "tiles",
+            &format!("local g = gmnb.noise({{ size = {side} }})"),
+            &format!("for i = 1, {n} do draw:tile(g, i % 700, 0, 10, 10) end"),
+        );
+        match theme.draw(LayerKind::Background, &Ctx::default(), &window) {
+            Ok(_) => Ok(theme.api().frame_cost()),
+            Err(e) => Err(message(e)),
+        }
+    };
+    over(tiles(512, 400).unwrap_err());
+    assert!(tiles(512, 40).unwrap() > 0.1);
+    // A small one, as themes use them (a grain over the window), is cheap.
+    let small = tiles(16, 1000).unwrap();
+    assert!(small < 0.1, "{small}");
+    // What is not seen costs nothing.
+    let (theme, _d) = background(
+        "tiles_off",
+        "local g = gmnb.noise({ size = 512 })",
+        "for i = 1, 1000 do draw:tile(g, 5000, 5000, 10, 10) end",
+    );
+    theme
+        .draw(LayerKind::Background, &Ctx::default(), &window)
+        .unwrap();
+    assert_eq!(theme.api().frame_cost(), 0.0);
+}
