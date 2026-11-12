@@ -473,6 +473,8 @@ pub(crate) struct Meter {
     /// `fonts`) at each scale and turn, and their scripts.
     chars: std::collections::HashSet<(usize, char, [i32; 4])>,
     scripts: std::collections::HashSet<(usize, u32)>,
+    /// What the frame has the renderer hold off-screen ([`Offscreen`]).
+    offscreen: Offscreen,
 }
 
 /// What the toolkit makes a font of: a family list, a size, a weight, a
@@ -524,6 +526,7 @@ impl Meter {
             fonts: Vec::new(),
             chars: Default::default(),
             scripts: Default::default(),
+            offscreen: Offscreen::default(),
         }
     }
 
@@ -615,6 +618,7 @@ impl Meter {
     /// The operation is recorded: its points, and what it opens or
     /// closes. `Err`: the frame is past its allowance (by that share).
     pub(crate) fn take(&mut self, op: &Op) -> Result<(), f64> {
+        self.offscreen_opens(op);
         let glyphs = self.glyphs;
         // Points beside the area's, if what is drawn is seen at all.
         let mut extra = 0.0;
@@ -793,6 +797,7 @@ impl Meter {
             return Ok(());
         };
         let b = self.seen(local);
+        self.offscreen_drawn(op, b);
         // A picture drawn at all costs its own pixels too.
         if b.is_some() && picture > 0.0 {
             self.spent += picture;
@@ -850,6 +855,7 @@ impl Meter {
         let Some(level) = self.levels.pop() else {
             return Ok(());
         };
+        self.offscreen_closes(&level);
         self.m = level.m;
         let Some(content) = level.content else {
             return Ok(());
@@ -906,5 +912,188 @@ fn text_weight(p: &Paint) -> f64 {
     match p {
         Paint::Color(_) => TEXT,
         gradient => TEXT + TEXT_MASK + paint(gradient),
+    }
+}
+
+// ---- What a frame holds off-screen --------------------------------------------
+
+/// What a frame has the renderer hold off-screen while it is drawn: the
+/// masks GL makes of what it fills, and the surfaces the effects are drawn
+/// into, by their device pixels and what each was measured to hold for one
+/// (GL on llvmpipe, where it is the process's own memory: 64 circles over a
+/// window of 3840 × 2160 held over 3 GB; the software renderer holds a
+/// surface only while it draws into it, a tenth of that or less). It is the
+/// window's, not the layer's: the layers on screen share
+/// [`OFFSCREEN_BYTES`], whatever the window's size (docs/theming.md,
+/// "What the layers hold off-screen").
+#[derive(Debug, Default)]
+struct Offscreen {
+    /// Bytes held so far.
+    held: f64,
+    /// The most the frame may hold (what the window's other layers on
+    /// screen leave), and the device pixels to the layer's pixel (each way).
+    limit: f64,
+    density: f64,
+    /// Where the renderer can make a surface, in the layer's coordinates:
+    /// the window (as far as it is known; else the layer itself), for it
+    /// makes none larger than what it draws on.
+    surface: [f64; 4],
+    /// For each level open, the bytes it holds for each device pixel of
+    /// what is drawn in it.
+    levels: Vec<f64>,
+}
+
+/// What the layers on screen may have the renderer hold off-screen, in all:
+/// 768 MiB, by the measures below. What a frame really holds is more where
+/// the renderer keeps a frame or two in flight, and NVIDIA's Vulkan holds
+/// some 15 bytes a pixel for a mask: at 3840 × 2160, with 1 GiB, a
+/// background asking for all of it every frame held 1.6 GB more than the
+/// base look on GL on llvmpipe (opacity groups, blurs and circles) and 2.0
+/// GB on NVIDIA (circles), so a quarter less is allowed. A frosted-glass
+/// theme (five window-sized radial lights blurred behind three to six
+/// panes) asks for two thirds of it, 500 to 550 MB.
+pub const OFFSCREEN_BYTES: f64 = (768u64 << 20) as f64;
+
+/// What one of Settings' preview tiles may have the renderer hold
+/// off-screen: 512 KiB, a hundred bytes for each of its 96 × 56 pixels (a
+/// blur, a mask and a few circles over the whole of it). A tile is no layer
+/// of the window's, and Settings may show many: 4096 tile-sized circles,
+/// within a tile's points, would count 176 MB each.
+pub const PREVIEW_OFFSCREEN_BYTES: f64 = (512u64 << 10) as f64;
+
+/// Bytes held for each device pixel covered (GL on llvmpipe, the whole of a
+/// window of 760 × 640 and of 1600 × 1080, each kind up to 64 times):
+/// a path filled or stroked, or a circle, in a colour: its mask, 7 to 8; with
+/// a gradient, 10.5.
+const HELD_MASK: f64 = 8.0;
+const HELD_MASK_GRADIENT: f64 = 11.0;
+/// A linear gradient of more than 6 stops (GL draws one through a picture
+/// of its own).
+const HELD_RAMP: f64 = 7.0;
+/// `push_opacity` (over two overlapping rectangles): 6.7 to 6.9; an
+/// unblurred `push_shadow`, 6.9 to 7.
+const HELD_SURFACE: f64 = 7.0;
+/// `push_blur`: 11.6 to 13, over what is drawn grown by its reach.
+const HELD_BLUR: f64 = 13.0;
+/// And each shadow of a `push_shadow` that is blurred: 15 to 16.4 in all
+/// for one.
+const HELD_SHADOW_BLUR: f64 = 9.0;
+/// `push_mask` and `push_blend`, two surfaces (13.1 to 13.6), as text in a
+/// gradient (drawn through itself as a mask). A clip, rounded or turned,
+/// held 0.5 to 1.5 however many were open: nothing.
+const HELD_TWO: f64 = 14.0;
+
+impl Meter {
+    /// The window's layers on screen leave this frame `limit` bytes to hold
+    /// off-screen, at `density` device pixels to the layer's pixel, for a
+    /// layer of `size` (`whole`: it covers its window; else the window is
+    /// `window`, in the layer's coordinates, if known).
+    pub(crate) fn set_offscreen(
+        &mut self,
+        limit: f64,
+        density: f64,
+        size: [f32; 2],
+        whole: bool,
+        window: Option<[f32; 4]>,
+    ) {
+        let layer = [
+            0.0,
+            0.0,
+            f64::from(size[0].max(1.0)),
+            f64::from(size[1].max(1.0)),
+        ];
+        self.offscreen.surface = match (whole, window) {
+            (false, Some(window)) => union(Some(layer), rect_box(&window)),
+            _ => layer,
+        };
+        self.offscreen.limit = limit.max(0.0);
+        self.offscreen.density = if density.is_finite() && density > 0.0 {
+            density
+        } else {
+            1.0
+        };
+    }
+
+    /// What the frame has the renderer hold off-screen so far, in bytes.
+    pub(crate) fn offscreen(&self) -> f64 {
+        self.offscreen.held
+    }
+
+    /// The bytes it may hold, if it holds more.
+    pub(crate) fn offscreen_over(&self) -> Option<f64> {
+        (self.offscreen.held > self.offscreen.limit).then_some(self.offscreen.limit)
+    }
+
+    /// Bytes for the device pixels of `b` (layer pixels), at `per` a pixel.
+    fn offscreen_hold(&mut self, per: f64, b: Option<[f64; 4]>) {
+        let d = self.offscreen.density;
+        let b = b.and_then(|b| meet(b, self.offscreen.surface));
+        self.offscreen.held += per * area(b) * d * d;
+    }
+
+    /// `op` opens levels (a save, a push; a mask or a blend two): what
+    /// each holds for what is drawn in it.
+    fn offscreen_opens(&mut self, op: &Op) {
+        let per = match op {
+            // (The toolkit draws an opacity of 1 and a blur of 0 straight
+            // through; the app draws a shadow of none as an opacity of 1.)
+            Op::Save | Op::PushClip { .. } => 0.0,
+            Op::PushOpacity(o) if *o < 1.0 => HELD_SURFACE,
+            Op::PushBlur(r) if *r > 0.0 => HELD_BLUR,
+            Op::PushShadow(list) if !list.is_empty() => {
+                HELD_SURFACE
+                    + HELD_SHADOW_BLUR * list.iter().filter(|s| s.blur > 0.0).count() as f64
+            }
+            Op::PushOpacity(_) | Op::PushBlur(_) | Op::PushShadow(_) => 0.0,
+            Op::PushMask(_) | Op::PushBlend(_) => {
+                self.offscreen.levels.extend([HELD_TWO, 0.0]);
+                return;
+            }
+            _ => return,
+        };
+        self.offscreen.levels.push(per);
+    }
+
+    /// `op` draws `b` (seen, in the layer's coordinates): a mask of it, or
+    /// a picture of its gradient, if GL makes one.
+    fn offscreen_drawn(&mut self, op: &Op, b: Option<[f64; 4]>) {
+        let ramp = |p: &Paint| match p {
+            Paint::Gradient(g) if matches!(g.kind, GradientKind::Linear) && g.colors.len() > 6 => {
+                HELD_RAMP
+            }
+            _ => 0.0,
+        };
+        let per = match op {
+            Op::Circle { paint: p, .. }
+            | Op::Fill { paint: p, .. }
+            | Op::Stroke { paint: p, .. } => match p {
+                Paint::Color(_) => HELD_MASK,
+                gradient => HELD_MASK_GRADIENT + ramp(gradient),
+            },
+            Op::Rect { paint: p, .. } | Op::RoundedRect { paint: p, .. } => ramp(p),
+            Op::Text { paint: p, .. } | Op::Glyph { paint: p, .. } => match p {
+                Paint::Color(_) => 0.0,
+                gradient => HELD_TWO + ramp(gradient),
+            },
+            _ => 0.0,
+        };
+        if per > 0.0 {
+            self.offscreen_hold(per, b);
+        }
+    }
+
+    /// `level` closes: the surface it was drawn into, the box around what
+    /// was drawn in it grown by its reach (a blur's, a shadow's), as far as
+    /// it can be seen.
+    fn offscreen_closes(&mut self, level: &Level) {
+        let per = self.offscreen.levels.pop().unwrap_or(0.0);
+        if per <= 0.0 {
+            return;
+        }
+        let b = level
+            .content
+            .and_then(|c| meet(grow(c, level.reach), self.visible))
+            .and_then(|b| self.seen_clip(b));
+        self.offscreen_hold(per, b);
     }
 }

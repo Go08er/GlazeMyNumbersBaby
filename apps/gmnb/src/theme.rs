@@ -186,6 +186,9 @@ pub struct Hub {
     front: RefCell<Option<Tell>>,
     /// What was to be told before there was a way to tell it.
     untold: RefCell<Vec<String>>,
+    /// Saves the session (History, Memory, the equations, the window's
+    /// size) now: what the memory backstop does before anything else.
+    save: RefCell<Option<Box<dyn Fn()>>>,
     stats: Cell<Stats>,
     /// The drawing layers' runtime.
     layers: Rc<Layers>,
@@ -340,6 +343,7 @@ impl Hub {
             tell: RefCell::new(None),
             front: RefCell::new(None),
             untold: RefCell::default(),
+            save: RefCell::new(None),
             stats: Cell::default(),
             layers: Layers::new(),
             frame_ctx: RefCell::new(ctx.clone()),
@@ -618,6 +622,12 @@ impl Hub {
         self.tell.replace(Some(Box::new(tell)));
     }
 
+    /// How the session is saved at once (the window's own save, as when it
+    /// closes): for the memory backstop.
+    pub fn set_save(&self, save: impl Fn() + 'static) {
+        self.save.replace(Some(Box::new(save)));
+    }
+
     /// How the user is told while Settings is open (`None` once it has
     /// closed): what [`Hub::set_tell`] says goes there meanwhile.
     pub fn set_front_tell(&self, tell: Option<Tell>) {
@@ -685,8 +695,10 @@ impl Hub {
             }
         }
         // Nothing of the theme that was keeps running; the layers of the
-        // one that is start afresh, and its sounds are made.
+        // one that is start afresh, and its sounds are made. The memory
+        // backstop watches it as it did the first.
         self.told_off.borrow_mut().clear();
+        self.layers.backstop.rearm();
         self.layers.theme_changed();
         self.sounds_changed();
         self.apply(false);
@@ -1265,6 +1277,46 @@ impl Hub {
                 }
             });
         }
+    }
+
+    /// The memory backstop's reading, after a frame that painted a theme's
+    /// layer or the graph ([`crate::memory`]): past it, the session is
+    /// saved, and the theme switched off (the base look; Settings says why,
+    /// and a toast), so that GMNB stays clear of its ceiling, past which an
+    /// allocation fails and it exits.
+    pub fn check_memory(&self) {
+        let Some(used) = self.layers.backstop.check() else {
+            return;
+        };
+        let used = crate::memory::gigabytes(used);
+        eprintln!(
+            "gmnb: memory at {used}, near GMNB's {} ceiling: the session is saved",
+            crate::memory::gigabytes(crate::memory::CEILING)
+        );
+        if let Some(save) = self.save.borrow().as_ref() {
+            save();
+        }
+        // Once the next frame is drawn (the base look's, if a theme is
+        // switched off), what the allocator holds free is given back.
+        self.layers.after_frame(crate::memory::give_back);
+        if self.with_theme(|t| t.is_none()) {
+            return;
+        }
+        let name = self.with_theme(|t| t.map(|t| t.def.meta.name.clone()).unwrap_or_default());
+        self.theme.replace(None);
+        let why = format!(
+            "GMNB's memory reached {used} while this theme was on, near the {} GMNB may use: \
+             the theme was switched off",
+            crate::memory::gigabytes(crate::memory::CEILING)
+        );
+        self.note("memory", why.clone());
+        self.error.replace(Some(why));
+        self.layers.theme_changed();
+        self.sounds_changed();
+        self.tell(&format!(
+            "Theme “{name}” was switched off: GMNB's memory reached {used}"
+        ));
+        self.apply(false);
     }
 
     /// Unloads a theme that hit its memory limit while drawing.

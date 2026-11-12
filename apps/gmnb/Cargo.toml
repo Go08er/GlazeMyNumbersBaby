@@ -26,6 +26,8 @@ gmnb-theme.workspace = true
 gmnb-media.workspace = true
 # Theme sounds: the engine the app holds (docs/theming-media.md).
 gmnb-sound.workspace = true
+# The memory ceiling (`RLIMIT_DATA`) and reading GMNB's own memory.
+libc = "0.2"
 
 [dev-dependencies]
 # A stand-in sound server for the tests: no test reaches a real one.

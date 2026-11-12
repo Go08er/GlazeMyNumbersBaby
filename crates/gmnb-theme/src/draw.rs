@@ -403,6 +403,9 @@ pub struct Recorder {
     /// the most any frame has cost since the theme was loaded.
     cost: f64,
     busiest: f64,
+    /// What the last finished frame has the renderer hold off-screen, in
+    /// bytes ([`crate::cost::OFFSCREEN_BYTES`]).
+    offscreen: f64,
 }
 
 impl Recorder {
@@ -431,6 +434,7 @@ impl Recorder {
             meter: crate::cost::Meter::default(),
             cost: 0.0,
             busiest: 0.0,
+            offscreen: 0.0,
         }
     }
 
@@ -495,6 +499,12 @@ impl Recorder {
         if let Err(share) = self.meter.take(&op) {
             return Err(self.over(what, too_dear(share)));
         }
+        // And what it has the renderer hold off-screen, against what the
+        // window's layers on screen leave the frame.
+        if let Some(limit) = self.meter.offscreen_over() {
+            let held = self.meter.offscreen();
+            return Err(self.over(what, too_much_offscreen(held, limit)));
+        }
         self.ops.push(op);
         Ok(())
     }
@@ -538,6 +548,18 @@ fn too_dear(share: f64) -> String {
         "a frame that would cost {:.0}% of what one may to draw (each call is charged by what \
          it covers and its kind: see \"Drawing per frame\")",
         share * 100.0
+    )
+}
+
+/// The cap on what a frame has the renderer hold off-screen, as the call
+/// that passed it is told (`held` and `limit` in bytes).
+fn too_much_offscreen(held: f64, limit: f64) -> String {
+    format!(
+        "a frame that would have the renderer hold {:.0} MB off-screen, past the {:.0} MB the \
+         window's layers on screen leave it (masks, effects: see \"What the layers hold \
+         off-screen\")",
+        held / 1.0e6,
+        limit / 1.0e6
     )
 }
 
@@ -1062,6 +1084,13 @@ pub struct Begin {
     /// The window, in the layer's coordinates (x, y, w, h), if known:
     /// what a keypad's or a readout's layer can be seen drawing on.
     pub window: Option<[f32; 4]>,
+    /// What the frame may have the renderer hold off-screen, in bytes: what
+    /// the window's other layers on screen leave of
+    /// [`crate::cost::OFFSCREEN_BYTES`].
+    pub offscreen: f64,
+    /// The device pixels to the layer's pixel, each way (the window's
+    /// scale).
+    pub density: f32,
 }
 
 impl Default for Begin {
@@ -1075,6 +1104,8 @@ impl Default for Begin {
             size: [0.0, 0.0],
             whole: true,
             glyph_box: [0.0; 4],
+            offscreen: crate::cost::OFFSCREEN_BYTES,
+            density: 1.0,
             window: None,
         }
     }
@@ -1159,6 +1190,8 @@ impl Api {
             whole,
             glyph_box,
             window,
+            offscreen,
+            density,
         } = *frame;
         let mut rec = self.shared.recorder.borrow_mut();
         rec.time = time;
@@ -1180,6 +1213,9 @@ impl Api {
         rec.glyphs = glyphs;
         rec.notes.clear();
         rec.meter = crate::cost::Meter::new(size, whole, window, glyph_box, 1.0);
+        rec.meter
+            .set_offscreen(offscreen, f64::from(density), size, whole, window);
+        rec.offscreen = 0.0;
     }
 
     /// The hook has returned: what it drew, with whatever it left open
@@ -1199,7 +1235,14 @@ impl Api {
             rec.open.clear();
             return Err(format!("draw: {}", too_dear(share)));
         }
+        if let Some(limit) = rec.meter.offscreen_over() {
+            let held = rec.meter.offscreen();
+            rec.ops.clear();
+            rec.open.clear();
+            return Err(format!("draw: {}", too_much_offscreen(held, limit)));
+        }
         rec.cost = rec.meter.share();
+        rec.offscreen = rec.meter.offscreen();
         rec.busiest = rec.busiest.max(rec.cost);
         let left = rec.open.len();
         self.shared.unbalanced.set(left > 0);
@@ -1256,6 +1299,12 @@ impl Api {
     /// what one of its layer may.
     pub fn busiest_frame(&self) -> f64 {
         self.shared.recorder.borrow().busiest
+    }
+
+    /// What the last finished frame has the renderer hold off-screen, in
+    /// bytes ([`crate::cost::OFFSCREEN_BYTES`]).
+    pub fn frame_offscreen(&self) -> f64 {
+        self.shared.recorder.borrow().offscreen
     }
 
     /// Whether the last finished frame had pushes or saves left open.

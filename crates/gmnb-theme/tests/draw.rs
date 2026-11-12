@@ -1062,6 +1062,170 @@ fn what_a_frame_costs_to_draw_is_capped() {
     assert!(e.contains("what one may to draw"), "{e}");
 }
 
+/// What the window's layers have the renderer hold off-screen is capped,
+/// whatever the window's size (docs/theming.md, "What the layers hold
+/// off-screen"): the points a frame may spend grow with the window, and 64
+/// circles over a window of 3840 × 2160, 0.90 of them, held over 3 GB on GL
+/// (a window-sized mask each). The layers on screen share 768 MiB; a frame is
+/// told what the others leave it, and the window's scale.
+#[test]
+fn what_the_layers_hold_off_screen_is_capped_whatever_the_size() {
+    const LIMIT: f64 = gmnb_theme::cost::OFFSCREEN_BYTES;
+    assert_eq!(LIMIT, 768.0 * 1024.0 * 1024.0);
+    // Round 7's hostile theme: 64 circles as large as the window.
+    let (circles, _d) = background(
+        "offscreen-circles",
+        "",
+        "for _ = 1, 64 do draw:circle(frame.width / 2, frame.height / 2, frame.width, '#336699') end",
+    );
+    let at = |theme: &Theme, w: f32, h: f32, offscreen: f64, density: f32| {
+        let f = Frame {
+            offscreen,
+            density,
+            ..Frame::sized(w, h)
+        };
+        theme
+            .draw(LayerKind::Background, &Ctx::default(), &f)
+            .map(|_| theme.api().frame_offscreen())
+            .map_err(message)
+    };
+    // At 760 × 640 it holds what was measured (some 250 MB), and is drawn.
+    let small = at(&circles, 760.0, 640.0, LIMIT, 1.0).unwrap();
+    assert!((2.0e8..3.0e8).contains(&small), "{small}");
+    // At 3840 × 2160 it is refused, as past any cap, with its note...
+    let e = at(&circles, 3840.0, 2160.0, LIMIT, 1.0).unwrap_err();
+    assert!(e.contains("off-screen") && e.contains("805 MB"), "{e}");
+    // ...though it costs no more than 0.90 of the frame's points there: the
+    // same frame without the limit is drawn, holding 4 GB.
+    let unlimited = at(&circles, 3840.0, 2160.0, f64::INFINITY, 1.0).unwrap();
+    assert!(unlimited > 4.0e9, "{unlimited}");
+    assert!((0.85..0.95).contains(&circles.api().frame_cost()));
+    // A window of 1280 × 720 at a scale of 2 has the device pixels of one
+    // of 2560 × 1440.
+    assert!(at(&circles, 1280.0, 720.0, LIMIT, 1.0).is_ok());
+    assert!(at(&circles, 1280.0, 720.0, LIMIT, 2.0).is_err());
+    // What the window's other layers leave is what a frame may hold: with
+    // 100 MB left, the circles at 760 × 640 are refused too.
+    let e = at(&circles, 760.0, 640.0, 1.0e8, 1.0).unwrap_err();
+    assert!(e.contains("off-screen") && e.contains("100 MB"), "{e}");
+    // The effects hold a surface each, of what is drawn inside them (a
+    // blur's grown by its reach) as far as it can be seen; an opacity of
+    // 1 and a blur of 0 are drawn straight through.
+    let held = |body: &str| {
+        let (theme, _d) = background("offscreen-kinds", "", body);
+        at(&theme, 760.0, 640.0, LIMIT, 1.0).unwrap()
+    };
+    let window = 760.0 * 640.0;
+    let rect = "draw:rect(0, 0, frame.width, frame.height, '#ffffff80')";
+    assert_eq!(held(rect), 0.0);
+    assert_eq!(
+        held(&format!("draw:push_opacity(0.5) {rect} draw:pop()")),
+        7.0 * window
+    );
+    assert_eq!(
+        held(&format!("draw:push_opacity(1) {rect} draw:pop()")),
+        0.0
+    );
+    assert_eq!(held(&format!("draw:push_blur(0) {rect} draw:pop()")), 0.0);
+    assert_eq!(
+        held(&format!("draw:push_blur(10) {rect} draw:pop()")),
+        13.0 * window
+    );
+    assert_eq!(
+        held(&format!(
+            "draw:push_mask() {rect} draw:pop() {rect} draw:pop()"
+        )),
+        14.0 * window
+    );
+    assert_eq!(
+        held(&format!(
+            "draw:push_shadow({{ {{ blur = 4, color = '#000' }}, {{ x = 2, color = '#000' }} }}) {rect} draw:pop()"
+        )),
+        16.0 * window
+    );
+    // A small group holds little; a clip holds nothing of its own.
+    let small_group = held("draw:push_opacity(0.5) draw:rect(10, 10, 76, 64, '#fff') draw:pop()");
+    assert_eq!(small_group, 7.0 * 76.0 * 64.0);
+    assert_eq!(
+        held(&format!(
+            "draw:push_clip(0, 0, 760, 640, 40) {rect} draw:pop()"
+        )),
+        0.0
+    );
+
+    // A frosted-glass background (Round 7's, its six panes: five lights as
+    // large as the window, blurred behind each pane) holds under three
+    // quarters of it at 3840 × 2160 (550 MB), and is drawn at 1920 × 1080
+    // and at 3840 × 2160.
+    let (glass, _d) = background(
+        "offscreen-glass",
+        "local ORBS = { { 0.2, 0.25, 0.34, '#ff6a9c' }, { 0.8, 0.2, 0.30, '#5b8cff' }, \
+         { 0.55, 0.6, 0.38, '#a46bff' }, { 0.15, 0.85, 0.30, '#2fd6c3' }, { 0.9, 0.9, 0.32, '#ffb454' } }
+         local function orbs(draw, w, h)
+             local m = math.max(w, h)
+             for _, o in ORBS do
+                 local cx, cy = o[1] * w, o[2] * h
+                 draw:circle(cx, cy, o[3] * m, gmnb.radial({ center = { cx, cy }, radius = o[3] * m,
+                     colors = { gmnb.alpha(o[4], 0.85), gmnb.alpha(o[4], 0) } }))
+             end
+         end
+         local function pane(draw, x, y, w, h, r, W, H)
+             draw:shadow(x, y + 10, w, h, r, { x = 0, y = 12, blur = 40, spread = -6, color = gmnb.alpha('#000000', 0.45) })
+             draw:push_clip(x, y, w, h, r)
+             draw:push_blur(28)
+             orbs(draw, W, H)
+             draw:pop()
+             draw:rect(x, y, w, h, gmnb.alpha('#ffffff', 0.07))
+             draw:pop()
+             draw:border(x, y, w, h, r, 1, gmnb.alpha('#ffffff', 0.28))
+         end",
+        "local w, h = frame.width, frame.height
+         draw:rect(0, 0, w, h, gmnb.linear({ angle = 160, colors = { '#12172b', '#1b1038' } }))
+         orbs(draw, w, h)
+         pane(draw, 12, 12, w - 24, h * 0.22, 18, w, h)
+         pane(draw, 12, h * 0.3, w - 24, h * 0.68, 18, w, h)
+         for i = 3, 6 do
+             pane(draw, w * (0.1 + 0.1 * i), h * 0.1 * i, w * 0.25, h * 0.2, 14, w, h)
+         end",
+    );
+    let hd = at(&glass, 1920.0, 1080.0, LIMIT, 1.0).unwrap();
+    let uhd = at(&glass, 3840.0, 2160.0, LIMIT, 1.0).unwrap();
+    assert!(hd < uhd && uhd < 0.75 * LIMIT, "{hd} {uhd}");
+
+    // A preview tile is no layer of the window's, and has 512 KiB of its
+    // own: tile-sized circles, as many as a tile's points buy, are refused;
+    // a blur and a mask over it all are drawn.
+    let tile = |body: &str| {
+        let (theme, _d) = load(
+            "offscreen-tile",
+            &format!(
+                "return {{ api = 1, name = 'T', options = {{
+                    {{ id = 'p', type = 'choice', choices = {{ {{ id = 'a' }} }},
+                      preview = function(draw, frame, choice)
+                          local w, h = frame.width, frame.height
+                          {body}
+                      end }} }} }}"
+            ),
+        );
+        let result = theme.preview(&theme.def.options[0], "a", &Ctx::default());
+        result
+            .map(|_| theme.api().frame_offscreen())
+            .map_err(|e| e.to_string())
+    };
+    assert_eq!(gmnb_theme::cost::PREVIEW_OFFSCREEN_BYTES, 512.0 * 1024.0);
+    let e = tile("for i = 1, 4000 do draw:circle(w / 2, h / 2, w, '#336699') end").unwrap_err();
+    assert!(
+        e.contains("off-screen") && e.contains("past the 1 MB"),
+        "{e}"
+    );
+    let glassy = tile(
+        "draw:push_blur(8) draw:circle(w / 2, h / 2, w, '#336699') draw:pop() \
+         draw:push_mask() draw:rect(0, 0, w, h, '#fff') draw:pop() draw:rect(0, 0, w, h, '#f00') draw:pop()",
+    )
+    .unwrap();
+    assert!(glassy > 0.0 && glassy < 0.5 * 512.0 * 1024.0, "{glassy}");
+}
+
 /// A path that crosses itself is charged by its crossings (R5-D-2): the
 /// toolkit's tessellator spends time on each, and a polygon of 8000 corners
 /// that all cross is 16 million of them, 12 s of the software renderer to

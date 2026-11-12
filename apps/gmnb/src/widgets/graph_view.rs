@@ -155,6 +155,11 @@ mod imp {
 
         fn snapshot(&self, s: &gtk::Snapshot) {
             self.obj().draw(s);
+            // What the graph's plots hold meets the memory backstop as a
+            // theme's layers do (crate::memory): after a frame that drew it.
+            if let Some(hub) = crate::theme::Hub::current() {
+                hub.layers().painted();
+            }
         }
     }
 }

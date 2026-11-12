@@ -1245,6 +1245,7 @@ dependencies = [
  "graphing",
  "gtk4",
  "libadwaita",
+ "libc",
  "pango",
  "pangocairo",
  "serde",

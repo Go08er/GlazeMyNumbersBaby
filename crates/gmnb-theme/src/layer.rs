@@ -168,6 +168,13 @@ pub struct Frame<'a> {
     /// The window, in the layer's coordinates (x, y, w, h), if known:
     /// what drawing it costs is counted where it can be seen.
     pub window: Option<Rect>,
+    /// What the frame may have the renderer hold off-screen, in bytes: what
+    /// the window's other layers on screen leave of
+    /// [`crate::cost::OFFSCREEN_BYTES`].
+    pub offscreen: f64,
+    /// The device pixels to the layer's pixel, each way (the window's
+    /// scale).
+    pub density: f32,
 }
 
 impl Frame<'_> {
@@ -186,6 +193,8 @@ impl Frame<'_> {
             keys: None,
             value: None,
             window: None,
+            offscreen: crate::cost::OFFSCREEN_BYTES,
+            density: 1.0,
         }
     }
 }
@@ -219,6 +228,9 @@ pub struct Drawn {
     /// picture's): the layer is drawn once more then, under reduced
     /// motion too. What stands on screen is then never out of date.
     pub retry: Option<f64>,
+    /// What the frame has the renderer hold off-screen, in bytes
+    /// ([`crate::cost::OFFSCREEN_BYTES`]).
+    pub offscreen: f64,
 }
 
 /// Why a layer drew nothing.

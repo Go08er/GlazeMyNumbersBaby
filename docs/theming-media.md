@@ -777,6 +777,7 @@ These rows join [the contract's table](theming.md#limits-and-what-happens-when-a
 | A `sounds` entry's list | 8 sounds |
 | A play: `volume`; `rate`; `pan`; `delay` | 0 to 1; 0.5 to 2; −1 to 1; 0 to 1 s |
 | Time: one `sound` call | 2 ms |
+| What the window's layers hold off-screen; the memory of the whole of GMNB | 768 MiB, whatever the window's size (a picture drawn through a mask or an effect counts there; its own pixels are the rows above); 4 GiB, past 3.5 GiB the theme switched off ([theming.md](theming.md#the-memory-of-the-whole-of-gmnb)) |
 
 **A picture is never decoded inside one of the theme's calls.** A still
 is decoded when it is first drawn, after the hook that drew it has

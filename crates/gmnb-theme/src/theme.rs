@@ -1417,6 +1417,8 @@ impl Theme {
             whole: matches!(kind, LayerKind::Background | LayerKind::Overlay),
             glyph_box,
             window: frame.window,
+            offscreen: frame.offscreen,
+            density: frame.density,
         });
         let result = self
             .engine
@@ -1440,6 +1442,7 @@ impl Theme {
         // itself; what `draw` returned stays what `draw` returned.
         drawn.due = self.api.take_due();
         drawn.retry = self.api.take_retry();
+        drawn.offscreen = self.api.frame_offscreen();
         Ok(drawn)
     }
 
@@ -1463,11 +1466,14 @@ impl Theme {
         let (w, h) = layer::PREVIEW_SIZE;
         layer::preview_table(&self.engine, &self.preview, w, h, self.ctx.table())?;
         // A tile is a still picture: animations show their first frame.
+        // A tile is no layer of the window's: it has a small allowance of
+        // its own to hold off-screen (Settings may show many).
         self.api.begin(&draw::Begin {
             still: true,
             layer: u64::MAX,
             size: [w, h],
             whole: true,
+            offscreen: crate::cost::PREVIEW_OFFSCREEN_BYTES,
             ..draw::Begin::default()
         });
         let result = self.engine.call(

@@ -100,6 +100,12 @@ impl Profile {
         self.path("opened.txt")
     }
 
+    /// The test's app for folders' own limits (`/proc/self/limits`), as it
+    /// was started with them.
+    fn its_limits(&self) -> PathBuf {
+        self.path("limits.txt")
+    }
+
     /// Installs the test's app for folders, and names it the default for
     /// folders in the profile's `mimeapps.list`.
     fn with_folder_app(self) -> Profile {
@@ -107,7 +113,8 @@ impl Profile {
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\n",
+                "#!/bin/sh\ncat /proc/self/limits > '{}'\nprintf '%s\\n' \"$@\" >> '{}'\n",
+                self.its_limits().display(),
                 self.opened().display()
             ),
         )
@@ -751,6 +758,27 @@ fn the_folder_button_opens_the_folder_in_the_app_for_folders() {
         "the portal was asked: {portal_asked:?}"
     );
     assert!(!err.contains("Couldn't open the themes folder"), "{err}");
+    // The app was started with the limits GMNB was started with, not
+    // GMNB's memory ceiling (4 GiB of `RLIMIT_DATA`), which is GMNB's own.
+    let data = |limits: &str| {
+        limits
+            .lines()
+            .find(|l| l.starts_with("Max data size"))
+            .map(|l| {
+                l.split_whitespace()
+                    .skip(3)
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+    };
+    let ours = std::fs::read_to_string("/proc/self/limits").unwrap();
+    let its = std::fs::read_to_string(profile.its_limits()).unwrap_or_default();
+    assert_eq!(
+        data(&its),
+        data(&ours),
+        "the app for folders' limits: {its}"
+    );
 }
 
 /// With no app for folders (none named, none there at all), *Open themes

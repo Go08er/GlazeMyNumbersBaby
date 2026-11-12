@@ -1037,6 +1037,16 @@ impl Window {
                 glib::Propagation::Proceed
             });
         }
+        {
+            // The memory backstop saves the session as closing does, before
+            // GMNB could reach its ceiling (crate::memory).
+            let weak = Rc::downgrade(&this);
+            this.ctx.hub.set_save(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.persist(&w.win);
+                }
+            });
+        }
 
         let start = std::env::var("GMNB_MODE")
             .ok()

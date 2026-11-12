@@ -26,6 +26,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
+use gmnb_theme::cost::OFFSCREEN_BYTES;
 use gmnb_theme::draw::{DisplayList, Op};
 pub use gmnb_theme::events::{Action, Source};
 use gmnb_theme::events::{Cause, Event, EventKind, KeyKind, Page, Ring, Via};
@@ -56,6 +57,9 @@ pub struct Picture {
     pub places: Rc<Vec<Option<Placement>>>,
     /// What `draw` returned when it drew this: `None` for nil.
     pub again: Option<f64>,
+    /// What it has the renderer hold off-screen, in bytes: the share of
+    /// [`OFFSCREEN_BYTES`] it takes while it is on screen.
+    pub offscreen: f64,
 }
 
 /// What the layers have cost, for the gates (`GMNB_THEME_STATS`).
@@ -187,6 +191,9 @@ pub struct Layers {
     /// The last press: when, what a result after it is due to, and how it
     /// was made.
     last_press: Cell<Option<(f64, Cause, Option<Via>)>>,
+    /// The memory ceiling's backstop: what the frames that paint a theme's
+    /// layer (or the graph) have read of GMNB's memory.
+    pub backstop: crate::memory::Backstop,
 }
 
 /// The page a widget is on: the name its page has in the window's stack
@@ -228,7 +235,42 @@ impl Layers {
             pointer_pressed: Cell::new(f64::NEG_INFINITY),
             key_activated: Cell::new(f64::NEG_INFINITY),
             last_press: Cell::new(None),
+            backstop: crate::memory::Backstop::default(),
         })
+    }
+
+    /// What the pictures of the layers on screen, but `except`'s, have the
+    /// renderer hold off-screen: what is left of [`OFFSCREEN_BYTES`] is
+    /// what `except`'s may.
+    fn offscreen_left(&self, except: &Instance) -> f64 {
+        let others: f64 = self
+            .live()
+            .iter()
+            .filter(|i| !std::ptr::eq(Rc::as_ptr(i), except))
+            .filter(|i| i.widget.upgrade().is_some_and(|w| w.is_mapped()))
+            .filter_map(|i| {
+                let st = i.state.try_borrow().ok()?;
+                // (A picture of a theme since unloaded counts for nothing.)
+                (st.generation == self.generation.get())
+                    .then(|| st.picture.as_ref().map(|p| p.offscreen))
+                    .flatten()
+            })
+            .sum();
+        (OFFSCREEN_BYTES - others).max(0.0)
+    }
+
+    /// A frame painted something the memory backstop watches (a theme's
+    /// layer, the graph): now and then, once the frame is done, GMNB's
+    /// memory is read, and past the backstop the session is saved and the
+    /// theme switched off ([`crate::memory`]). Nothing is read at rest.
+    pub fn painted(&self) {
+        if self.backstop.painted(now()) {
+            self.after_frame(|| {
+                if let Some(hub) = Hub::current() {
+                    hub.check_memory();
+                }
+            });
+        }
     }
 
     pub fn set_hub(&self, hub: &Rc<Hub>) {
@@ -923,7 +965,13 @@ impl Instance {
         }
         let mut st = self.state.borrow_mut();
         if !st.dirty && st.size == size {
-            return st.picture.clone();
+            // A picture that holds more off-screen than the other layers
+            // on screen now leave it (it was drawn while they held less: a
+            // page shown again) is drawn again, within what is left.
+            let held = st.picture.as_ref().map_or(0.0, |p| p.offscreen);
+            if held == 0.0 || held <= layers.offscreen_left(self) {
+                return st.picture.clone();
+            }
         }
         // The time of the frame being painted, when there is one.
         let now = self
@@ -946,6 +994,15 @@ impl Instance {
             let b = root.upcast_ref::<gtk::Widget>().compute_bounds(&w)?;
             Some([b.x(), b.y(), b.width(), b.height()])
         });
+        // What it may have the renderer hold off-screen, in the window's
+        // device pixels.
+        let offscreen = layers.offscreen_left(self);
+        let density = self
+            .widget
+            .upgrade()
+            .and_then(|w| w.native())
+            .and_then(|n| n.surface())
+            .map_or(1.0, |surface| surface.scale() as f32);
         let drawn = {
             let State {
                 ring,
@@ -971,6 +1028,8 @@ impl Instance {
                 keys: extra.keys,
                 value: extra.value,
                 window,
+                offscreen,
+                density,
             };
             hub.draw_layer(self.kind, &frame)
         };
@@ -983,12 +1042,14 @@ impl Instance {
                 places,
                 due,
                 retry,
+                offscreen,
             }) => {
                 layers.count(|s| s.frames[slot(self.kind)] += 1);
                 st.picture = Some(Picture {
                     list: Rc::new(list),
                     places: Rc::new(places),
                     again,
+                    offscreen,
                 });
                 // The layer is drawn again when `draw` asked, or when
                 // something it drew is due to change by itself (an
@@ -1088,6 +1149,7 @@ pub fn paint(
         s.replays += 1;
         s.replay_ms += ms;
     });
+    hub.layers().painted();
 }
 
 /// A frame of an animation has arrived from the media thread, which

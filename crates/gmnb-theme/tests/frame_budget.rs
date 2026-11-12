@@ -256,6 +256,8 @@ fn sweep(id: &str) {
     let mut bad: Vec<String> = Vec::new();
     let mut worst: BTreeMap<&str, Worst> = BTreeMap::new();
     let mut by_window: BTreeMap<(u32, u32), f64> = BTreeMap::new();
+    // The most each layer has the renderer hold off-screen (bytes).
+    let mut held: BTreeMap<&str, f64> = BTreeMap::new();
     let mut frames = 0usize;
     let clock = std::rc::Rc::new(std::cell::Cell::new(100.0f64));
     let read = clock.clone();
@@ -383,15 +385,15 @@ fn sweep(id: &str) {
                                     match theme.draw(kind, &ctx, &frame) {
                                         Ok(d) => {
                                             let cost = theme.api().frame_cost();
-                                            worst
-                                                .entry(match kind {
-                                                    LayerKind::Background => "background",
-                                                    LayerKind::Keypad => "keypad",
-                                                    LayerKind::Display => "display",
-                                                    LayerKind::Overlay => "overlay",
-                                                })
-                                                .or_default()
-                                                .see(cost, name);
+                                            let layer = match kind {
+                                                LayerKind::Background => "background",
+                                                LayerKind::Keypad => "keypad",
+                                                LayerKind::Display => "display",
+                                                LayerKind::Overlay => "overlay",
+                                            };
+                                            let most = held.entry(layer).or_default();
+                                            *most = most.max(theme.api().frame_offscreen());
+                                            worst.entry(layer).or_default().see(cost, name);
                                             let e =
                                                 by_window.entry((w as u32, h as u32)).or_default();
                                             *e = e.max(cost);
@@ -491,6 +493,18 @@ fn sweep(id: &str) {
         "  busiest_frame {:.2}%",
         theme.api().busiest_frame() * 100.0
     );
+    // Every layer at its dearest at once, up to 3840 x 2160, holds under a
+    // third of what the window's layers may hold off-screen together.
+    let all: f64 = held.values().sum();
+    println!(
+        "  off-screen: {:.0} MB with every layer at its most ({:.1}% of {:.0} MB; {held:?})",
+        all / 1.0e6,
+        all / gmnb_theme::cost::OFFSCREEN_BYTES * 100.0,
+        gmnb_theme::cost::OFFSCREEN_BYTES / 1.0e6
+    );
+    if all > gmnb_theme::cost::OFFSCREEN_BYTES / 3.0 {
+        bad.push(format!("{id}: holds {all} bytes off-screen"));
+    }
     assert!(bad.is_empty(), "{id}:\n{}", bad.join("\n"));
 }
 
