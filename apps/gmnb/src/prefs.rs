@@ -671,6 +671,11 @@ impl ThemeSettings {
                     t.ctx.store.data.borrow_mut().active_theme = id.clone();
                     t.ctx.store.persist();
                     t.rebuild_options();
+                    // The chosen theme's folder is watched wherever it
+                    // falls, from now, not at the folder's next change.
+                    if let Some(watch) = t.watch.borrow().as_ref() {
+                        watch.sync();
+                    }
                 }
             });
             self.list.append(&row);
