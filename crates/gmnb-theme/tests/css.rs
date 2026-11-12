@@ -2422,27 +2422,21 @@ fn a_ring_that_hides_on_the_narrow_windows_sheet_is_the_base_looks() {
         gmnb_theme::library::register(lua, gmnb_theme::library::without_drawing)
     })
     .unwrap();
-    for surface in ["panel.sheet"] {
-        let value = match surface.split_once('.') {
-            Some((a, b)) => format!("{a} = {{ {b} = {{ background = '#000000' }} }}"),
-            None => format!("{surface} = {{ background = '#000000' }}"),
-        };
-        let src = format!(
-            "return {{ focus = {{ color = '#000000', width = 2, offset = 2 }}, \
-             window = {{ background = '#ffffff' }}, {value} }}"
-        );
-        let resolved = resolve(&ctx, &engine.load("=style", &src).unwrap());
-        let noted = resolved
-            .notes
-            .list
-            .iter()
-            .any(|n| n.message.contains("would hide the keyboard's focus"));
-        assert!(noted, "{surface}: no note: {:?}", resolved.notes.list);
-        let get = |p: &str| resolved.style.get(p).cloned();
-        let behind = focus::backdrop(get, resolved.style.tokens.colors.bg, None);
-        let ring = focus::ring_at(get, "focus").unwrap();
-        let grounds = focus::grounds(get, &resolved.style.tokens, "focus", &behind);
-        let got = focus::worst(&ring, &grounds.surfaces, false);
-        assert!(got >= LEAST_CONTRAST, "{surface}: {got:.2}");
-    }
+    let surface = "panel.sheet";
+    let src = "return { focus = { color = '#000000', width = 2, offset = 2 }, \
+               window = { background = '#ffffff' }, \
+               panel = { sheet = { background = '#000000' } } }";
+    let resolved = resolve(&ctx, &engine.load("=style", src).unwrap());
+    let noted = resolved
+        .notes
+        .list
+        .iter()
+        .any(|n| n.message.contains("would hide the keyboard's focus"));
+    assert!(noted, "{surface}: no note: {:?}", resolved.notes.list);
+    let get = |p: &str| resolved.style.get(p).cloned();
+    let behind = focus::backdrop(get, resolved.style.tokens.colors.bg, None);
+    let ring = focus::ring_at(get, "focus").unwrap();
+    let grounds = focus::grounds(get, &resolved.style.tokens, "focus", &behind);
+    let got = focus::worst(&ring, &grounds.surfaces, false);
+    assert!(got >= LEAST_CONTRAST, "{surface}: {got:.2}");
 }
