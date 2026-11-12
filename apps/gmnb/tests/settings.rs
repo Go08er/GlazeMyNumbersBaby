@@ -58,6 +58,20 @@ impl Drop for Profile {
 /// Runs GMNB with `theme` (`GMNB_THEME_DIR`) and `env` for `ms`
 /// milliseconds, then stops it: what it wrote to stderr.
 fn run(display: &Path, theme: &str, env: &[(&str, &str)], ms: u64) -> String {
+    run_until(display, theme, env, ms, None)
+}
+
+/// [`run`], stopped as soon as stderr has a line with `until` in it (and
+/// a moment more for what follows it), else at `ms`: the tests that read
+/// where `GMNB_FOCUS` put the focus waited a fixed 3.5 s, which a loaded
+/// machine sometimes needed more than.
+fn run_until(
+    display: &Path,
+    theme: &str,
+    env: &[(&str, &str)],
+    ms: u64,
+    until: Option<&str>,
+) -> String {
     let profile = Profile::new("run", theme);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_gmnb"));
     for (name, _) in std::env::vars_os() {
@@ -95,14 +109,29 @@ fn run(display: &Path, theme: &str, env: &[(&str, &str)], ms: u64) -> String {
         .stderr(Stdio::piped())
         .spawn()
         .expect("GMNB started");
-    let mut err = child.stderr.take().unwrap();
-    let reader = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = std::io::Read::read_to_string(&mut err, &mut s);
-        s
-    });
+    let err = child.stderr.take().unwrap();
+    let seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader = {
+        let (seen, until) = (seen.clone(), until.map(str::to_string));
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            for line in std::io::BufRead::lines(std::io::BufReader::new(err)) {
+                let Ok(line) = line else { break };
+                if until.as_deref().is_some_and(|u| line.contains(u)) {
+                    seen.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                s.push_str(&line);
+                s.push('\n');
+            }
+            s
+        })
+    };
     let deadline = Instant::now() + Duration::from_millis(ms);
     while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
+        if seen.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(300));
+            break;
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
     let _ = child.kill();
@@ -604,7 +633,7 @@ fn the_light_or_dark_row_says_only_its_title_in_the_least_window() {
             ("GMNB_SIZE", "300x700"),
             ("GMNB_FOCUS", "wc-light-dark"),
         ];
-        let err = run(&display, THEME, &env, 3_500);
+        let err = run_until(&display, THEME, &env, 20_000, Some("GMNB_FOCUS:"));
         let height = err
             .lines()
             .find_map(|l| l.strip_prefix("GMNB_FOCUS: wc-light-dark at "))
@@ -638,7 +667,7 @@ fn a_sliders_row_leaves_its_text_room_in_the_least_window() {
             ("GMNB_SIZE", "300x700"),
             ("GMNB_FOCUS", "wc-sound-volume"),
         ];
-        let err = run(&display, THEME, &env, 3_500);
+        let err = run_until(&display, THEME, &env, 20_000, Some("GMNB_FOCUS:"));
         let height = err
             .lines()
             .find_map(|l| l.strip_prefix("GMNB_FOCUS: wc-sound-volume at "))
@@ -670,7 +699,7 @@ fn a_themes_slider_leaves_its_text_room_in_the_least_window() {
             ("GMNB_SIZE", size),
             ("GMNB_FOCUS", "wc-option-slider"),
         ];
-        let err = run(&display, THEME, &env, 3_500);
+        let err = run_until(&display, THEME, &env, 20_000, Some("GMNB_FOCUS:"));
         err.lines()
             .find_map(|l| l.strip_prefix("GMNB_FOCUS: wc-option-slider at "))
             .and_then(|rest| rest.split_whitespace().nth(2)?.parse::<f32>().ok())
@@ -691,12 +720,14 @@ fn fits(display: &Path, size: &str) {
     const THEME: &str = r#"return { api = 1, name = "Plain" }"#;
     let mut bad = Vec::new();
     for theme in ["base", "aurora", "sprinkles", "swirls"] {
+        // (The focus hook says when Settings is laid out.)
         let env = [
             ("GMNB_THEME", theme),
             ("GMNB_PREFS", "1"),
             ("GMNB_SIZE", size),
+            ("GMNB_FOCUS", "wc-light-dark"),
         ];
-        let err = run(display, THEME, &env, 3_500);
+        let err = run_until(display, THEME, &env, 20_000, Some("GMNB_FOCUS:"));
         if let Some(line) = err.lines().find(|l| l.contains("exceeds")) {
             bad.push(format!("{theme}: {line}"));
         }

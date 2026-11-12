@@ -1720,11 +1720,16 @@ layers, whatever is in them); what is drawn inside is charged as well. A
 picture drawn at all is also charged its own pixels, however small it is
 drawn (a tiled one too: the toolkit makes a picture of the whole of what it
 repeats, 190 ms for 50 tiles of 10 × 10 px of a 2048 × 2048 still). A
-`draw:shadow` is also charged for its blur, however little it covers (200 of
-4 × 4 px blurred by 100 took 1.7 s; 20 inset ones over the window, 2.5 s), and, blurred by 3 or more, for its corners (0.0007 points a square pixel
-of the larger corner's radius, at most half the box's shorter side: ten inset
-shadows over the window with corners of 300 took 47 ms, with corners of 20,
-2). A rounded rectangle is charged for its corners too (0.02 points a pixel
+`draw:shadow` is also charged by its blur, its box and its corners,
+whatever it covers, as the toolkit spends it: an inset one by its blur
+(7 ms at 100, 0.9 at 30, 0.2 at 10, less in a box much smaller than the
+blur) and by the square of its corners' radius (14 ms at 366); an outset one
+whose box the blur and the corners leave room (a radius and one and a half
+blurs under half its shorter side) by its corners, 0.1 to 0.8 ms whatever its
+size; an outset one that they swallow (a key's, a small box, a round one),
+as it does an inset one and for the box it blurs whole (200 of 4 × 4 px
+blurred by 100 took 1.2 s; a key's blur of 30, 1.1 ms; 36 of them are 40%
+of a frame). A rounded rectangle is charged for its corners too (0.02 points a pixel
 of its radius, at most half its shorter side: 400 gradient ones of 200 × 200
 with corners of 100 took 67 ms). A
 clip with rounded corners, or turned, adds a quarter of the cost of what is
@@ -1792,7 +1797,10 @@ itself, takes seconds a frame at the cap for blurs and shadows.)
 | A path filled or stroked, a circle (a mask on GL): in a colour; with a gradient | 12.7 + the paint's; 24 + the paint's | 71; 38 (linear) |
 | A picture scaled into its rectangle (a still, a frame of an animation, a field); tiled | 8.2; 5.5 (and 7 for each 760 × 640 of a tiled picture's own pixels) | 120; 180 |
 | A picture's own pixels, per 760 × 640 of them: smooth and clean (`"trilinear"`); smooth or hard | 43; 16 | a 2048 × 2048 still: 2; 6 |
-| A border; `draw:shadow`; a clip with rounded corners | 1.3; 4.3 (and 0.3 × blur^1.45 for each, not by area: 8 at 10, 40 at 30, 240 at 100; blurred by 3 or more, 0.0007 × the radius squared, 63 at 300); 0.9 (and each rounded or turned clip open adds a quarter to what is drawn inside) | |
+| A border; a clip with rounded corners | 1.3; 0.9 (and each rounded or turned clip open adds a quarter to what is drawn inside) | |
+| `draw:shadow`: over the box and its reach | 4.3 | |
+| And for each one seen at all, not by area, by its blur, from `box_shadow` in `cost.rs` (blurred by 3 or more; 0.3 below it): inset, or outset with the blur and corners swallowing the box | 0.15; 0.5 + 0.035 × blur^1.75 (inset in a box smaller than twice the blur: down to 0.15 of it); 0.001 × the radius squared; outset also 0.00013 a pixel of its box | 400 at 10; 70 at 30; 9 at 100 |
+| And an outset shadow with room for its corners | 1 + 0.022 × the radius + 0.07 × the blur | 300 at 30; 130 at 100 |
 | Text and glyphs (their box: the font's size by the text's bytes, three sizes tall; a glyph, the readout's whole value); with a gradient | 7; 23 + the paint's | |
 | A font past the frame's first 8 (`draw:text`, `draw:text_size`; not by area) | 45 each | 21 more |
 | A character a font has not had yet in the frame, at each scale and turn; a script with a font of its own, in a font (not by area) | 0.35; 20 | |

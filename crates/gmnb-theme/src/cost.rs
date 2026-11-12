@@ -121,34 +121,86 @@ const STRAIN_FILL: f64 = 0.00035;
 const BORDER: f64 = 1.3;
 /// `draw:shadow`, over the whole layer.
 const BOX_SHADOW: f64 = 4.3;
-/// And for each one seen at all, by its blur in the layer's pixels, however
-/// little it covers: the software renderer blurs a surface of its box
-/// grown by the blur, once for each shadow, and that takes more than the
-/// area it covers says (200 shadows of 4 × 4 px, blurred by 100: 1.7 s;
-/// inset ones over the window, 12 ms each, 25 when fully rounded, for the
-/// 0.43 the area charged). Measured over boxes of 4 to 760 px, outset and
-/// inset, the dearest: 0.3 ms for a blur of 10, 3.5 for 30, 20 to 25 for
-/// 100 (10 points a millisecond).
-fn box_shadow_blur(blur: f64) -> f64 {
-    if blur > 0.0 {
-        0.3 * blur.powf(1.45)
+/// And for each one seen at all, whatever it covers (8 to 22 us measured
+/// for a shadow of no blur, 4 x 4 to 50 x 50 px).
+const SHADOW_CALL: f64 = 0.15;
+/// What the software renderer spends on a blurred box shadow (`probe`, in
+/// `apps/gmnb/src/layers/costprobe.rs`; 100 us a point), by the shadow's
+/// blur, its box and its corners, in the layer's pixels. It makes a surface
+/// of the shadow and blurs it, and how much of it depends on which of three
+/// ways it goes about it:
+///
+/// - an inset shadow, always: it costs by its blur alone, 0.1 ms at 3, 0.2
+///   at 10, 0.9 at 30, 2.3 at 50, 7 at 100 in a box of 200 px or more (a
+///   fraction of that in a box much smaller than the blur: 4 x 4 px blurred
+///   by 100, 0.9 ms), and by the square of its corners' radius ([`CORNERS`]);
+/// - an outset one whose box is more than its corners and its blur (a
+///   radius and one and a half blurs less than half its shorter side): it
+///   draws the four corners and stretches the sides, 0.1 to 0.8 ms
+///   whatever its size (a panel of 740 x 600 px at a blur of 30, 0.1);
+/// - an outset one of a box the blur or the corners swallow (a key's, a
+///   pill, a small box, a round one): it blurs the whole of it, as it does
+///   an inset one, and the more for what it covers (2 ms for 50 x 50 px at a
+///   blur of 30, 5.8 for 4 x 4 at 100, 12 for 200 x 200 at 100, 18 for
+///   740 x 740 at 100).
+///
+/// A blur of 3 or more px: below it the toolkit skips the blur.
+fn blur_cost(blur: f64) -> f64 {
+    if blur >= 2.5 {
+        0.5 + 0.035 * blur.powf(1.75)
+    } else if blur > 0.0 {
+        0.3
     } else {
         0.0
     }
 }
-/// And for the corners of a box shadow that is blurred at all (by 3 px or
-/// more: less, the toolkit skips the blur): the toolkit blurs the whole of a
-/// shadow whose corners are large, not their corners alone, and what that
-/// takes goes as the square of the corners' radius (the largest, at most
-/// half the box's shorter side, in the layer's pixels). Measured over a box
-/// of 740 × 620 px, inset and outset, blurred by 3 to 30: 0.2 ms for a
-/// radius of 20, 0.9 for 100, 2.3 for 200, 5.4 for 300.
-fn box_shadow_corners(radius: f64, blur: f64) -> f64 {
-    if blur >= 2.5 {
-        0.0007 * radius * radius
+
+/// An inset shadow's blur costs less in a box much smaller than it: by the
+/// box's shorter side over twice the blur, in the layer's pixels (30 x 30
+/// px at a blur of 50: 0.1 of it; 100 x 100: 0.5; 200 x 200 and more: all).
+fn inset_share(side: f64, blur: f64) -> f64 {
+    let x = side / (2.0 * blur.max(1.0));
+    if x >= 1.0 {
+        1.0
+    } else if x <= 0.5 {
+        0.15
     } else {
-        0.0
+        0.15 + 0.85 * (x - 0.5) / 0.5
     }
+}
+
+/// The corners of a shadow blurred as a whole: the toolkit blurs the whole
+/// of a shadow whose corners are large, and what that takes goes as the
+/// square of their radius (the largest, at most half the box's shorter
+/// side). Measured over boxes of 740 x 740 px, inset: 0.7 ms for a radius
+/// of 20, 2.2 for 100, 4.3 for 185, 6.5 for 259, 10.8 for 333, 14 for 366.
+const CORNERS: f64 = 0.001;
+/// An outset shadow blurred as a whole, for each pixel of its box (740 x 740
+/// at a blur of 100: 7 ms more than the blur alone).
+const WHOLE: f64 = 0.00013;
+/// Points for an outset shadow that the toolkit draws by its corners:
+/// 0.1 ms, 0.2 for a radius of 50 and a blur of 100.
+const SLICED: f64 = 1.0;
+const SLICED_RADIUS: f64 = 0.022;
+const SLICED_BLUR: f64 = 0.07;
+
+/// The points for one box shadow: its blur and its corners, over a box of
+/// `w` x `h` px, corners of `radius` (cut to what the box leaves them),
+/// all in the layer's pixels.
+fn box_shadow(inset: bool, blur: f64, radius: f64, w: f64, h: f64, spread: f64) -> f64 {
+    let side = w.min(h);
+    let radius = radius.min(side / 2.0);
+    if blur < 2.5 {
+        return blur_cost(blur);
+    }
+    if inset {
+        return blur_cost(blur) * inset_share(side, blur) + CORNERS * radius * radius;
+    }
+    let half = side / 2.0 + spread.max(0.0);
+    if radius + 1.5 * blur < 0.95 * half {
+        return SLICED + SLICED_RADIUS * radius + SLICED_BLUR * blur;
+    }
+    blur_cost(blur) + CORNERS * radius * radius + WHOLE * w * h
 }
 /// And for each rounded rectangle, by its largest corner radius (at most
 /// half its shorter side, in the layer's pixels) however little of the
@@ -676,7 +728,7 @@ impl Meter {
                 // is seen at all.
                 if self.seen(b).is_some() {
                     // The toolkit blurs by the shadow's own blur whatever
-                    // the scale shrinks it to (a shadow of 7400 × 6200 px
+                    // the scale shrinks it to (a shadow of 7400 x 6200 px
                     // blurred by 20 at a scale of 0.1: 5.8 ms, as one over
                     // the window with corners of 300), so a scale that
                     // shrinks is none; its corners are as large as it makes
@@ -684,9 +736,10 @@ impl Meter {
                     let by = self.m.magnitude();
                     let blur = f64::from(s.blur) * by.max(1.0);
                     let [x0, y0, x1, y1] = rect_box(rect);
-                    let half = (x1 - x0).abs().min((y1 - y0).abs()) / 2.0;
-                    let corner = f64::from(radius.uniform()).min(half) * by;
-                    self.spent += box_shadow_blur(blur) + box_shadow_corners(corner, blur);
+                    let (w, h) = ((x1 - x0).abs() * by, (y1 - y0).abs() * by);
+                    let corner = f64::from(radius.uniform()) * by;
+                    self.spent += SHADOW_CALL
+                        + box_shadow(s.inset, blur, corner, w, h, f64::from(s.spread) * by);
                 }
                 (BOX_SHADOW, Some(b))
             }
