@@ -1157,6 +1157,42 @@ fn a_path_that_crosses_itself_is_charged_by_its_crossings() {
     }
 }
 
+/// R6-A-1: a circle or a rounded rectangle far from the origin is made of
+/// curves, and counted as one segment: 16 384 of them were 200 000 lines,
+/// and the path's crossings were counted over the first 70 000 and no
+/// further, so a star of 10 000 corners after 5400 far circles (the
+/// software renderer: some 20 s to stroke it) was charged nothing for its
+/// crossings.
+#[test]
+fn far_shapes_count_as_the_curves_they_are_made_of() {
+    let window = Frame::sized(760.0, 640.0);
+    let body = |far: u32, shape: &str| {
+        format!(
+            "local p = gmnb.path() \
+             for i = 0, {far} do p:{shape} end \
+             local n = 10000 local k = n // 2 - 1 \
+             for i = 0, n - 1 do local a = (i * k % n) / n * 2 * math.pi \
+                 local x, y = 300 + 280 * math.cos(a), 300 + 280 * math.sin(a) \
+                 if i == 0 then p:move_to(x, y) else p:line_to(x, y) end end \
+             p:close() draw:stroke(p, 1, '#ff000080')"
+        )
+    };
+    for shape in [
+        "circle(2e5 + i * 1000, 2e5, 10)",
+        "rounded_rect(2e5 + i * 1000, 2e5, 10, 10, 2)",
+    ] {
+        let (theme, _d) = background("far", "", &body(5900, shape));
+        let e = match theme.draw(LayerKind::Background, &Ctx::default(), &window) {
+            Ok(_) => panic!("{shape}: drawn, at {}", theme.api().frame_cost()),
+            Err(e) => message(e),
+        };
+        assert!(
+            e.contains("path segments") || e.contains("what one may to draw"),
+            "{shape}: {e}"
+        );
+    }
+}
+
 /// A dashed stroke is charged by its dashes (R5-D-1): the toolkit's stroker
 /// makes a shape of each, and a zigzag of 2000 lines dashed 0.5 on, 0.5 off
 /// was 14 million of them, a minute of the main thread (the software
