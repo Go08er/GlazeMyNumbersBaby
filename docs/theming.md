@@ -1311,7 +1311,9 @@ precision, to half a unit). Measured on its software renderer, a circle
 of radius 10^7 took a tenth of a second, one of 10^6 about (10^6, 10^6)
 half that, and an arc of radius 10^10 hung it. So a circle or a rounded
 rectangle (`draw:circle` too) whose points reach past 10^5 is drawn as
-the cubic curves it is made of, which cost no more out there.
+the cubic curves it is made of, which cost no more out there, and which
+count against the frame's path segments as the segments they are (6 for a
+circle, 10 for a rounded rectangle).
 
 Pictures: `gmnb.image("images/stars.png")` loads a PNG, JPEG, WebP or GIF
 from the theme's folder (decoded by the app itself, not by the toolkit's

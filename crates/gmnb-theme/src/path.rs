@@ -260,20 +260,31 @@ pub(crate) fn read(v: &Value, room: usize) -> Result<(Path, usize), Problem> {
             }
             _ => return Err(bad(NOT_A_PATH)),
         };
+        // A circle or a rounded rectangle reaching far from the origin is
+        // given as the curves it is made of, and counts as them (6 or 10
+        // segments, as the 13 or 16 lines [`edges`] has of them: counted
+        // as one, 16 384 of them had 200 000 lines, and the crossings of
+        // the lines past [`MAX_EDGES`] were not counted).
+        let segment = match segment {
+            Segment::Circle(x, y, r) if !near(&[x - r, x + r, y - r, y + r]) => {
+                Err(circle_curves(x, y, r))
+            }
+            Segment::RoundedRect(x, y, w, h, r) if !near(&[x, x + w, y, y + h]) => {
+                Err(rounded_curves(x, y, w, h, &r))
+            }
+            segment => Ok(segment),
+        };
+        let cost = match &segment {
+            Ok(_) => cost,
+            Err(curves) => curves.len(),
+        };
         used += cost;
         if used > room {
             return Err(Problem::TooLong);
         }
-        // A circle or a rounded rectangle reaching far from the origin is
-        // given as the curves it is made of.
         match segment {
-            Segment::Circle(x, y, r) if !near(&[x - r, x + r, y - r, y + r]) => {
-                segments.extend(circle_curves(x, y, r));
-            }
-            Segment::RoundedRect(x, y, w, h, r) if !near(&[x, x + w, y, y + h]) => {
-                segments.extend(rounded_curves(x, y, w, h, &r));
-            }
-            segment => segments.push(segment),
+            Ok(segment) => segments.push(segment),
+            Err(curves) => segments.extend(curves),
         }
     }
     Ok((Path { segments }, used))
