@@ -651,6 +651,40 @@ fn a_sliders_row_leaves_its_text_room_in_the_least_window() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
+/// R7-A-5: a theme's own slider (Swirls' Flow) in the least window asked
+/// for 160 px as it was built, after the breakpoint that narrows Volume's
+/// and the opacity's: its row left its text some 40 px ("Flo-w", a subtitle
+/// a word to a line). It asks for 80 there, and for 160 where the window is
+/// wide (`GMNB_FOCUS` says where it is).
+#[test]
+fn a_themes_slider_leaves_its_text_room_in_the_least_window() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    const THEME: &str = r#"return { api = 1, name = "Plain" }"#;
+    let width = |size: &str| {
+        let env = [
+            ("GMNB_THEME", "swirls"),
+            ("GMNB_PREFS", "1"),
+            ("GMNB_SIZE", size),
+            ("GMNB_FOCUS", "wc-option-slider"),
+        ];
+        let err = run(&display, THEME, &env, 3_500);
+        err.lines()
+            .find_map(|l| l.strip_prefix("GMNB_FOCUS: wc-option-slider at "))
+            .and_then(|rest| rest.split_whitespace().nth(2)?.parse::<f32>().ok())
+    };
+    match width("300x700") {
+        Some(w) if w <= 100.0 => {}
+        other => panic!("the slider is {other:?} px wide in the least window"),
+    }
+    match width("900x700") {
+        Some(w) if w >= 150.0 => {}
+        other => panic!("the slider is {other:?} px wide in a wide window"),
+    }
+}
+
 /// Settings opened at `size` in the base look and each built-in theme,
 /// and nothing in it wider than the window.
 fn fits(display: &Path, size: &str) {

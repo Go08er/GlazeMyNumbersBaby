@@ -21,7 +21,7 @@
 //! of the whole window at that size costs at most about 100 ms or 256 MB;
 //! a larger window, more.
 
-use crate::draw::{BlendMode, Filter, LineCap, Op, Rect, Stroke};
+use crate::draw::{BlendMode, Filter, LineCap, MaskMode, Op, Rect, Stroke};
 use crate::types::{GradientKind, Paint, Shadow};
 
 /// The area the weights are of: the window they were measured in.
@@ -136,6 +136,27 @@ fn box_shadow_blur(blur: f64) -> f64 {
         0.0
     }
 }
+/// And for the corners of a box shadow that is blurred at all (by 3 px or
+/// more: less, the toolkit skips the blur): the toolkit blurs the whole of a
+/// shadow whose corners are large, not their corners alone, and what that
+/// takes goes as the square of the corners' radius (the largest, at most
+/// half the box's shorter side, in the layer's pixels). Measured over a box
+/// of 740 × 620 px, inset and outset, blurred by 3 to 30: 0.2 ms for a
+/// radius of 20, 0.9 for 100, 2.3 for 200, 5.4 for 300.
+fn box_shadow_corners(radius: f64, blur: f64) -> f64 {
+    if blur >= 2.5 {
+        0.0007 * radius * radius
+    } else {
+        0.0
+    }
+}
+/// And for each rounded rectangle, by its largest corner radius (at most
+/// half its shorter side, in the layer's pixels) however little of the
+/// layer it covers: the toolkit makes a mask of its corners for each, and
+/// more the larger they are. 400 of 200 × 200 px with a gradient took 67 ms
+/// at a radius of 100, 31 at 30, 9 at none (0.17 ms each at 100: 700 ms of
+/// the 4096 calls a frame has, for the 0.8 the area charged).
+const CORNER: f64 = 0.02;
 /// What each open clip that is not a plain box (rounded, or turned) adds to
 /// the cost of what is drawn inside, as a share of it: the software
 /// renderer takes each as a mask of its own, and a rectangle over the
@@ -151,11 +172,57 @@ const CLIP_DEPTH: f64 = 0.25;
 const FREE_FONTS: usize = 8;
 /// Points for each font past [`FREE_FONTS`] (4.5 ms).
 const FONT: f64 = 45.0;
+/// Points for each character the frame sets in a font that it hasn't set in
+/// that font at that scale and turn yet, however little of the layer it
+/// covers: the toolkit makes the glyph for it, 30 µs a glyph measured, a
+/// frame's cost where its fonts move (64 texts of 85 different CJK
+/// characters, in sizes that change each frame: 170 ms for the 2.4% the
+/// area charged; the same text at 64 scales, 69 ms).
+const GLYPH: f64 = 0.35;
+/// Points for each script the frame sets text of in a font that the toolkit
+/// has to find a font for (below), 2 ms measured: a text of a dozen scripts
+/// in each of 8 sizes took 100 ms in the 8 fonts that are free.
+const SCRIPT: f64 = 20.0;
+
+/// The script of a character that takes the toolkit a font of its own to
+/// set (0: the font's own, or one that costs little: Greek, Cyrillic, the
+/// Indic scripts, Thai, Hebrew, the arrows and the maths measured 0 to 0.5
+/// ms a font). A number for the scripts that do, a family of them sharing a
+/// font (the ideographs, or emoji): CJK and Hangul 1.1 ms a font, Arabic's
+/// presentation forms, the symbols and dingbats, emoji and the historic
+/// scripts of the planes past the first.
+fn script(c: char) -> u32 {
+    match u32::from(c) {
+        // Ideographs, kana, bopomofo, fullwidth forms and the planes of
+        // more of them.
+        0x2E80..0xA000 | 0xF900..0xFB00 | 0xFF00..0xFFF0 | 0x20000..0x40000 => 1,
+        // Hangul.
+        0x1100..0x1200 | 0xAC00..0xD800 => 2,
+        // Symbols and dingbats.
+        0x2600..0x2800 => 3,
+        // Arabic presentation forms.
+        0xFB50..0xFE00 | 0xFE70..0xFF00 => 4,
+        // Emoji and pictographs.
+        0x1F000..0x20000 => 5,
+        // The historic scripts, a block of five hundred and twelve each.
+        c @ 0x10000..0x1F000 => 0x1000 + (c >> 9),
+        _ => 0,
+    }
+}
+
 /// A clip with rounded corners.
 const ROUNDED_CLIP: f64 = 0.9;
 /// The effects: what they make and hold beside what is drawn in them.
 const OPACITY: f64 = 13.0;
-const MASK: f64 = 26.0;
+/// A mask, by its mode (the whole window drawn through a mask of 4 × 4 px:
+/// alpha 0.3 ms a mask, luminance 0.6, inverted luminance 0.5, inverted
+/// alpha 15 to 19 ms; through a mask the size of the window, 5.7).
+fn mask_weight(mode: MaskMode) -> f64 {
+    match mode {
+        MaskMode::InvertedAlpha => 190.0,
+        _ => 26.0,
+    }
+}
 /// A blend, by its mode (the whole window, four blends each: multiply 6.4
 /// ms, screen 5.5, overlay 6.6, color-dodge 10, soft-light 9.8, color 10.5,
 /// luminosity 11.5, saturation 13.6, hue 19).
@@ -325,6 +392,10 @@ pub(crate) struct Meter {
     picture: f64,
     /// The fonts text has been set or measured in this frame.
     fonts: Vec<FontKey>,
+    /// The characters set or measured in each of them (by its place in
+    /// `fonts`) at each scale and turn, and their scripts.
+    chars: std::collections::HashSet<(usize, char, [i32; 4])>,
+    scripts: std::collections::HashSet<(usize, u32)>,
 }
 
 /// What the toolkit makes a font of: a family list, a size, a weight, a
@@ -374,13 +445,16 @@ impl Meter {
             dash_units: 0.0,
             picture: 0.0,
             fonts: Vec::new(),
+            chars: Default::default(),
+            scripts: Default::default(),
         }
     }
 
-    /// Text is about to be set (or measured) in `font`: the first few
-    /// fonts of a frame are free, each past them is charged. `Err`: the
-    /// frame is past its allowance (by that share).
-    pub(crate) fn font(&mut self, font: &crate::types::Font) -> Result<(), f64> {
+    /// `text` is about to be set (or measured) in `font`: the first few
+    /// fonts of a frame are free, each past them is charged, and so is each
+    /// character the font hasn't had yet and each script past Latin. `Err`:
+    /// the frame is past its allowance (by that share).
+    pub(crate) fn text(&mut self, font: &crate::types::Font, text: &str) -> Result<(), f64> {
         let key: FontKey = (
             font.family.clone(),
             font.size.to_bits(),
@@ -391,15 +465,31 @@ impl Meter {
                 .map(|(tag, v)| (tag.clone(), v.to_bits()))
                 .collect(),
         );
-        if self.fonts.contains(&key) {
-            return Ok(());
-        }
-        self.fonts.push(key);
-        if self.fonts.len() > FREE_FONTS {
-            self.spent += FONT;
-            if self.spent > self.allowance {
-                return Err(self.spent / self.allowance);
+        let at = match self.fonts.iter().position(|k| *k == key) {
+            Some(at) => at,
+            None => {
+                self.fonts.push(key);
+                if self.fonts.len() > FREE_FONTS {
+                    self.spent += FONT;
+                }
+                self.fonts.len() - 1
             }
+        };
+        // A glyph is made for each size it is drawn at on the screen: the
+        // transform in force, to a thousandth.
+        let [a, b, c, d, ..] = self.m.0;
+        let at_scale = [a, b, c, d].map(|v| (v * 1000.0).round() as i32);
+        for c in text.chars().filter(|c| !c.is_whitespace()) {
+            if self.chars.insert((at, c, at_scale)) {
+                self.spent += GLYPH;
+                let script = script(c);
+                if script != 0 && self.scripts.insert((at, script)) {
+                    self.spent += SCRIPT;
+                }
+            }
+        }
+        if self.spent > self.allowance {
+            return Err(self.spent / self.allowance);
         }
         Ok(())
     }
@@ -449,6 +539,8 @@ impl Meter {
     /// closes. `Err`: the frame is past its allowance (by that share).
     pub(crate) fn take(&mut self, op: &Op) -> Result<(), f64> {
         let glyphs = self.glyphs;
+        // Points beside the area's, if what is drawn is seen at all.
+        let mut extra = 0.0;
         let (weight, local): (f64, Option<[f64; 4]>) = match op {
             Op::Translate(dx, dy) => {
                 self.m.translate(f64::from(*dx), f64::from(*dy));
@@ -504,14 +596,25 @@ impl Meter {
                 let blend = matches!(op, Op::PushBlend(_));
                 let weight = match op {
                     Op::PushBlend(mode) => blend_weight(*mode),
-                    _ => MASK,
+                    Op::PushMask(mode) => mask_weight(*mode),
+                    _ => 0.0,
                 };
                 self.open(weight, 0.0, None, blend);
                 self.open(0.0, 0.0, None, false);
                 return Ok(());
             }
             Op::Rect { rect, paint: p } => (paint(p), Some(rect_box(rect))),
-            Op::RoundedRect { rect, paint: p, .. } => (paint(p) + 0.3, Some(rect_box(rect))),
+            Op::RoundedRect {
+                rect,
+                radius,
+                paint: p,
+            } => {
+                let [x0, y0, x1, y1] = rect_box(rect);
+                let half = (x1 - x0).abs().min((y1 - y0).abs()) / 2.0;
+                let corner = f64::from(radius.uniform()).min(half) * self.m.magnitude();
+                extra = CORNER * corner;
+                (paint(p) + 0.3, Some(rect_box(rect)))
+            }
             Op::Circle {
                 center,
                 radius,
@@ -557,15 +660,29 @@ impl Meter {
                 (BORDER, Some(grow(rect_box(rect), f64::from(*width))))
             }
             Op::Shadow {
-                rect, shadow: s, ..
+                rect,
+                radius,
+                shadow: s,
             } => {
                 let b = grow(
                     rect_box(rect),
                     f64::from(s.x.abs().max(s.y.abs()) + s.spread.abs() + 3.0 * s.blur),
                 );
-                // Its blur, in the layer's pixels, if it is seen at all.
+                // Its blur, and its corners', in the layer's pixels, if it
+                // is seen at all.
                 if self.seen(b).is_some() {
-                    self.spent += box_shadow_blur(f64::from(s.blur) * self.m.magnitude());
+                    // The toolkit blurs by the shadow's own blur whatever
+                    // the scale shrinks it to (a shadow of 7400 × 6200 px
+                    // blurred by 20 at a scale of 0.1: 5.8 ms, as one over
+                    // the window with corners of 300), so a scale that
+                    // shrinks is none; its corners are as large as it makes
+                    // them.
+                    let by = self.m.magnitude();
+                    let blur = f64::from(s.blur) * by.max(1.0);
+                    let [x0, y0, x1, y1] = rect_box(rect);
+                    let half = (x1 - x0).abs().min((y1 - y0).abs()) / 2.0;
+                    let corner = f64::from(radius.uniform()).min(half) * by;
+                    self.spent += box_shadow_blur(blur) + box_shadow_corners(corner, blur);
                 }
                 (BOX_SHADOW, Some(b))
             }
@@ -597,6 +714,9 @@ impl Meter {
         // A picture drawn at all costs its own pixels too.
         if b.is_some() && picture > 0.0 {
             self.spent += picture;
+        }
+        if b.is_some() {
+            self.spent += extra;
         }
         if let Some(b) = b
             && let Some(level) = self.levels.last_mut()
