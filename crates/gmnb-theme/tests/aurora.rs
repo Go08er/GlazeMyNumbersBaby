@@ -1172,7 +1172,7 @@ fn aurora_timed(name: &str, slow_calls: u32) -> Theme {
     let file = dir.join("theme.luau");
     let source = std::fs::read_to_string(&file).unwrap();
     let shim = format!(
-        "local ticks, now = 0, 0\nlocal os = {{ clock = function(): number\n\tticks += 1\n\tnow += if ticks <= {slow_calls} then 0.01 else 0.000001\n\treturn now\nend }}\n"
+        "local ticks, now = 0, 0\nlocal os = {{ clock = function(): number\n\tticks += 1\n\tnow += if ticks <= {slow_calls} then 0.0005 else 0.000001\n\treturn now\nend }}\n"
     );
     let (first, rest) = source.split_once('\n').unwrap();
     assert_eq!(first, "--!strict");
@@ -1212,10 +1212,10 @@ fn the_guard_is_not_fooled_by_a_moment_of_busy_and_lets_go_of_a_slow_one() {
     // three batches. Slow for the first timing only.
     let fine = field_width(&aurora_timed("fast", 0), 760.0, 640.0);
     assert!(fine >= 380, "{fine}");
-    let moment = field_width(&aurora_timed("moment", 8), 760.0, 640.0);
+    let moment = field_width(&aurora_timed("moment", 9), 760.0, 640.0);
     assert_eq!(moment, fine, "a moment of busy made the aurora coarser");
     // Slow throughout: coarser.
-    let theme = aurora_timed("slow", 16);
+    let theme = aurora_timed("slow", 17);
     let coarse = field_width(&theme, 760.0, 640.0);
     assert!(coarse < fine / 2, "{coarse} {fine}");
     // And the next size that times quick: fine again.

@@ -1952,7 +1952,9 @@ local function keep(width: number, height: number): (Kept, boolean)
 		return k, false
 	end
 	local made, whole, column = timed(width, height)
-	if column > 0 and whole > SLOW and thin < 16 then
+	-- (The second timing only where the first was not very slow: on a very
+	-- slow machine it would be the frame's undoing, and the first has told.)
+	if column > 0 and whole > SLOW and thin < 16 and whole < 4 * SLOW then
 		-- Slow, or only busy for a moment: the quicker of two timings.
 		local again, whole_again, column_again = timed(width, height)
 		if whole_again < whole then
@@ -2117,7 +2119,7 @@ local function press_pulse(e: Event): (number, number)
 	return 0.5, 0.36
 end
 
-local function background(draw: Draw, frame: Frame): Again
+local function background_frame(draw: Draw, frame: Frame): Again
 	local s = scheme(frame.ctx)
 	local w, h = frame.width, frame.height
 	local living = frame.ctx.options.living == true
@@ -2220,6 +2222,39 @@ local function background(draw: Draw, frame: Frame): Again
 		return DRIFT_FRAME
 	end
 	return nil
+end
+
+-- A frame that takes this long (of the wall's clock) is one that the 8 ms
+-- may be gone from, were the machine a little busier.
+local SLOW_FRAME = 0.003
+-- How many such frames, net of the quick ones between, make the sky
+-- coarser, and by how much.
+local SLOW_FRAMES, COARSER = 3, 1.6
+local slow_frames = 0
+
+-- The background, and the care that it never loses its place: a machine
+-- can become busy after a window's size was timed, and then the frames
+-- themselves tell. Slow ones in number make the grid and the picture
+-- coarser (the next frame makes them again at the new size), as the
+-- timing of a new size would have, rather than the sky be taken off for
+-- good at the third that runs over.
+local function background(draw: Draw, frame: Frame): Again
+	local started = os.clock()
+	local before = kept
+	local again = background_frame(draw, frame)
+	if frame.motion and before ~= nil and before == kept then
+		if os.clock() - started > SLOW_FRAME then
+			slow_frames += 1
+			if slow_frames >= SLOW_FRAMES and thin < 16 then
+				thin = clamp(thin * COARSER, 1, 16)
+				kept = nil
+				slow_frames = 0
+			end
+		elseif slow_frames > 0 then
+			slow_frames -= 1
+		end
+	end
+	return again
 end
 
 ---------------------------------------------------------------------------

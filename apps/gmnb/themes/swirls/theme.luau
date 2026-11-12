@@ -1298,16 +1298,23 @@ end
 
 -- A draw hook has 8 ms of the processor, and loses its place for good
 -- after three frames that take longer. A whole snapshot takes 1.6 ms on
--- the machine this was written on. Where one would take over 5, the grid
--- and the picture are made as much coarser as brings it to 3.5. The first
--- nine rows tell, each time a window's size is new: three batches of
--- three, of which the quickest counts (the machine may have been busy
--- with something else during the others).
+-- the machine this was written on, and the frame of a new window size
+-- carries one whole, with the timing that went before it. A busy machine
+-- is slower than a quiet one by as much as three times (memory shared with
+-- what else runs, a lower clock), and the frame was held to 8 ms at the
+-- quiet machine's pace, so it was over on the busy one. So where one would
+-- take over 2.5 ms, the grid and the picture are made as much coarser as
+-- brings it to 1.8: the frame of a new size then has a threefold margin.
+-- The first nine rows tell, each time a window's size is new: three
+-- batches of three, of which the quickest counts (the machine may have been
+-- busy with something else during the others).
 -- (`os.clock` is the clock on the wall, so a machine that is busy for a
 -- moment looks slow for that moment: a size that looks slow is timed
 -- again before the grid is made coarser, and a size that is comfortably
 -- quick makes it finer again, the next time the window's size is new.)
-local SLOW, AFFORDED = 0.005, 0.0035
+-- A machine that gets busy after that is found out by the frames
+-- themselves (`background`, below).
+local SLOW, AFFORDED = 0.0025, 0.0018
 
 -- A whole snapshot's time at this size, as far as the first nine rows
 -- tell, and the snapshot with the rows that were worked out.
@@ -1332,7 +1339,9 @@ local function keep(width: number, height: number): (Kept, boolean)
 		return k, false
 	end
 	local made, whole, row = timed(width, height)
-	if row > 0 and whole > SLOW and thin < 16 then
+	-- (The second timing only where the first was not very slow: on a very
+	-- slow machine it would be the frame's undoing, and the first has told.)
+	if row > 0 and whole > SLOW and thin < 16 and whole < 4 * SLOW then
 		-- Slow, or only busy for a moment: the quicker of two timings.
 		local again, whole_again, row_again = timed(width, height)
 		if whole_again < whole then
@@ -1512,7 +1521,7 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 	for i = #events, 1, -1 do
 		local e = events[i]
 		local age = e.age
-		if os.clock() - started > 0.004 then
+		if os.clock() - started > 0.0025 then
 			-- (What is left is older, and has less to say.)
 			alive = true
 			break
@@ -1572,7 +1581,7 @@ local function number_option(ctx: Ctx, id: string, fallback: number): number
 	return if type(value) == "number" then value else fallback
 end
 
-local function background(draw: Draw, frame: Frame): Again
+local function background_frame(draw: Draw, frame: Frame): Again
 	local started = os.clock()
 	local width, height = frame.width, frame.height
 	if width < 2 or height < 2 then
@@ -1677,6 +1686,39 @@ local function background(draw: Draw, frame: Frame): Again
 		return until_next(frame.time)
 	end
 	return nil
+end
+
+-- A frame that takes this long (of the wall's clock) is one that the 8 ms
+-- may be gone from, were the machine a little busier.
+local SLOW_FRAME = 0.0035
+-- How many such frames, net of the quick ones between, make the paint
+-- coarser, and by how much.
+local SLOW_FRAMES, COARSER = 3, 1.6
+local slow_frames = 0
+
+-- The background, and the care that it never loses its place: a machine
+-- can become busy after a window's size was timed, and then the frames
+-- themselves tell. Slow ones in number make the grid and the picture
+-- coarser (the next frame makes them again at the new size), as the
+-- timing of a new size would have, rather than the paint be taken off for
+-- good at the third that runs over.
+local function background(draw: Draw, frame: Frame): Again
+	local started = os.clock()
+	local before = kept
+	local again = background_frame(draw, frame)
+	if frame.motion and before ~= nil and before == kept then
+		if os.clock() - started > SLOW_FRAME then
+			slow_frames += 1
+			if slow_frames >= SLOW_FRAMES and thin < 16 then
+				thin = clamp(thin * COARSER, 1, 16)
+				kept = nil
+				slow_frames = 0
+			end
+		elseif slow_frames > 0 then
+			slow_frames -= 1
+		end
+	end
+	return again
 end
 
 ---------------------------------------------------------------------------
