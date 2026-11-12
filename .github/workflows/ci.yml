@@ -116,7 +116,11 @@ jobs:
           weston=$!
           for _ in $(seq 150); do [ -S "$XDG_RUNTIME_DIR/ci-gmnb" ] && break; sleep 0.2; done
           sleep 1
-          GMNB_SOUND=null GMNB_TEST_WAYLAND_DISPLAY=ci-gmnb nix develop -c \
+          # util-linux's own `mount` and `unshare` first on PATH: the
+          # runner's `mount` is setuid, which refuses in a namespace, and
+          # themes_folder.rs then skips (the dev shell has neither).
+          GMNB_SOUND=null GMNB_TEST_WAYLAND_DISPLAY=ci-gmnb \
+            nix shell --inputs-from . nixpkgs#util-linux -c nix develop -c \
             cargo test -p gmnb --locked --bin gmnb --test sound --test themes_folder -- --nocapture 2>&1 \
             | tee gmnb-display-test.log
           kill "$weston"
