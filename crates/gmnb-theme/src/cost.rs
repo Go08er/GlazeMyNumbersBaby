@@ -542,7 +542,7 @@ fn dashes(stroke: &Stroke, length: f64) -> f64 {
         return 0.0;
     }
     let sum: f64 = stroke.dash.iter().map(|d| f64::from(*d)).sum();
-    let (period, on) = if n % 2 == 0 {
+    let (period, on) = if n.is_multiple_of(2) {
         (sum, n / 2)
     } else {
         (2.0 * sum, n)

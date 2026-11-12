@@ -1113,11 +1113,12 @@ fn a_path_that_crosses_itself_is_charged_by_its_crossings() {
         .unwrap_err(),
     );
     // What doesn't cross is as before, however many lines: a sine of 16 000,
-    // a regular polygon of 5000 corners, a thousand parallel lines.
+    // a regular polygon of 5000 corners, a thousand parallel lines, scanlines.
     for body in [
         "local p = gmnb.path():move_to(0, 300) for i = 1, 16000 do p:line_to(i * 0.045, 300 + 100 * math.sin(i * 0.01)) end draw:stroke(p, 2, '#fff')",
         "local p = gmnb.path():move_to(500, 300) for i = 1, 5000 do local a = i / 5000 * 2 * math.pi p:line_to(300 + 200 * math.cos(a), 300 + 200 * math.sin(a)) end p:close() draw:fill(p, '#fff') draw:stroke(p, 2, '#000')",
         "local p = gmnb.path() for i = 1, 1000 do p:move_to(0, i * 0.5) p:line_to(700, i * 0.5 + 100) end draw:stroke(p, 1, '#fff')",
+        "local p = gmnb.path() for i = 1, 2160 do p:move_to(0, i * 0.3) p:line_to(700, i * 0.3) end draw:stroke(p, 0.25, '#fff')",
     ] {
         let c = cost(body).unwrap();
         assert!(c < 0.5, "{body}: {c}");

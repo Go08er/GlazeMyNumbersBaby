@@ -889,7 +889,7 @@ fn edges(path: &Path) -> Vec<[f64; 4]> {
 
 /// Steps of the sweep [`crossings`] makes, at most: a path whose edges
 /// need more is counted as the worst.
-const SWEEP_STEPS: usize = 2_000_000;
+const SWEEP_STEPS: usize = 4_000_000;
 
 /// How many pairs of a path's edges cross (`edges`: [`edges`]'s), counted
 /// to `limit` and no further (then `limit` is what it says). A pair is
@@ -908,6 +908,14 @@ pub fn crossings(path: &Path, limit: f64) -> f64 {
 }
 
 fn count_crossings(edges: &[[f64; 4]], limit: f64) -> f64 {
+    // A line with no length (`close` at the point the path is at) crosses
+    // nothing.
+    let lines: Vec<[f64; 4]> = edges
+        .iter()
+        .copied()
+        .filter(|e| e[0] != e[2] || e[1] != e[3])
+        .collect();
+    let edges = &lines[..];
     // A path of a few lines has few crossings, and they are cheap.
     if edges.len() < 16 {
         return 0.0;
@@ -1008,8 +1016,13 @@ mod tests {
             })
             .collect();
         assert_eq!(count_crossings(&polyline, 1e9), 0.0);
-        // A few lines are not counted at all.
+        // A few lines are not counted at all, nor are lines of no length
+        // (16 384 `close`s of a path at its start).
         assert_eq!(count_crossings(&grid[..10], 1e9), 0.0);
+        assert_eq!(
+            count_crossings(&vec![[3.0, 4.0, 3.0, 4.0]; 16384], 10.0),
+            0.0
+        );
     }
 
     /// How long a path is, at most (a dashed stroke is charged by it): the
