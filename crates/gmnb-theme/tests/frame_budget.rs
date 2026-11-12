@@ -493,8 +493,8 @@ fn sweep(id: &str) {
         "  busiest_frame {:.2}%",
         theme.api().busiest_frame() * 100.0
     );
-    // Every layer at its dearest at once, at 3840 x 2160, holds well under
-    // what the window's layers may hold off-screen together.
+    // Every layer at its dearest at once, up to 3840 x 2160, holds under a
+    // third of what the window's layers may hold off-screen together.
     let all: f64 = held.values().sum();
     println!(
         "  off-screen: {:.0} MB with every layer at its most ({:.1}% of {:.0} MB; {held:?})",
@@ -502,7 +502,7 @@ fn sweep(id: &str) {
         all / gmnb_theme::cost::OFFSCREEN_BYTES * 100.0,
         gmnb_theme::cost::OFFSCREEN_BYTES / 1.0e6
     );
-    if all > gmnb_theme::cost::OFFSCREEN_BYTES / 4.0 {
+    if all > gmnb_theme::cost::OFFSCREEN_BYTES / 3.0 {
         bad.push(format!("{id}: holds {all} bytes off-screen"));
     }
     assert!(bad.is_empty(), "{id}:\n{}", bad.join("\n"));

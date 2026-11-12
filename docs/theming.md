@@ -1639,7 +1639,7 @@ says so beside *Open themes folder*.
 | One library call's own work, which the time limit can't stop midway: a plain search (`string.find` with `plain` or a pattern of no magic characters, `string.split`); a pattern search (`find`, `match`, `gmatch`, `gsub`); `table.move` | 2^30 bytes (string × pattern); 2^26 (string bytes × the pattern's longest `[set]`); 2^20 elements. Past them the call is an error. |
 | Draw calls per `draw` | 4096 |
 | What a frame costs to draw | 1000 points for each 760 × 640 of what the layer is charged over (a keypad's or a readout's, the window too), and never fewer than 1000 ([Drawing per frame](#drawing-per-frame)) |
-| What the window's layers hold off-screen | 1 GiB for all the layers on screen together, whatever the window's size: the masks GL makes of what is filled, and the surfaces the effects are drawn into, by the window's device pixels ([What the layers hold off-screen](#what-the-layers-hold-off-screen)) |
+| What the window's layers hold off-screen | 768 MiB for all the layers on screen together, whatever the window's size: the masks GL makes of what is filled, and the surfaces the effects are drawn into, by the window's device pixels ([What the layers hold off-screen](#what-the-layers-hold-off-screen)) |
 | The memory of the whole of GMNB | 4 GiB, whatever the theme or the calculation (the kernel's `RLIMIT_DATA`); past 3.5 GiB the session is saved and the theme switched off ([The memory of the whole of GMNB](#the-memory-of-the-whole-of-gmnb)) |
 | Open pushes / saves at once | 32 each |
 | Path segments per frame | 16 384 |
@@ -1825,7 +1825,7 @@ through a mask of what it covers, and an effect is drawn into a surface of
 its own. Round 7 measured 64 circles over the window, 0.90 of a frame's
 points at any size: 253 MB more on GL at 760 × 640, 790 MB at
 1600 × 1080, and over 3 GB at 3840 × 2160 (it was stopped there). So the
-layers on screen share **1 GiB** of it, whatever the window's size, and
+layers on screen share **768 MiB** of it, whatever the window's size, and
 whatever its scale (counted in the window's device pixels: a window of
 1920 × 1080 at twice the scale holds what one of 3840 × 2160 does). Each
 frame is told what the window's other layers on screen leave it (their
@@ -1853,27 +1853,36 @@ only while it draws into it: a tenth or less):
 | `push_mask`, `push_blend`; text or a glyph in a gradient (drawn through itself as a mask) | 14 (13.1 to 13.6) |
 | A rectangle, a rounded one, a picture, a border, a `draw:shadow`, a clip (rounded or turned: 0.5 to 1.5 held, however many were open) | nothing |
 
+On NVIDIA's Vulkan a mask holds more (15 bytes a pixel, 20 with a
+gradient) and the effects less (opacity 3 to 4, a blur or a shadow 8.5, a
+blend 7.5), all of it in the process's resident memory, the driver's own
+buffers shared with the card; and on both, a frame drawn while others are
+in flight holds up to twice what one frame counts. The limit is set for
+that: with 1 GiB, the frames below that ask for all of it held 2.0 GB in
+all on llvmpipe and 2.3 GB on NVIDIA.
+
 An opacity of 1 and a blur of 0 are drawn straight through, and hold
 nothing. What a frame holds is
 `Api::frame_offscreen` (in `gmnb-theme`), in bytes.
 
-Measured in the app at 3840 × 2160 on GL on llvmpipe, where what the
-renderer holds is the process's own memory: Round 7's 64 circles are
-refused (they would hold 1128 MB), and GMNB stays at the base look's 430
-MB; a background asking for 1040 MB of the 1074 every frame (opacity
-groups, blurs and circles over the window) settled at 2.0 GB in all (1.6
-GB more than the base look: the renderer keeps the surfaces of a frame or
-two in flight); a frosted-glass theme (five lights as large as the window,
-blurred behind three to six panes of glass) holds 500 to 550 MB by this
-count, half of what may be held, and drew at 1920 × 1080 and 3840 × 2160
-with nothing refused (1.15 GB in all at 3840 × 2160; 180 MB on the software
-renderer). On NVIDIA's Vulkan the same frames held as much in the process's
-resident memory (the driver's own buffers, shared with the card), and
-nothing more on the card. The built-in themes hold little of it: every
-layer at its dearest together, over the frame-cost sweep's windows up to
-3840 × 2160 (`frame_budget.rs`, which holds it under a quarter), Aurora
-188 MB (its sky drawn through one mask over the window, 174 MB, and its
-readout's glow), Sprinkles 61 and Swirls 10.
+Measured in the app at 3840 × 2160, the base look holding 430 MB on GL
+on llvmpipe and 250 MB on NVIDIA's Vulkan: Round 7's 64 circles are
+refused (they would hold 1128 MB), and GMNB stays at the base look's. A
+background asking for nearly all that may be held, every frame, held at
+most 1.85 GB in all on llvmpipe and 1.77 GB on NVIDIA in window-sized
+circles (796 MB by the count), 1.92 GB and 0.96 GB in opacity groups,
+blurs and circles (755 MB), and 135 MB on the software renderer. A theme
+whose four layers each ask for it is drawn only as far as what is left
+allows: each layer refused is struck, and switched off after three. A
+frosted-glass theme (five lights as large as the window, blurred behind
+three to six panes of glass) holds 500 to 550 MB by this count, two
+thirds of what may be held, and drew at 1920 × 1080 and 3840 × 2160 with
+nothing refused (at 3840 × 2160, 1.2 GB in all on llvmpipe and on NVIDIA,
+180 MB on the software renderer). The built-in themes hold little of it:
+every layer at its dearest together, over the frame-cost sweep's windows
+up to 3840 × 2160 (`frame_budget.rs`, which holds it under a third),
+Aurora 188 MB (its sky drawn through one mask over the window, 174 MB,
+and its readout's glow), Sprinkles 61 and Swirls 10.
 
 ### The memory of the whole of GMNB
 
@@ -1890,10 +1899,11 @@ Three things hold it there:
    Settings says why; once the base look is drawn, the allocator's free
    memory is given back. Nothing is read at rest: only a painted frame
    asks. (Measured on GL on llvmpipe at 3840 × 2160, the backstop lowered
-   to 1.5 GiB: the background above that asks for all it may was switched
-   off at 1.6 GB, and GMNB's resident memory fell to 0.75 GB; without the
-   giving back, 1.3 GB. What its allocator keeps mapped, 1.4 GB, still
-   counts against the ceiling.)
+   to 1.5 GiB: a background of opacity groups, blurs and circles over the
+   window, every frame, was switched off at 1.6 GB, and GMNB's resident
+   memory fell to 0.75 GB; without the giving back, 1.3 GB. What its
+   allocator keeps mapped, 1.4 GB, still counts against the ceiling, and
+   a theme chosen after it is watched as the first was.)
    The graph's plots are drawn in frames like any other and meet the same
    reading; the analysis of a function runs on a worker within its own
    budget of work and time, and is read only by the frames after it.
@@ -1921,11 +1931,11 @@ what they hold. `RLIMIT_DATA` doesn't break them: with the ceiling in force, GMN
 NVIDIA's Vulkan (an RTX 3070, driver 595.112.07) ran the base look and the
 three built-in themes at 760 × 640 and 3840 × 2160 with its private
 writable memory at 161 to 187 MB, as without it, and the 4K frosted glass
-and the 1040 MB background above at 160 to 180 MB. Most of that is the
+and the backgrounds above that ask for all they may at 160 to 180 MB. Most of that is the
 driver's own: 62 MB on the software renderer; on GL on llvmpipe, 515 MB,
 most of it its forty-odd threads' stacks. NVIDIA's buffers for what the
 renderer draws are shared with the card, and the ceiling doesn't count
-them (the 1040 MB background: 160 MB counted, 1.2 GB resident): there the
+them (window-sized circles every frame: 162 MB counted, 1.8 GB resident): there the
 limit at the source bounds them, and the backstop, which reads what is
 resident, sees them.
 

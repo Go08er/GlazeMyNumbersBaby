@@ -858,12 +858,15 @@ struct Offscreen {
 }
 
 /// What the layers on screen may have the renderer hold off-screen, in all:
-/// 1 GiB, by the measures below. At 3840 × 2160 on GL on llvmpipe a
-/// background asking for all of it every frame settled at 1.6 GB more than
-/// the base look (the renderer keeps a frame or two in flight), 2.0 GB in
-/// all; a frosted-glass theme (five window-sized radial lights blurred
-/// behind three to six panes) asks for half of it, 500 to 550 MB.
-pub const OFFSCREEN_BYTES: f64 = (1u64 << 30) as f64;
+/// 768 MiB, by the measures below. What a frame really holds is more where
+/// the renderer keeps a frame or two in flight, and NVIDIA's Vulkan holds
+/// some 15 bytes a pixel for a mask: at 3840 × 2160, with 1 GiB, a
+/// background asking for all of it every frame held 1.6 GB more than the
+/// base look on GL on llvmpipe (opacity groups, blurs and circles) and 2.0
+/// GB on NVIDIA (circles), so a quarter less is allowed. A frosted-glass
+/// theme (five window-sized radial lights blurred behind three to six
+/// panes) asks for two thirds of it, 500 to 550 MB.
+pub const OFFSCREEN_BYTES: f64 = (768u64 << 20) as f64;
 
 /// Bytes held for each device pixel covered (GL on llvmpipe, the whole of a
 /// window of 760 × 640 and of 1600 × 1080, each kind up to 64 times):

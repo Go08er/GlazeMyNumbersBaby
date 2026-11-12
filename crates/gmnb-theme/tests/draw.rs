@@ -1066,12 +1066,12 @@ fn what_a_frame_costs_to_draw_is_capped() {
 /// whatever the window's size (docs/theming.md, "What the layers hold
 /// off-screen"): the points a frame may spend grow with the window, and 64
 /// circles over a window of 3840 × 2160, 0.90 of them, held over 3 GB on GL
-/// (a window-sized mask each). The layers on screen share 1 GiB; a frame is
+/// (a window-sized mask each). The layers on screen share 768 MiB; a frame is
 /// told what the others leave it, and the window's scale.
 #[test]
 fn what_the_layers_hold_off_screen_is_capped_whatever_the_size() {
     const LIMIT: f64 = gmnb_theme::cost::OFFSCREEN_BYTES;
-    assert_eq!(LIMIT, 1024.0 * 1024.0 * 1024.0);
+    assert_eq!(LIMIT, 768.0 * 1024.0 * 1024.0);
     // Round 7's hostile theme: 64 circles as large as the window.
     let (circles, _d) = background(
         "offscreen-circles",
@@ -1094,15 +1094,16 @@ fn what_the_layers_hold_off_screen_is_capped_whatever_the_size() {
     assert!((2.0e8..3.0e8).contains(&small), "{small}");
     // At 3840 × 2160 it is refused, as past any cap, with its note...
     let e = at(&circles, 3840.0, 2160.0, LIMIT, 1.0).unwrap_err();
-    assert!(e.contains("off-screen") && e.contains("1074 MB"), "{e}");
+    assert!(e.contains("off-screen") && e.contains("805 MB"), "{e}");
     // ...though it costs no more than 0.90 of the frame's points there: the
     // same frame without the limit is drawn, holding 4 GB.
     let unlimited = at(&circles, 3840.0, 2160.0, f64::INFINITY, 1.0).unwrap();
     assert!(unlimited > 4.0e9, "{unlimited}");
     assert!((0.85..0.95).contains(&circles.api().frame_cost()));
-    // A window of 1920 × 1080 at a scale of 2 has as many device pixels.
-    assert!(at(&circles, 1920.0, 1080.0, LIMIT, 2.0).is_err());
-    assert!(at(&circles, 1920.0, 1080.0, LIMIT, 1.0).is_ok());
+    // A window of 1280 × 720 at a scale of 2 has the device pixels of one
+    // of 2560 × 1440.
+    assert!(at(&circles, 1280.0, 720.0, LIMIT, 1.0).is_ok());
+    assert!(at(&circles, 1280.0, 720.0, LIMIT, 2.0).is_err());
     // What the window's other layers leave is what a frame may hold: with
     // 100 MB left, the circles at 760 × 640 are refused too.
     let e = at(&circles, 760.0, 640.0, 1.0e8, 1.0).unwrap_err();
@@ -1153,8 +1154,9 @@ fn what_the_layers_hold_off_screen_is_capped_whatever_the_size() {
     );
 
     // A frosted-glass background (Round 7's, its six panes: five lights as
-    // large as the window, blurred behind each pane) holds half of it at
-    // 3840 × 2160, and is drawn at 1920 × 1080 and at 3840 × 2160.
+    // large as the window, blurred behind each pane) holds under three
+    // quarters of it at 3840 × 2160 (550 MB), and is drawn at 1920 × 1080
+    // and at 3840 × 2160.
     let (glass, _d) = background(
         "offscreen-glass",
         "local ORBS = { { 0.2, 0.25, 0.34, '#ff6a9c' }, { 0.8, 0.2, 0.30, '#5b8cff' }, \
@@ -1188,7 +1190,7 @@ fn what_the_layers_hold_off_screen_is_capped_whatever_the_size() {
     );
     let hd = at(&glass, 1920.0, 1080.0, LIMIT, 1.0).unwrap();
     let uhd = at(&glass, 3840.0, 2160.0, LIMIT, 1.0).unwrap();
-    assert!(hd < uhd && uhd < 0.55 * LIMIT, "{hd} {uhd}");
+    assert!(hd < uhd && uhd < 0.75 * LIMIT, "{hd} {uhd}");
 }
 
 /// A path that crosses itself is charged by its crossings (R5-D-2): the

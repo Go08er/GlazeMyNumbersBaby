@@ -130,11 +130,14 @@ their animations have settled; what each costs while it moves is in
 [`docs/theming.md`](docs/theming.md).
 
 GMNB may not grow past **4 GiB**, whatever the theme or the calculation:
-a theme's frames may have the renderer hold 1 GiB off-screen between them,
+a theme's frames may have the renderer hold 768 MiB off-screen between them,
 whatever the window's size; past 3.5 GiB GMNB saves the session and
-switches the theme off (a toast says so); and the kernel holds the rest at
-4 GiB (`RLIMIT_DATA`), past which an allocation fails and GMNB exits, its
-settings saved ([`docs/theming.md`](docs/theming.md#the-memory-of-the-whole-of-gmnb)).
+switches the theme off (a toast says so); and the kernel holds GMNB's own
+memory (its heap, its threads, the software renderer's surfaces) at 4 GiB
+(`RLIMIT_DATA`), past which an allocation fails and GMNB exits, its
+settings saved. NVIDIA's buffers for what is drawn are the driver's,
+shared with the card, and outside that count: the first two hold them
+([`docs/theming.md`](docs/theming.md#the-memory-of-the-whole-of-gmnb)).
 
 ## Install
 
