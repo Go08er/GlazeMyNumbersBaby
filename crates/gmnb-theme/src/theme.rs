@@ -1374,6 +1374,7 @@ impl Theme {
                     }
                 }
             }
+            layer::bound_places(keys.cells, &mut places);
             drawn.places = places;
         }
         let glyphs = frame.value.as_ref().map_or([0, 0], |v| {

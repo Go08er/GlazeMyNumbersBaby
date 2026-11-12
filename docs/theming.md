@@ -1388,7 +1388,13 @@ widgets that sit in its grid:
 return `{ dx, dy, scale, opacity }`: the cell is scaled about its centre,
 moved and faded. `nil` leaves it alone; `opacity = 0` skips it. It changes
 the picture only: clicks, focus and screen readers see the key where it
-really is. It is not called under reduced motion.
+really is. It is not called under reduced motion. A `scale` is at most 4
+(as a style's is), and the keys placed together may not cover more than
+2¼ times what they cover at rest: past that every `scale` is reduced, all
+by the same share. (The toolkit draws a key, its style's shadows and its
+text again at the size it is placed, and `draw`'s cost cap doesn't see
+that: 35 keys with eight blurred shadows each, scaled by 20, took 16 s a
+frame, and by 50 over two minutes.)
 
 ```lua
 -- Keys rise into place when the keypad appears.
