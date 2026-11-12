@@ -1550,6 +1550,13 @@ impl Page for CalculatorHandle {
     /// The History sheet's own keys, while it covers the calculator.
     fn layer_key_pressed(&self, kp: &KeyPress) -> bool {
         let p = &self.0;
+        // Escape closes the History and Memory sheet, whatever is held
+        // with it, as DGMNB's closes its overlays (`close_overlay`) and GTK
+        // a popover; it did nothing (round 5, B2).
+        if kp.is(appcore::Named::Escape) && p.sheet.is_open() {
+            p.sheet.set_open(false);
+            return true;
+        }
         let (mode, shift) = {
             let vm = p.vm.borrow();
             (vm.mode(), vm.shift_mode())

@@ -59,7 +59,8 @@ impl Watch {
 
     /// A monitor for the folder and for each folder in it now; none for
     /// one that has gone.
-    fn sync(self: &Rc<Self>) {
+    /// (Settings asks again when the chosen theme changes.)
+    pub fn sync(self: &Rc<Self>) {
         let mut want = vec![self.dir.clone()];
         // The folders Settings lists (the built-in themes', the chosen
         // theme's wherever it falls, and the first of the others by id: the

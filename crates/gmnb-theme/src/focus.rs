@@ -38,11 +38,13 @@ pub const RINGS: [&str; 3] = ["focus", "date.calendar.focus", "converter.value.f
 
 /// The page's surfaces a control may sit on, each over the window's
 /// background: the ring of `focus` lies on them outside the control.
-pub const SURFACES: [&str; 4] = [
+pub const SURFACES: [&str; 5] = [
     "plain.background",
     "header.background",
     "nav.background",
     "panel",
+    // The narrow window's History and Memory (R5-A-1).
+    "panel.sheet",
 ];
 
 /// The ring libadwaita draws itself: its accent colour at half opacity,
@@ -167,9 +169,33 @@ pub fn grounds(
             for key in ["keys.number", "keys.func", "keys.operator", "keys.equals"] {
                 inside.extend(over_all(&fill(key), &backdrop));
             }
+            // What Settings' controls lie on (R5-C-2): the card its rows
+            // lie on, the theme's own `card` or, where it hands that
+            // family to the toolkit (`native`), libadwaita's in
+            // `stock.card`;
+            let native_card = matches!(get("native"), Some(Value::Words(w)) if w.contains(&"card"));
+            let card = if native_card {
+                match get("stock.card") {
+                    Some(Value::Color(c)) => Some(Fill::color(c)),
+                    _ => None,
+                }
+            } else {
+                fill("card")
+            };
+            // and the window it is drawn on, the toolkit's (`stock.window`).
+            let window = match get("stock.window") {
+                Some(Value::Color(c)) => Some(Fill::color(c)),
+                _ => None,
+            };
+            // (A card lies on that window, or on the backdrop in the
+            // narrow window's sheet.)
+            let window_over = over_all(&window, &backdrop);
+            let card_under: Vec<Rgba> = backdrop.iter().chain(&window_over).copied().collect();
             let surfaces = SURFACES
                 .iter()
                 .flat_map(|s| over_all(&fill(s), &backdrop))
+                .chain(over_all(&card, &card_under))
+                .chain(window_over)
                 .collect();
             Grounds {
                 outside: backdrop,
@@ -213,8 +239,11 @@ pub fn floor(tokens: &Tokens, values: &mut BTreeMap<&'static str, Value>, notes:
             _ => tokens.colors.accent_text,
         };
         let ring = native_ring(accent);
-        let under = grounds(|p| values.get(p).cloned(), tokens, "focus", &behind).under(&ring);
-        let got = worst(&ring, &under, false);
+        let g = grounds(|p| values.get(p).cloned(), tokens, "focus", &behind);
+        // Inside a key, and on a control of the header, the sidebar or a
+        // panel, whose fill is the surface's where it is transparent
+        // (R5-A-2: the app's ring was judged there, the toolkit's not).
+        let got = worst(&ring, &g.under(&ring), false).min(worst(&ring, &g.surfaces, false));
         if got < LEAST_CONTRAST {
             if let Some(Value::Words(w)) = values.get_mut("native") {
                 w.retain(|f| *f != "focus");

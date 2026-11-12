@@ -837,6 +837,11 @@ desktop's own `gtk.css` cannot repaint it.
 | `stock.destructive` | `danger` | `destructive_color`, `destructive_bg_color` |
 | `stock.error` | `danger` | `error_color`, `error_bg_color` |
 
+Settings and About are drawn on `stock.window` (libadwaita's
+`window_bg_color`, also in the floating dialog of a wide window), with
+their rows on `stock.card`; `stock.dialog` is libadwaita's for its alert
+dialogs, not these.
+
 ### Native families
 
 | Token | Base | Meaning |
@@ -2130,7 +2135,7 @@ rule 4): every ring (`focus`, `date.calendar.focus`,
 it lies on. Around a key: the window's background (for Swirls each of
 the 768 colours of its field), and the key's own fill where the ring is
 inside it, the ring or its `edge` counting. Around a control on the
-page's surfaces (`plain`, the header, the sidebar, a panel): that
+page's surfaces (`plain`, the header, the sidebar, a panel, the narrow window's sheet, the card Settings' rows lie on): that
 surface, the ring alone. The calendar's ring: the popover, and a day. A
 converter value's: its pane, and its field. A ring left to the toolkit
 (`native` lists `focus`) is judged as libadwaita draws it: its accent at
@@ -2149,7 +2154,7 @@ there is kept [9:1 from its edge](#text-surface-control-state).
 The same floor holds for every theme, not only the built-in ones, at the
 window's own colours (`crates/gmnb-theme/src/focus.rs`): a ring under
 1 px, or under 3:1 on what it lies on (with its edge around a key; and, for
-`focus`, the header, the sidebar, a panel and `plain`, outside its control or
+`focus`, the header, the sidebar, a panel, the narrow window's sheet, the card (`stock.card` where `native` lists `card`), `stock.window` (Settings is drawn on it) and `plain`, outside its control or
 inside it, the ring alone), is
 the base look's ring instead (2 px just outside the control, in the
 theme's `accent_text`, else its `fg`, else black or white, whichever

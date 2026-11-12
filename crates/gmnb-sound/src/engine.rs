@@ -567,14 +567,19 @@ impl SoundEngine {
     /// later ([`SoundEngine::reap`], or when the engine is dropped): this
     /// does not wait.
     fn stop(&mut self) {
-        // What is sounding fades out now, though the thread may be busy
-        // rendering a sound for a while before it hears it is to end.
-        self.with_mixer(Mixer::stop);
         if let Some(w) = self.worker.take() {
-            w.tell(Ctl::Quit);
-            // A connection still being opened is hung up on: the thread
-            // is not held by a server that greets it a byte at a time.
+            // Hung up first: a connection still being opened is let go of
+            // (the thread is not held by a server that greets it a byte at
+            // a time), and a play the thread takes from here on is not
+            // started (it asks under the mixer's lock, below).
             w.link.hangup.hang_up();
+            // Then what is sounding fades out now, though the thread may be
+            // busy rendering a sound for a while before it hears it is to
+            // end.
+            if let Some(shared) = lock(&w.link.shared).clone() {
+                shared.mixer().stop();
+            }
+            w.tell(Ctl::Quit);
             self.retired.push(w);
         }
         self.reap();
@@ -1081,7 +1086,19 @@ impl Run {
             delay: delay.saturating_sub(waited).as_secs_f32(),
             ..p.params
         };
-        self.shared.mixer().play_asked(pcm, params, Some(p.at));
+        {
+            let mut mixer = self.shared.mixer();
+            // Sound turned off meanwhile: the engine hangs up and then fades
+            // what is sounding under this lock, so a play taken after that is
+            // not started (hunt R5-A, suspected: one started between the
+            // fade and the thread hearing it is to end sounded on, for as
+            // long as a sound it went on to render).
+            if self.link.hangup.asked() {
+                drop(mixer);
+                return self.count(&self.counters.skipped);
+            }
+            mixer.play_asked(pcm, params, Some(p.at));
+        }
         self.count(&self.counters.started);
         match &mut self.out {
             Out::Server(out) if out.is_corked() => {

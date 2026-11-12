@@ -336,12 +336,21 @@ fn icon_installed() -> bool {
 pub fn cache_font(name: &str, bytes: &[u8]) -> Option<PathBuf> {
     let dir = glib::user_cache_dir().join(DATA_DIR).join("fonts");
     let path = dir.join(name);
-    let stale = std::fs::metadata(&path)
-        .map(|m| m.len() != bytes.len() as u64)
-        .unwrap_or(true);
-    if stale {
+    // Current only if it is these very bytes: one of the same length (a
+    // font of another release, or of another version of a built-in theme)
+    // was kept before (round 5, area F).
+    let current = std::fs::metadata(&path).is_ok_and(|m| m.len() == bytes.len() as u64)
+        && std::fs::read(&path).is_ok_and(|on_disk| on_disk == bytes);
+    if !current {
         let _ = std::fs::create_dir_all(&dir);
-        if let Err(e) = std::fs::write(&path, bytes) {
+        // Written beside it and renamed over it: another GMNB may have the
+        // old file mapped (its fonts are read from it), and one starting at
+        // the same moment never reads half a font.
+        let partial = dir.join(format!(".{name}.{}", std::process::id()));
+        if let Err(e) =
+            std::fs::write(&partial, bytes).and_then(|()| std::fs::rename(&partial, &path))
+        {
+            let _ = std::fs::remove_file(&partial);
             glib::g_warning!("gmnb", "could not cache font: {e}");
             return None;
         }
@@ -485,6 +494,42 @@ mod tests {
             }
         }
         d
+    }
+
+    /// A cached font of the same length as the one GMNB carries now, but
+    /// not the same bytes (an older release's, an older built-in theme's),
+    /// is written again; the one that is the same is left as it is (round 5,
+    /// area F: only the length was compared).
+    #[test]
+    fn a_cached_font_of_the_same_length_but_other_bytes_is_written_again() {
+        let name = format!("cache-test-{}.ttf", std::process::id());
+        let old = vec![1u8; 4096];
+        let new = vec![2u8; 4096];
+        let path = super::cache_font(&name, &old).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), old);
+        let again = super::cache_font(&name, &new).unwrap();
+        assert_eq!(again, path);
+        assert_eq!(std::fs::read(&path).unwrap(), new, "the old font was kept");
+        // The same bytes: nothing written (the file is the same file).
+        let inode = |p: &std::path::Path| {
+            std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(p).unwrap())
+        };
+        let before = inode(&path);
+        super::cache_font(&name, &new).unwrap();
+        assert_eq!(inode(&path), before);
+        // And nothing is left beside it.
+        let dir = path.parent().unwrap();
+        let left: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!(".{name}"))
+            })
+            .collect();
+        let _ = std::fs::remove_file(&path);
+        assert!(left.is_empty(), "{left:?}");
     }
 
     /// R3-E-1: a theme's font named like the base look's ("Inter Variable")

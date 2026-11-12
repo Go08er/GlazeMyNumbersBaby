@@ -24,6 +24,10 @@ use crate::window::{Window, apply_backdrop, apply_theme_setting};
 const THEMES_ARE_CODE: &str = "Themes are code: each is a script that runs inside GMNB. It is \
      sandboxed and limited, and can only change how GMNB looks, but install only themes you trust.";
 
+/// The style class of the list's row for a chosen theme that isn't
+/// installed.
+const NOT_INSTALLED: &str = "wc-not-installed";
+
 pub fn show(win: &Rc<Window>) {
     let ctx = win.ctx().clone();
     let dialog = adw::PreferencesDialog::new();
@@ -262,6 +266,21 @@ pub fn show(win: &Rc<Window>) {
     page.add(&group);
 
     dialog.add(&page);
+    {
+        // In the least window the sliders' rows (their slider asks for 160
+        // px) left their text some 40 px: "Vo-lu-me", a subtitle four letters
+        // wide (R5-C-3). The sliders ask for less there; the same
+        // condition as the toggles' above.
+        let narrow = adw::Breakpoint::new(
+            adw::BreakpointCondition::parse("max-width: 330sp").expect("a condition"),
+        );
+        for class in ["wc-sound-volume-slider", "wc-opacity-slider"] {
+            if let Some(scale) = find_by_class(page.upcast_ref(), class) {
+                narrow.add_setter(&scale, "width-request", Some(&NARROW_SLIDER.to_value()));
+            }
+        }
+        dialog.add_breakpoint(narrow);
+    }
     // The theme rows' handlers live as long as the dialog does; once it
     // has closed, nothing more is asked of the theme for it, the watch on
     // the themes folder ends, and the hub tells the window again.
@@ -274,6 +293,25 @@ pub fn show(win: &Rc<Window>) {
     crate::window::own_keys(&dialog);
     dialog.present(Some(&win.widget()));
     fit_least_window(&dialog);
+}
+
+/// How wide the sliders of Settings' rows ask to be in the least window
+/// (160 px elsewhere).
+const NARROW_SLIDER: i32 = 80;
+
+/// The first widget under `root` with the style class `class`.
+fn find_by_class(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
+    if root.has_css_class(class) {
+        return Some(root.clone());
+    }
+    let mut child = root.first_child();
+    while let Some(c) = child {
+        if let Some(found) = find_by_class(&c, class) {
+            return Some(found);
+        }
+        child = c.next_sibling();
+    }
+    None
 }
 
 /// What libadwaita's bottom sheet, which Settings is shown in when the
@@ -607,7 +645,8 @@ impl ThemeSettings {
         let mut first: Option<gtk::CheckButton> = None;
         let mut listed = self.ctx.hub.list();
         // A chosen theme that isn't installed stays the choice: show it.
-        if !listed.iter().any(|l| l.id == active) {
+        let missing = !listed.iter().any(|l| l.id == active);
+        if missing {
             listed.push(crate::theme::Listed {
                 id: active.clone(),
                 name: active.clone(),
@@ -638,6 +677,9 @@ impl ThemeSettings {
             row.add_prefix(&check);
             // (GMNB_STEPS' `themes` reads each row's theme by its name.)
             row.set_widget_name(if l.id.is_empty() { "base" } else { &l.id });
+            if missing && l.id == active {
+                row.add_css_class(NOT_INSTALLED);
+            }
             if l.comes_with {
                 // On two lines: narrow, it would take the description's
                 // room. (GMNB_STEPS' `themes` finds it by its class.)
@@ -671,6 +713,12 @@ impl ThemeSettings {
                     t.ctx.store.data.borrow_mut().active_theme = id.clone();
                     t.ctx.store.persist();
                     t.rebuild_options();
+                    // The chosen theme's folder is watched wherever it
+                    // falls, from now, not at the folder's next change.
+                    if let Some(watch) = t.watch.borrow().as_ref() {
+                        watch.sync();
+                    }
+                    t.drop_uninstalled_rows();
                 }
             });
             self.list.append(&row);
@@ -678,6 +726,29 @@ impl ThemeSettings {
         self.restore.set_visible(self.ctx.hub.built_ins_missing());
         self.building.set(false);
         self.sync_report();
+    }
+
+    /// A theme that was chosen but isn't installed is listed so that it
+    /// can be seen to be the choice ([`Self::rebuild_list`], which marks
+    /// its row [`NOT_INSTALLED`]); once another is chosen its row goes
+    /// (R5-C-1: it stayed, "Doesn't load: Not installed", until the folder
+    /// next changed). The others' rows stay as they are, so that the
+    /// keyboard's focus stays where it is, and the themes aren't listed
+    /// (run) again.
+    fn drop_uninstalled_rows(&self) {
+        let active = self.ctx.hub.active();
+        let active = if active.is_empty() { "base" } else { &active };
+        let mut gone = Vec::new();
+        let mut row = self.list.first_child();
+        while let Some(r) = row {
+            row = r.next_sibling();
+            if r.has_css_class(NOT_INSTALLED) && r.widget_name().as_str() != active {
+                gone.push(r);
+            }
+        }
+        for r in gone {
+            self.list.remove(&r);
+        }
     }
 
     /// The theme's error and its notes (the latest 20), under the list.

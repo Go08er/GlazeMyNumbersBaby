@@ -122,7 +122,15 @@ impl<T: Serialize + DeserializeOwned + Default> Store<T> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => T::default(),
             _ => match read_bounded(&path, MAX_READ_BYTES) {
                 Some(bytes) => {
-                    let (data, complete) = match read_sections(&bytes) {
+                    // A byte-order mark an editor put first is read past,
+                    // and bytes that aren't UTF-8 (a damaged file) are read
+                    // as U+FFFD where they are: either took the whole file
+                    // for one that isn't JSON, every setting lost (round 5,
+                    // area E). What was changed so is kept as `.bad`.
+                    let text = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+                    let text = String::from_utf8_lossy(text);
+                    let mended = matches!(text, std::borrow::Cow::Owned(_));
+                    let (data, complete) = match read_sections(text.as_bytes()) {
                         Some((value, within)) => {
                             let (data, whole) = from_value_lenient(value);
                             (data, whole && within)
@@ -132,7 +140,7 @@ impl<T: Serialize + DeserializeOwned + Default> Store<T> {
                     // A file over what a save writes (one saved before
                     // saves were budgeted) loads whole, but the next save
                     // trims it: kept as well.
-                    if !complete || bytes.len() as u64 > MAX_SETTINGS_BYTES {
+                    if !complete || mended || bytes.len() as u64 > MAX_SETTINGS_BYTES {
                         let _ = write_atomic(&bad_copy_path(&path), &bytes);
                     }
                     data
@@ -680,6 +688,35 @@ mod tests {
         let kept = restored(&again.page_state("calculator").unwrap());
         // The three newest items fit beside the expression line.
         assert_eq!(kept, (display, expression, memory, history[..3].to_vec()));
+    }
+
+    /// A byte-order mark first, or a byte that isn't UTF-8 in one value,
+    /// costs no other setting: the rest of the file is read (it lost every
+    /// one, as a file that isn't JSON), and a mended file is kept as
+    /// `.bad`. A mark alone mends nothing.
+    #[test]
+    fn a_byte_order_mark_or_a_stray_byte_costs_no_other_setting() {
+        let path = tmp("bom");
+        let bad = path.with_file_name("settings.json.bad");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut text = b"\xEF\xBB\xBF".to_vec();
+        text.extend_from_slice(br#"{"vulkan": false, "width": 500}"#);
+        std::fs::write(&path, &text).unwrap();
+        let store = Store::<App>::load_from(path.clone());
+        assert_eq!(store.data.borrow().width, 500, "after a byte-order mark");
+        assert!(!store.data.borrow().vulkan);
+        assert!(!bad.exists(), "nothing was mended");
+
+        let mut text = br#"{"vulkan": false, "width": 500, "mode": "sci"#.to_vec();
+        text.push(0xFF);
+        text.extend_from_slice(br#"entific"}"#);
+        std::fs::write(&path, &text).unwrap();
+        let store = Store::<App>::load_from(path.clone());
+        let data = store.data.borrow();
+        assert_eq!(data.width, 500, "beside a stray byte");
+        assert!(!data.vulkan);
+        assert_eq!(data.mode, "sci\u{FFFD}entific");
+        assert_eq!(std::fs::read(&bad).unwrap(), text);
     }
 
     /// A section over its budget is dropped alone: the rest of the file,
