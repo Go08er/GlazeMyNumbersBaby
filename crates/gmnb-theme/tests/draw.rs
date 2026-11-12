@@ -1982,6 +1982,64 @@ fn a_keypad_frame_lists_its_cells_and_place_moves_them() {
     assert!(draw(&cells, 1, false).places.is_empty());
 }
 
+/// R7-B-1: the toolkit draws each placed key (its style's shadows, its
+/// text) again at the size `place` gives it, and none of that is charged
+/// to `draw`: 35 keys with 8 shadows of a blur of 30, placed at scale 20,
+/// took the software renderer 16 s for one frame (at 50, over 100 s).
+/// What the keys may cover together is bounded.
+#[test]
+fn place_cannot_scale_the_keys_past_what_they_may_cover() {
+    let (theme, _d) = load(
+        "place-scale",
+        r##"
+        return { api = 1, name = "T", layers = { keypad = {
+            place = function(key, frame)
+                if key.id == 4 then return { scale = 0.5 } end
+                return { scale = 100, opacity = 0.5 }
+            end,
+            draw = function(draw, frame) return 0 end,
+        } } }"##,
+    );
+    let cells = vec![cell(1, 0, 0), cell(2, 0, 1), cell(3, 1, 0), cell(4, 1, 1)];
+    let f = Frame {
+        keys: Some(Keys {
+            pad: 1,
+            layout: 1,
+            cells: &cells,
+        }),
+        ..frame()
+    };
+    let drawn = theme.draw(LayerKind::Keypad, &Ctx::default(), &f).unwrap();
+    let area = |c: &KeyCell| c.rect[2] * c.rect[3];
+    let own: f32 = cells.iter().map(area).sum();
+    let covered: f32 = cells
+        .iter()
+        .zip(&drawn.places)
+        .map(|(c, p)| area(c) * p.map_or(1.0, |p| p.scale * p.scale))
+        .sum();
+    assert!(
+        covered <= 2.25 * own * 1.001,
+        "{covered} of {own}: {drawn:?}"
+    );
+    assert!(drawn.places.iter().flatten().all(|p| p.scale <= 4.0));
+    // Still a place: bigger than at rest, and the key that asked for less
+    // is still smaller.
+    assert!(drawn.places[1].unwrap().scale > 1.0);
+    assert!(drawn.places[3].unwrap().scale < 1.0);
+
+    // A show or a hop of every key a little larger is left as it is.
+    let (theme, _d) = load(
+        "place-hop",
+        r##"
+        return { api = 1, name = "T", layers = { keypad = {
+            place = function(key, frame) return { scale = 1.3, dy = -4 } end,
+            draw = function(draw, frame) return 0 end,
+        } } }"##,
+    );
+    let drawn = theme.draw(LayerKind::Keypad, &Ctx::default(), &f).unwrap();
+    assert!(drawn.places.iter().flatten().all(|p| p.scale == 1.3));
+}
+
 #[test]
 fn a_keypad_whose_layout_changes_gets_new_cells() {
     let (theme, _d) = load(
