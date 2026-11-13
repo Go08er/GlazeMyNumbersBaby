@@ -1484,9 +1484,7 @@ fn swirls_timed(name: &str, slow_calls: u32) -> Theme {
 fn swirls_clocked(name: &str, from: u32, until: u32, step: f64) -> Theme {
     swirls_advanced(
         name,
-        &format!(
-            "now += if ticks > {from} and ticks <= {until} then {step} else 0.000001"
-        ),
+        &format!("now += if ticks > {from} and ticks <= {until} then {step} else 0.000001"),
     )
 }
 
