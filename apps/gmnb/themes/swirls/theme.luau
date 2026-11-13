@@ -1338,10 +1338,11 @@ local function keep(width: number, height: number): (Kept, boolean)
 	if k and k.width == width and k.height == height then
 		return k, false
 	end
+	local began = os.clock()
 	local made, whole, row = timed(width, height)
-	-- (The second timing only where the first was not very slow: on a very
+	-- (The second timing only where the first was quick to make: on a very
 	-- slow machine it would be the frame's undoing, and the first has told.)
-	if row > 0 and whole > SLOW and thin < 16 and whole < 4 * SLOW then
+	if row > 0 and whole > SLOW and thin < 16 and os.clock() - began < 0.002 then
 		-- Slow, or only busy for a moment: the quicker of two timings.
 		local again, whole_again, row_again = timed(width, height)
 		if whole_again < whole then
@@ -1689,12 +1690,17 @@ local function background_frame(draw: Draw, frame: Frame): Again
 end
 
 -- A frame that takes this long (of the wall's clock) is one that the 8 ms
--- may be gone from, were the machine a little busier.
-local SLOW_FRAME = 0.0035
+-- may be gone from, were the machine a little busier; one that takes
+-- much longer was held up by something else (the deadline is of the
+-- processor's time, which waiting doesn't use) and tells nothing.
+local SLOW_FRAME, STALLED = 0.0035, 0.016
 -- How many such frames, net of the quick ones between, make the paint
 -- coarser, and by how much.
 local SLOW_FRAMES, COARSER = 3, 1.6
-local slow_frames = 0
+-- And how many frames in a row without one make it timed again (the
+-- machine may be quiet again; `keep` makes it finer if it is).
+local CALM_FRAMES = 600
+local slow_frames, calm_frames = 0, 0
 
 -- The background, and the care that it never loses its place: a machine
 -- can become busy after a window's size was timed, and then the frames
@@ -1707,15 +1713,26 @@ local function background(draw: Draw, frame: Frame): Again
 	local before = kept
 	local again = background_frame(draw, frame)
 	if frame.motion and before ~= nil and before == kept then
-		if os.clock() - started > SLOW_FRAME then
+		local spent = os.clock() - started
+		if spent > SLOW_FRAME and spent < STALLED then
+			calm_frames = 0
 			slow_frames += 1
 			if slow_frames >= SLOW_FRAMES and thin < 16 then
 				thin = clamp(thin * COARSER, 1, 16)
 				kept = nil
 				slow_frames = 0
 			end
-		elseif slow_frames > 0 then
-			slow_frames -= 1
+		else
+			if slow_frames > 0 then
+				slow_frames -= 1
+			end
+			calm_frames += 1
+			if calm_frames >= CALM_FRAMES then
+				calm_frames = 0
+				if thin > 1 then
+					kept = nil
+				end
+			end
 		end
 	end
 	return again
