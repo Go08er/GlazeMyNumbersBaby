@@ -1202,6 +1202,9 @@ end
 -- How much coarser than that this machine needs both: 1, unless it is
 -- slow (`keep`, below, finds out).
 local thin = 1
+-- And how fine it may be made again by the timing of a new size: no finer than
+-- the frames made it, while the machine stays busy (`background`, below).
+local held = 1
 
 local function grid(width: number, height: number): (number, number)
 	local step = max(FINEST, sqrt(width * height * thin / POINTS))
@@ -1351,9 +1354,9 @@ local function keep(width: number, height: number): (Kept, boolean)
 			made, whole, row = again, whole_again, row_again
 		end
 	end
-	local steer = row > 0 and ((whole > SLOW and thin < 16) or (whole < AFFORDED / 2 and thin > 1))
+	local steer = row > 0 and ((whole > SLOW and thin < 16) or (whole < AFFORDED / 2 and thin > held))
 	if steer then
-		thin = clamp(thin * whole / AFFORDED, 1, 16)
+		thin = clamp(thin * whole / AFFORDED, held, 16)
 		made = make(width, height)
 		row = 0
 	end
@@ -1701,8 +1704,9 @@ local SLOW_FRAME, STALLED = 0.0045, 0.016
 -- How many such frames, net of the quick ones between, make the paint
 -- coarser, and by how much.
 local SLOW_FRAMES, COARSER = 3, 1.6
--- And how many frames in a row without one make it timed again (the
--- machine may be quiet again; `keep` makes it finer if it is).
+-- And how many frames in a row without one make it timed again, and let
+-- go of what the slow frames made it (the machine may be quiet again;
+-- `keep` makes it finer if it is).
 local CALM_FRAMES = 300
 local slow_frames, calm_frames = 0, 0
 
@@ -1723,6 +1727,7 @@ local function background(draw: Draw, frame: Frame): Again
 			slow_frames += 1
 			if slow_frames >= SLOW_FRAMES and thin < 16 then
 				thin = clamp(thin * COARSER, 1, 16)
+				held = thin
 				kept = nil
 				slow_frames = 0
 			end
@@ -1733,7 +1738,13 @@ local function background(draw: Draw, frame: Frame): Again
 			calm_frames += 1
 			if calm_frames >= CALM_FRAMES then
 				calm_frames = 0
+				held = 1
 				if thin > 1 then
+					-- (From fine: timed as a window of a new size is, which
+					-- finds what this machine needs, rather than from where
+					-- the busy spell left it, from which a quiet machine
+					-- would only be made finer if it were twice as quick.)
+					thin = 1
 					kept = nil
 				end
 			end

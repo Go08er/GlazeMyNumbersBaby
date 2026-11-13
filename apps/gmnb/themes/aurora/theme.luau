@@ -2285,6 +2285,11 @@ local function background(draw: Draw, frame: Frame): Again
 			if calm_frames >= CALM_FRAMES then
 				calm_frames = 0
 				if thin > 1 then
+					-- (From fine: timed as a window of a new size is, which
+					-- finds what this machine needs, rather than from where
+					-- the busy spell left it, from which a quiet machine
+					-- would only be made finer if it were twice as quick.)
+					thin = 1
 					kept = nil
 				end
 			end
