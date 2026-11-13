@@ -35,7 +35,7 @@ pub const POINTS: f64 = 1000.0;
 /// stops of a conic: 10.5 ms); a linear one's grows with its stops (2: 0.2
 /// ms; 16: 3 ms), and past 6 the GL renderer draws one through a
 /// picture of its own (3.3 MB over the window).
-fn paint(p: &Paint) -> f64 {
+fn paint(p: &Paint, turned: bool) -> f64 {
     match p {
         Paint::Color(_) => 1.3,
         Paint::Gradient(g) => {
@@ -48,7 +48,9 @@ fn paint(p: &Paint) -> f64 {
                     // columns, whatever its stops (the probe, over the window:
                     // 2 stops at 30 degrees 6.5 ms, as 16; at 90, 0.5 ms
                     // translucent and 0.08 opaque).
-                    if angled(g.angle) {
+                    // (Placed by its two points across the axes, or drawn
+                    // under a turn, it is the same gradient to the toolkit.)
+                    if turned || angled(g.angle) || across(&g.pixels) {
                         along.max(ANGLED)
                     } else if g.colors.iter().any(|c| c[3] < 1.0) {
                         along.max(TRANSLUCENT_LINEAR)
@@ -74,13 +76,25 @@ fn angled(degrees: f32) -> bool {
     off > 0.01 && off < 89.99
 }
 
+/// Whether a linear gradient placed by its two points (`from`, `to`) runs
+/// across the axes.
+fn across(pixels: &crate::types::Pixels) -> bool {
+    match (pixels.from, pixels.to) {
+        (Some([x0, y0]), Some([x1, y1])) => {
+            let (dx, dy) = (f64::from(x1 - x0).abs(), f64::from(y1 - y0).abs());
+            dx > 1e-3 * (dx + dy) && dy > 1e-3 * (dx + dy)
+        }
+        _ => false,
+    }
+}
+
 /// A path, a circle or a stroke: the GL renderer makes a mask of it, as
 /// large as what it covers (3.3 MB for the window; with a gradient, 6.1
 /// MB), and paints through it.
-fn masked(p: &Paint) -> f64 {
+fn masked(p: &Paint, turned: bool) -> f64 {
     match p {
-        Paint::Color(_) => 12.7 + paint(p),
-        gradient => 24.0 + paint(gradient),
+        Paint::Color(_) => 12.7 + paint(p, turned),
+        gradient => 24.0 + paint(gradient, turned),
     }
 }
 /// Text and glyphs: shaped and drawn (with a gradient, through a mask).
@@ -620,6 +634,9 @@ impl Meter {
     pub(crate) fn take(&mut self, op: &Op) -> Result<(), f64> {
         self.offscreen_opens(op);
         let glyphs = self.glyphs;
+        // A turn or slant in force: a gradient drawn under it runs across
+        // the axes whatever its own angle.
+        let turned = self.m.turned();
         // Points beside the area's, if what is drawn is seen at all.
         let mut extra = 0.0;
         let (weight, local): (f64, Option<[f64; 4]>) = match op {
@@ -684,7 +701,7 @@ impl Meter {
                 self.open(0.0, 0.0, None, false);
                 return Ok(());
             }
-            Op::Rect { rect, paint: p } => (paint(p), Some(rect_box(rect))),
+            Op::Rect { rect, paint: p } => (paint(p, turned), Some(rect_box(rect))),
             Op::RoundedRect {
                 rect,
                 radius,
@@ -694,7 +711,7 @@ impl Meter {
                 let half = (x1 - x0).abs().min((y1 - y0).abs()) / 2.0;
                 let corner = f64::from(radius.uniform()).min(half) * self.m.magnitude();
                 extra = CORNER * corner;
-                (paint(p) + 0.3, Some(rect_box(rect)))
+                (paint(p, turned) + 0.3, Some(rect_box(rect)))
             }
             Op::Circle {
                 center,
@@ -702,12 +719,12 @@ impl Meter {
                 paint: p,
             } => {
                 let ([x, y], r) = (center.map(f64::from), f64::from(*radius));
-                (masked(p), Some([x - r, y - r, x + r, y + r]))
+                (masked(p, turned), Some([x - r, y - r, x + r, y + r]))
             }
             Op::Fill { path, paint: p, .. } => {
                 self.cross(path, 0.0, STRAIN_FILL)?;
                 (
-                    masked(p),
+                    masked(p, turned),
                     crate::path::bounds(path).map(|b| b.map(f64::from)),
                 )
             }
@@ -732,7 +749,7 @@ impl Meter {
                 self.dash_units += units;
                 self.cross(path, f64::from(stroke.width) / 2.0, STRAIN_STROKE)?;
                 (
-                    masked(p),
+                    masked(p, turned),
                     crate::path::bounds(path)
                         .map(|b| grow(b.map(f64::from), f64::from(stroke.width))),
                 )
@@ -777,9 +794,12 @@ impl Meter {
                 let [x, y] = at.map(f64::from);
                 let size = f64::from(font.size);
                 let w = size * (text.len() as f64 + 1.0);
-                (text_weight(p), Some([x, y - size, x + w, y + 2.0 * size]))
+                (
+                    text_weight(p, turned),
+                    Some([x, y - size, x + w, y + 2.0 * size]),
+                )
             }
-            Op::Glyph { paint: p, .. } => (text_weight(p), Some(glyphs)),
+            Op::Glyph { paint: p, .. } => (text_weight(p, turned), Some(glyphs)),
             Op::Image { rect, .. } | Op::Animation { rect, .. } => (IMAGE, Some(rect_box(rect))),
             Op::Field { rect, picture } => {
                 let pixels = f64::from(picture.width) * f64::from(picture.height);
@@ -908,10 +928,10 @@ fn dashes(stroke: &Stroke, length: f64) -> f64 {
     }
 }
 
-fn text_weight(p: &Paint) -> f64 {
+fn text_weight(p: &Paint, turned: bool) -> f64 {
     match p {
         Paint::Color(_) => TEXT,
-        gradient => TEXT + TEXT_MASK + paint(gradient),
+        gradient => TEXT + TEXT_MASK + paint(gradient, turned),
     }
 }
 
