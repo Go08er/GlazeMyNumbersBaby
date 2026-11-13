@@ -1482,6 +1482,17 @@ fn swirls_timed(name: &str, slow_calls: u32) -> Theme {
 /// from call `from` up to call `until`, and a millionth of a second
 /// otherwise: a machine that is busy for a while, from when to when.
 fn swirls_clocked(name: &str, from: u32, until: u32, step: f64) -> Theme {
+    swirls_advanced(
+        name,
+        &format!(
+            "now += if ticks > {from} and ticks <= {until} then {step} else 0.000001"
+        ),
+    )
+}
+
+/// Swirls with its `os.clock` moved on, at each call, by `advance` (Lua
+/// statements that add to `now`; `ticks` counts the calls, `seed` is its own).
+fn swirls_advanced(name: &str, advance: &str) -> Theme {
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).unwrap();
         for entry in std::fs::read_dir(from).unwrap() {
@@ -1503,7 +1514,7 @@ fn swirls_clocked(name: &str, from: u32, until: u32, step: f64) -> Theme {
     let file = dir.join("theme.luau");
     let source = std::fs::read_to_string(&file).unwrap();
     let shim = format!(
-        "local ticks, now = 0, 0\nlocal os = {{ clock = function(): number\n\tticks += 1\n\tnow += if ticks > {from} and ticks <= {until} then {step} else 0.000001\n\treturn now\nend }}\n"
+        "local ticks, now, seed = 0, 0, 7\nlocal os = {{ clock = function(): number\n\tticks += 1\n\t{advance}\n\treturn now\nend }}\n"
     );
     let (first, rest) = source.split_once('\n').unwrap();
     assert_eq!(first, "--!strict");
@@ -1582,6 +1593,44 @@ fn a_machine_that_becomes_busy_makes_the_paint_coarser_not_a_hook_that_is_switch
         "{:?}",
         theme.hooks()
     );
+}
+
+/// A machine that stays busy must not have the paint go finer and coarser
+/// and finer again (R9-A-1): after the frames made it coarser, the timing of
+/// the next picture, which is made of a few quick calls and can read quick
+/// between slow frames, may not take it back to fine until a quiet spell has
+/// gone by. Counted: the times the grid gets finer in 200 frames of a clock
+/// that is held up throughout.
+#[test]
+fn a_machine_that_stays_busy_does_not_have_the_paint_pump_between_coarse_and_fine() {
+    for stall in [0.003, 0.005, 0.008] {
+        // After the first frame a third of the calls of the clock (by a fixed pseudo-random sequence) find the
+        // process held up for `stall` s (the machine shared with another
+        // process, whose turn it is): the frames are slow, and a batch of
+        // the timing, which is two calls, is mostly quick.
+        let theme = swirls_advanced(
+            "pump",
+            &format!(
+                "seed = (seed * 16807) % 2147483647\n\tnow += if ticks > 10 and seed % 3 == 0 then {stall} else 0.0001"
+            ),
+        );
+        let mean = stall;
+        let c = ctx(&theme, &[]);
+        let mut widths = Vec::new();
+        for i in 0..200 {
+            let f = Frame {
+                time: i as f64 / 30.0,
+                dt: 1.0 / 30.0,
+                ..Frame::sized(1280.0, 800.0)
+            };
+            let d = draw_at(&theme, LayerKind::Background, &c, &f);
+            widths.push(field(&d).0.width);
+        }
+        let finer = widths.windows(2).filter(|w| w[1] > w[0] + 1).count();
+        println!("{mean}: {finer} finer, {widths:?}");
+        assert!(finer <= 1, "{mean}: {finer} times finer: {widths:?}");
+        assert!(theme.hooks().iter().all(|(_, s, off)| *s == 0 && !off));
+    }
 }
 
 // ---- An event that is still moving the paint when it goes ------------------------
