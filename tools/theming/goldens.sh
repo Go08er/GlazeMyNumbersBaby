@@ -5,7 +5,9 @@
 # settings). Usage, from the repo root, inside the nix dev shell:
 #   tools/theming/goldens.sh OUTDIR BINDIR [gmnb|dgmnb|all|pages]
 # BINDIR holds the gmnb and dgmnb binaries to capture (theming-work/v02-bin
-# for the v0.2.0 references).
+# for the v0.2.0 references). On a busy machine GMNB is still laying out its
+# window when the screenshot hook fires (a narrow layout, no History panel):
+# give it time, e.g. GMNB_SCREENSHOT_DELAY_MS=20000 GOLDENS_TIMEOUT=120.
 set -u
 # The profiles go in a folder of their own (GOLDENS_TMP, or a new one);
 # the private bus is privbus.conf, beside this script.
@@ -26,12 +28,12 @@ WSIZE=${WSIZE:-760x640}  # not SIZE: the nix shell sets SIZE=size (binutils)
 shot_g() { # NAME ENV...
   local n=$1; shift
   "${base[@]}" env GMNB_SCREENSHOT="$OUT/gmnb-$n.png" GMNB_SIZE=$WSIZE GMNB_STILL=1 "$@" \
-    timeout 30 "$BIN/gmnb" >>"$OUT/log.txt" 2>&1 || echo "FAIL gmnb $n" >>"$OUT/log.txt"
+    timeout "${GOLDENS_TIMEOUT:-30}" "$BIN/gmnb" >>"$OUT/log.txt" 2>&1 || echo "FAIL gmnb $n" >>"$OUT/log.txt"
 }
 shot_d() {
   local n=$1; shift
   "${base[@]}" env DGMNB_SCREENSHOT="$OUT/dgmnb-$n.png" ${BOXES:+DGMNB_TEXT_BOXES="$OUT/dgmnb-$n.json"} DGMNB_SIZE=$WSIZE "$@" \
-    timeout 30 "$BIN/dgmnb" >>"$OUT/log.txt" 2>&1 || echo "FAIL dgmnb $n" >>"$OUT/log.txt"
+    timeout "${GOLDENS_TIMEOUT:-30}" "$BIN/dgmnb" >>"$OUT/log.txt" 2>&1 || echo "FAIL dgmnb $n" >>"$OUT/log.txt"
 }
 modes=(standard scientific programmer date graphing currency length)
 EQS='y=sin(x)*3;x^2/4-3;y<cos(x)-4'

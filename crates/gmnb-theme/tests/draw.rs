@@ -42,7 +42,12 @@ impl Drop for Dir {
 }
 
 fn dir(name: &str) -> Dir {
-    let dir = std::env::temp_dir().join(format!("gmnb-draw-{}-{name}", std::process::id()));
+    // A folder of its own for each call: the tests run at once, and some
+    // share a name (one's clean-up took another's folder, which failed at
+    // the write of its theme now and then).
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("gmnb-draw-{}-{name}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     Dir(dir)
@@ -1373,6 +1378,46 @@ fn far_shapes_count_as_the_curves_they_are_made_of() {
 /// was 14 million of them, a minute of the main thread (the software
 /// renderer; round caps, gigabytes) in a frame that covered a window's
 /// worth, which the area charge alone let through.
+/// A linear gradient across the axes is charged as one whatever says so:
+/// its angle, its two points placed corner to corner, or a turn in force
+/// (the toolkit draws the three alike; the probe: 2 stops over the window,
+/// 6.5 ms across the axes against 0.08 along them, opaque). Round 8, A.
+#[test]
+fn a_gradient_across_the_axes_is_charged_as_one_however_it_is_placed() {
+    let window = Frame::sized(760.0, 640.0);
+    let cost = |body: &str| -> f64 {
+        let (theme, _d) = background("across", "", body);
+        theme
+            .draw(LayerKind::Background, &Ctx::default(), &window)
+            .map(|_| theme.api().frame_cost())
+            .unwrap_or_else(|e| panic!("{body}: {}", message(e)))
+    };
+    let rect = |paint: &str| format!("draw:rect(0, 0, frame.width, frame.height, {paint})");
+    let colors = "colors = { '#000000', '#ffffff' }";
+    let along = cost(&rect(&format!("gmnb.linear({{ angle = 90, {colors} }})")));
+    let angled = cost(&rect(&format!("gmnb.linear({{ angle = 30, {colors} }})")));
+    let placed = cost(&rect(&format!(
+        "gmnb.linear({{ from = {{ 0, 0 }}, to = {{ frame.width, frame.height }}, {colors} }})"
+    )));
+    let level = cost(&rect(&format!(
+        "gmnb.linear({{ from = {{ 0, 0 }}, to = {{ frame.width, 0 }}, {colors} }})"
+    )));
+    let turned = cost(&format!(
+        "draw:rotate(30) {}",
+        rect(&format!("gmnb.linear({{ angle = 90, {colors} }})"))
+    ));
+    assert!(angled > 10.0 * along, "{angled} {along}");
+    assert!(
+        placed >= angled * 0.99,
+        "placed corner to corner: {placed} against {angled}"
+    );
+    assert!(level < 2.0 * along, "placed level: {level} against {along}");
+    assert!(
+        turned >= angled * 0.5,
+        "under a turn: {turned} against {angled}"
+    );
+}
+
 #[test]
 fn a_dashed_stroke_is_charged_by_its_dashes() {
     let window = Frame::sized(760.0, 640.0);
