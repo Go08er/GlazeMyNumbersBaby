@@ -123,7 +123,7 @@ done
 %{_datadir}/icons/hicolor/scalable/apps/%{dapp_id}.svg
 
 %changelog
-* Mon Nov 09 2026 Go08er <Go08er@users.noreply.github.com> - 0.3.0-1
+* Fri Nov 13 2026 Go08er <Go08er@users.noreply.github.com> - 0.3.0-1
 - GMNB gets scripted themes (Luau) with pictures, animations and sounds;
   the default look matches DGMNB's; Aurora, Sprinkles and Swirls built in
 * Sun Nov 01 2026 Go08er <Go08er@users.noreply.github.com> - 0.2.0-1

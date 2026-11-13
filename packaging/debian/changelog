@@ -1,10 +1,10 @@
-gmnb (0.3.0-1) UNRELEASED; urgency=medium
+gmnb (0.3.0-1) unstable; urgency=medium
 
   * New upstream release: GMNB gets scripted themes (Luau), with pictures,
     animations and sounds; the default look matches DGMNB's; three themes
     built in (Aurora, Sprinkles, Swirls).
 
- -- Go08er <Go08er@users.noreply.github.com>  Mon, 09 Nov 2026 12:00:00 +0000
+ -- Go08er <Go08er@users.noreply.github.com>  Fri, 13 Nov 2026 12:00:00 +0000
 
 gmnb (0.2.0-1) unstable; urgency=medium
 

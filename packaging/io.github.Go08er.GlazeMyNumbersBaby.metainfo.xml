@@ -77,10 +77,7 @@
     <color type="primary" scheme_preference="dark">#1b1035</color>
   </branding>
   <releases>
-    <!-- Unreleased: when v0.3.0 is tagged, drop type="development" and give
-         the tag's date (also in debian/changelog and the Fedora spec's
-         %changelog). The Packages workflow refuses a tag until then. -->
-    <release version="0.3.0" type="development" date="2026-11-09">
+    <release version="0.3.0" date="2026-11-13">
       <description>
         <p>Full theming: GMNB's look is now a theme, and a theme is a small script.</p>
         <ul>
@@ -92,6 +89,7 @@
           <li>Themes can give keys and results sounds of their own: Settings → Sound turns them off or sets their volume, and the desktop's event sounds setting is followed</li>
           <li>Settings → Theme lists the built-in themes and your own, with each theme's options</li>
           <li>Every page fits a 300 × 400 window, whatever the theme</li>
+          <li>GMNB never takes more than 4 GB of memory: a theme that would is stopped first and the base look shown</li>
         </ul>
       </description>
     </release>
