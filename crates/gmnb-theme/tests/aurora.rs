@@ -1146,11 +1146,17 @@ fn frames() {
 
 // ---- The slow-machine guard ---------------------------------------------------------
 
-/// Aurora with its `os.clock` replaced by one that runs `slow` s a call
-/// for the first `slow_calls` calls (a machine that is busy for a
-/// moment) and a millionth of a second after: the guard
+/// Aurora with its `os.clock` slow (0.15 ms a call) for its first
+/// `slow_calls` calls (a machine that is busy for a moment): the guard
 /// (`keep`) times the work of a new window size with it.
 fn aurora_timed(name: &str, slow_calls: u32) -> Theme {
+    aurora_clocked(name, 0, slow_calls, 0.00015)
+}
+
+/// Aurora with its `os.clock` replaced by one that runs `step` s a call
+/// from call `from` up to call `until`, and a millionth of a second
+/// otherwise: a machine that is busy for a while, from when to when.
+fn aurora_clocked(name: &str, from: u32, until: u32, step: f64) -> Theme {
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).unwrap();
         for entry in std::fs::read_dir(from).unwrap() {
@@ -1172,7 +1178,7 @@ fn aurora_timed(name: &str, slow_calls: u32) -> Theme {
     let file = dir.join("theme.luau");
     let source = std::fs::read_to_string(&file).unwrap();
     let shim = format!(
-        "local ticks, now = 0, 0\nlocal os = {{ clock = function(): number\n\tticks += 1\n\tnow += if ticks <= {slow_calls} then 0.01 else 0.000001\n\treturn now\nend }}\n"
+        "local ticks, now = 0, 0\nlocal os = {{ clock = function(): number\n\tticks += 1\n\tnow += if ticks > {from} and ticks <= {until} then {step} else 0.000001\n\treturn now\nend }}\n"
     );
     let (first, rest) = source.split_once('\n').unwrap();
     assert_eq!(first, "--!strict");
@@ -1212,15 +1218,58 @@ fn the_guard_is_not_fooled_by_a_moment_of_busy_and_lets_go_of_a_slow_one() {
     // three batches. Slow for the first timing only.
     let fine = field_width(&aurora_timed("fast", 0), 760.0, 640.0);
     assert!(fine >= 380, "{fine}");
-    let moment = field_width(&aurora_timed("moment", 8), 760.0, 640.0);
+    let moment = field_width(&aurora_timed("moment", 11), 760.0, 640.0);
     assert_eq!(moment, fine, "a moment of busy made the aurora coarser");
     // Slow throughout: coarser.
-    let theme = aurora_timed("slow", 16);
+    let theme = aurora_timed("slow", 20);
     let coarse = field_width(&theme, 760.0, 640.0);
-    assert!(coarse < fine / 2, "{coarse} {fine}");
+    assert!(coarse * 100 < fine * 85, "{coarse} {fine}");
     // And the next size that times quick: fine again.
     let again = field_width(&theme, 761.0, 640.0);
     assert!(again >= fine - 4, "{again} {fine}");
+}
+
+/// A machine that becomes busy after a window's size was timed (its first
+/// frame was quick) must make the sky coarser, a frame at a time, rather
+/// than have the hook run over its 8 ms until the engine takes it off: the
+/// frames themselves tell (`background`). Here every call of the clock
+/// after the first frame is 4 ms; the theme must not strike, and the grid
+/// must be coarser after a handful of frames than it was.
+#[test]
+fn a_machine_that_becomes_busy_makes_the_sky_coarser_not_a_hook_that_is_switched_off() {
+    // The first frame's calls: the guard's and the frame's, the columns' two and the
+    // batches' six, the guard's last.
+    let theme = aurora_clocked("busy-later", 11, u32::MAX, 0.004);
+    let c = ctx(&theme, true, &[]);
+    let width = |i: u32| {
+        let f = Frame {
+            dt: 1.0 / 15.0,
+            ..Frame::sized(1280.0, 800.0)
+        };
+        let d = draw_at(&theme, &c, &f, i as f64 / 15.0);
+        d.list
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                Op::Field { picture, .. } => Some(picture.width),
+                _ => None,
+            })
+            .expect("a field")
+    };
+    let fine = width(0);
+    let mut coarse = fine;
+    for i in 1..40 {
+        coarse = width(i);
+    }
+    assert!(coarse < fine, "{coarse} {fine}");
+    assert!(
+        theme
+            .hooks()
+            .iter()
+            .all(|(_, strikes, off)| *strikes == 0 && !off),
+        "{:?}",
+        theme.hooks()
+    );
 }
 
 /// Dragging through Freestyle's colour chooser makes a new palette at each

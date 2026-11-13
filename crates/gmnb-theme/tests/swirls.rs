@@ -93,13 +93,16 @@ const RUN: gmnb_theme::sched::Conditions = gmnb_theme::sched::Conditions {
 /// The app's own clock (`sched`) driven by what the background returns,
 /// on a screen of `hertz` whose frames come `early` seconds before they
 /// are due: how many times the layer is drawn in ten seconds, and how
-/// many of those are new pictures.
-fn drawn_in_ten_seconds(hertz: f64, early: f64) -> (usize, usize) {
+/// many of those are new pictures, and how many times the picture was made
+/// coarser on the way (a machine too busy: the paint then stands for as
+/// much as a fifth of a second while its two snapshots are made again).
+fn drawn_in_ten_seconds(hertz: f64, early: f64) -> (usize, usize, usize) {
     use gmnb_theme::sched::{Clock, Fire};
     let theme = swirls();
     let c = ctx(&theme, &[]);
     let mut clock = Clock::new();
-    let (mut draws, mut pictures) = (0, HashSet::new());
+    let (mut draws, mut pictures, mut coarser) = (0, HashSet::new(), 0);
+    let mut width = None;
     let mut draw = |clock: &mut Clock, now: f64| {
         let timing = clock.begin(now, RUN);
         let f = Frame {
@@ -111,6 +114,11 @@ fn drawn_in_ten_seconds(hertz: f64, early: f64) -> (usize, usize) {
         assert_eq!(d.retry, None, "{now}");
         draws += 1;
         pictures.insert(field(&d).0.serial);
+        let now_width = field(&d).0.width;
+        if width.is_some_and(|w| now_width < w) {
+            coarser += 1;
+        }
+        width = Some(now_width);
         // (A plain timer is never asked for: `next_thirtieth` has that.)
         assert_eq!(clock.end(now, d.again, RUN), gmnb_theme::sched::Wait::Frame);
     };
@@ -122,7 +130,7 @@ fn drawn_in_ten_seconds(hertz: f64, early: f64) -> (usize, usize) {
             draw(&mut clock, now);
         }
     }
-    (draws, pictures.len())
+    (draws, pictures.len(), coarser)
 }
 
 fn text(s: &str) -> OptionValue {
@@ -278,7 +286,7 @@ fn the_paint_flows_while_it_may_and_stands_when_it_may_not() {
     // one the theme was written on gets a coarser picture, by as much
     // as it is slower: `keep`, in the theme.)
     let nominal = (picture.width, picture.height) == (380, 320);
-    let thinned = picture.width < 380 && picture.width * 320 / 380 == picture.height;
+    let thinned = picture.width < 380 && (picture.width * 320 / 380).abs_diff(picture.height) <= 1;
     assert!(nominal || thinned, "{} x {}", picture.width, picture.height);
     if thinned {
         println!(
@@ -399,18 +407,22 @@ fn the_paint_flows_while_it_may_and_stands_when_it_may_not() {
 #[test]
 fn the_paint_is_drawn_thirty_times_a_second_on_the_apps_clock() {
     for early in [0.0, 0.0003, 0.00049] {
-        let (draws, pictures) = drawn_in_ten_seconds(60.0, early);
+        let (draws, pictures, coarser) = drawn_in_ten_seconds(60.0, early);
         assert!((299..=301).contains(&draws), "60 Hz, {early}: {draws}");
-        // (The first fifth of a second is one picture: one snapshot.)
+        // (The first fifth of a second is one picture: one snapshot. So is
+        // the fifth after the paint was made coarser on a busy machine.)
         assert!(
-            pictures >= draws - 6,
+            pictures + 5 * coarser >= draws - 6,
             "60 Hz, {early}: {pictures} of {draws}"
         );
     }
     for hertz in [50.0, 75.0, 120.0, 144.0, 165.0, 240.0] {
-        let (draws, pictures) = drawn_in_ten_seconds(hertz, 0.0002);
+        let (draws, pictures, coarser) = drawn_in_ten_seconds(hertz, 0.0002);
         assert!((240..=301).contains(&draws), "{hertz} Hz: {draws}");
-        assert!(pictures >= draws - 6, "{hertz} Hz: {pictures} of {draws}");
+        assert!(
+            pictures + 5 * coarser >= draws - 6,
+            "{hertz} Hz: {pictures} of {draws}"
+        );
     }
 }
 
@@ -1459,11 +1471,17 @@ fn frames() {
 
 // ---- The slow-machine guard ---------------------------------------------------------
 
-/// Swirls with its `os.clock` replaced by one that runs 0.1 s a call for
-/// the first `slow_calls` calls (a machine that is busy for a moment) and
-/// a millionth of a second after: the guard (`keep`) times the work of a
-/// new window size with it.
+/// Swirls with its `os.clock` slow (0.2 ms a call) for its first
+/// `slow_calls` calls (a machine that is busy for a moment): the guard
+/// (`keep`) times the work of a new window size with it.
 fn swirls_timed(name: &str, slow_calls: u32) -> Theme {
+    swirls_clocked(name, 0, slow_calls, 0.0002)
+}
+
+/// Swirls with its `os.clock` replaced by one that runs `step` s a call
+/// from call `from` up to call `until`, and a millionth of a second
+/// otherwise: a machine that is busy for a while, from when to when.
+fn swirls_clocked(name: &str, from: u32, until: u32, step: f64) -> Theme {
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).unwrap();
         for entry in std::fs::read_dir(from).unwrap() {
@@ -1485,7 +1503,7 @@ fn swirls_timed(name: &str, slow_calls: u32) -> Theme {
     let file = dir.join("theme.luau");
     let source = std::fs::read_to_string(&file).unwrap();
     let shim = format!(
-        "local ticks, now = 0, 0\nlocal os = {{ clock = function(): number\n\tticks += 1\n\tnow += if ticks <= {slow_calls} then 0.1 else 0.000001\n\treturn now\nend }}\n"
+        "local ticks, now = 0, 0\nlocal os = {{ clock = function(): number\n\tticks += 1\n\tnow += if ticks > {from} and ticks <= {until} then {step} else 0.000001\n\treturn now\nend }}\n"
     );
     let (first, rest) = source.split_once('\n').unwrap();
     assert_eq!(first, "--!strict");
@@ -1514,18 +1532,56 @@ fn field_width(theme: &Theme, w: f32, h: f32) -> u32 {
 /// quick has the fine grid again.
 #[test]
 fn the_guard_is_not_fooled_by_a_moment_of_busy_and_lets_go_of_a_slow_one() {
-    // The calls before a first timing ends: the frame's own, then two for
-    // each of three batches. Slow for the first timing only.
+    // The calls before a first timing ends: the two of the frame's own
+    // (the guard's and the background's), the one that starts the timing,
+    // then two for each of three batches. Slow for the first timing only.
     let fine = field_width(&swirls_timed("fast", 0), 760.0, 640.0);
-    let moment = field_width(&swirls_timed("moment", 7), 760.0, 640.0);
+    let moment = field_width(&swirls_timed("moment", 9), 760.0, 640.0);
     assert_eq!(moment, fine, "a moment of busy made the paint coarser");
     // Slow throughout: coarser.
-    let theme = swirls_timed("slow", 14);
+    let theme = swirls_timed("slow", 16);
     let coarse = field_width(&theme, 760.0, 640.0);
     assert!(coarse < fine, "{coarse} {fine}");
     // And the next size that times quick: fine again.
     let again = field_width(&theme, 761.0, 640.0);
     assert!(again >= fine - 2, "{again} {fine}");
+}
+
+/// A machine that becomes busy after a window's size was timed (its first
+/// frame was quick) must make the paint coarser, a frame at a time, rather
+/// than have the hook run over its 8 ms until the engine takes it off: the
+/// frames themselves tell (`background`). Here every call of the clock
+/// after the first frame is 4 ms; the theme must not strike, and the grid
+/// must be coarser after a handful of frames than it was.
+#[test]
+fn a_machine_that_becomes_busy_makes_the_paint_coarser_not_a_hook_that_is_switched_off() {
+    // The first frame's calls: the guard's and the frame's, the one that
+    // starts the timing, the timing's six, the guard's last.
+    let theme = swirls_clocked("busy-later", 10, u32::MAX, 0.004);
+    let c = ctx(&theme, &[]);
+    let draw = |t: f64| {
+        let f = Frame {
+            time: t,
+            dt: 1.0 / 30.0,
+            ..Frame::sized(1280.0, 800.0)
+        };
+        let d = draw_at(&theme, LayerKind::Background, &c, &f);
+        field(&d).0.width
+    };
+    let fine = draw(0.0);
+    let mut coarse = fine;
+    for i in 1..40 {
+        coarse = draw(i as f64 / 30.0);
+    }
+    assert!(coarse < fine, "{coarse} {fine}");
+    assert!(
+        theme
+            .hooks()
+            .iter()
+            .all(|(_, strikes, off)| *strikes == 0 && !off),
+        "{:?}",
+        theme.hooks()
+    );
 }
 
 // ---- An event that is still moving the paint when it goes ------------------------
