@@ -1633,6 +1633,43 @@ fn a_machine_that_stays_busy_does_not_have_the_paint_pump_between_coarse_and_fin
     }
 }
 
+/// And when the machine is quiet again the paint is as fine as a quiet
+/// machine's, not as fine as the timing of a new size happens to leave it
+/// (R9-A-2): that timing only makes the grid finer when the frame would take
+/// under half of what is afforded, so a grid made coarser by a busy spell,
+/// timed again after the quiet spell, stayed 1.6 times coarser for good. The
+/// clock here is busy (4 ms a call) for the first 400 calls, then takes `quiet`
+/// s a call.
+#[test]
+fn when_the_machine_is_quiet_again_the_paint_is_as_fine_as_on_a_quiet_one() {
+    for quiet in [0.00005, 0.0001, 0.00015, 0.0002] {
+        let run = |busy: bool| {
+            let theme = swirls_advanced(
+                "recover",
+                &format!(
+                    "now += if ticks > 10 and ticks <= {} then 0.004 else {quiet}",
+                    if busy { 400 } else { 0 }
+                ),
+            );
+            let c = ctx(&theme, &[]);
+            let mut width = 0;
+            for i in 0..1200 {
+                let f = Frame {
+                    time: i as f64 / 30.0,
+                    dt: 1.0 / 30.0,
+                    ..Frame::sized(1600.0, 1000.0)
+                };
+                let d = draw_at(&theme, LayerKind::Background, &c, &f);
+                width = field(&d).0.width;
+            }
+            width
+        };
+        let (after, fresh) = (run(true), run(false));
+        println!("{quiet}: after a busy spell {after}, fresh {fresh}");
+        assert_eq!(after, fresh, "{quiet}");
+    }
+}
+
 // ---- An event that is still moving the paint when it goes ------------------------
 
 /// How many pixels of the paint an event of `kind` moves, `age` seconds
