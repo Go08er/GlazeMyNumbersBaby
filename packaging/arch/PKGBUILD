@@ -16,8 +16,8 @@ makedepends=('cargo' 'gtk4' 'libadwaita' 'wayland' 'libxkbcommon')
 # C++ (ring, Luau). base-devel's gcc builds both.
 options=('!lto' '!debug')
 source=("$pkgbase-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-# Pinned to the tag tarball's checksum once v0.3.0 is published.
-sha256sums=('SKIP')
+# The v0.3.0 tag tarball's checksum.
+sha256sums=('9b83816738f6b9e5aa7d7355c1db90885583f6f49b4679c0cb12822833fc84ba')
 
 _src="GlazeMyNumbersBaby-$pkgver"
 
