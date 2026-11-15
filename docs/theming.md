@@ -1700,7 +1700,7 @@ The rules:
    stopped halfway through writing it); after a trap it keeps its memory.
    A call that is wrong (a function it doesn't export, arguments that
    aren't numbers or don't fit, an offset or a length outside its memory,
-   a picture over 512 a side) does nothing and returns nothing (`take`:
+   a picture over 262 144 pixels or 16 384 a side) does nothing and returns nothing (`take`:
    `false`), with a note once for each place in the theme's code it is
    made from.
 6. **Pictures.** A module's picture keeps `gmnb.pixels`' rules: it
@@ -1709,8 +1709,8 @@ The rules:
    that what stands on screen is never out of date. `ready()` says
    whether a change now would be taken, so that a theme can skip the work
    when it wouldn't; the layer is owed its frame then too. 4 module
-   pictures per theme, each up to 512 × 512, counted against the image
-   total at their current size.
+   pictures per theme, each any shape of up to 262 144 pixels (a field's;
+   16 384 a side), counted against the image total at their current size.
 7. **The same everywhere.** Relaxed SIMD is off, NaNs are made canonical
    and there are no threads: a module computes the same bytes on every
    machine.
