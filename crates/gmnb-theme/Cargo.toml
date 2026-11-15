@@ -20,5 +20,17 @@ gmnb-sound.workspace = true
 # `send` (GMNB's themes live on the main thread), no `async`, no JIT.
 mlua = { version = "0.12.2", default-features = false, features = ["luau"] }
 # The processor time a call has had (clock_gettime): what its time limit
-# measures.
+# measures; and the timer on it that stops a theme's module at its deadline.
 libc = "0.2"
+# A theme's WebAssembly modules (docs/theming.md, "Modules"): Cranelift, the
+# 36 LTS line. Only what is needed: no Pulley, no cache (compiled code is
+# never written to disk or loaded), no component model, no WASI, no async,
+# no parallel compilation, no GC, no threads, no profiling.
+wasmtime = { version = "36.0.20", default-features = false, features = ["cranelift", "runtime", "std"] }
+# Reading a module's sections before it is compiled (imports, a start
+# function, what its memories declare): the version wasmtime brings.
+wasmparser = { version = "=0.236.1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# The tests' modules, written as text.
+wat = "=1.236.1"

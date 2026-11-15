@@ -85,6 +85,7 @@ pub mod fontname;
 pub mod install;
 pub mod layer;
 pub mod library;
+pub mod module;
 pub mod path;
 pub mod picture;
 pub mod sched;
@@ -166,6 +167,14 @@ pub struct Limits {
     pub string_bytes: usize,
     /// All strings and map keys of a converted tree together, in bytes.
     pub total_string_bytes: usize,
+    /// WebAssembly modules a theme may name ([`module`]).
+    pub modules: usize,
+    /// All of a theme's module files together, in bytes: counted before
+    /// anything is compiled (the compiler can't be stopped midway, so what
+    /// it is given is bounded, not how long it takes).
+    pub module_bytes: u64,
+    /// What one module's memory may grow to, in bytes.
+    pub module_memory: usize,
     /// The draw API's caps.
     pub draw: DrawLimits,
 }
@@ -193,6 +202,9 @@ impl Default for Limits {
             nodes: 20_000,
             string_bytes: 4 << 10,
             total_string_bytes: 1 << 20,
+            modules: 4,
+            module_bytes: 256 << 10,
+            module_memory: 64 << 20,
             draw: DrawLimits::default(),
         }
     }

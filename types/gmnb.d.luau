@@ -741,7 +741,51 @@ export type Pixels = {
 	set: (self: Pixels, data: buffer) -> boolean,
 }
 
-export type Picture = Image | Animation | Pixels
+-- A picture a theme's module fills (module:picture()). Each call of
+-- module:picture() makes another, four at most.
+export type ModulePicture = {
+	-- What its last take gave it: 0 × 0 before its first.
+	width: number,
+	height: number,
+	-- Whether a take now would be taken: false if the picture changed
+	-- too recently (30 times a second at most). The layer being drawn is
+	-- then drawn once more when it can be, take or no take.
+	ready: (self: ModulePicture) -> boolean,
+	-- width × height × 4 bytes of the module's memory at offset become
+	-- the picture (as Pixels' set takes them: red, green, blue, opacity,
+	-- not premultiplied, rows from the top), 1 × 1 to 512 × 512. Returns
+	-- false, changing nothing, if it isn't ready, or if the bytes aren't
+	-- in the module's memory (with a note). The same bytes again change
+	-- nothing and cost nothing.
+	take: (self: ModulePicture, module: Module, offset: number, width: number, height: number) -> boolean,
+}
+
+-- A WebAssembly module of the theme's folder (gmnb.module). Named at the
+-- top of the file, it is compiled when the theme is applied, never while
+-- Settings lists themes; it can be used in hooks only (draw, preview,
+-- style, ...), where it is always ready. At the top of the file its
+-- calls are an error. A call that is wrong (an offset or a length
+-- outside its memory, a function it doesn't have, arguments that don't
+-- fit) does nothing and returns nothing, with a note once per call site.
+export type Module = {
+	-- Its path in the theme's folder.
+	file: string,
+	-- Calls one of its functions, on the hook's own time: numbers in,
+	-- numbers out. An i32 takes a whole number from -2^31 to 2^32 - 1, an
+	-- i64 a whole number, an f32 or f64 any number. Past the hook's
+	-- deadline it is stopped (the hook's timeout), and the module starts
+	-- afresh, its memory as on load; a trap is an error in the hook.
+	call: (self: Module, name: string, ...number) -> ...number,
+	-- Copies the buffer into its memory at offset.
+	write: (self: Module, offset: number, data: buffer) -> (),
+	-- Copies length bytes of its memory at offset into a new buffer (1 MiB
+	-- at most).
+	read: (self: Module, offset: number, length: number) -> buffer?,
+	-- A new picture for it to fill (no size until its first take).
+	picture: (self: Module) -> ModulePicture,
+}
+
+export type Picture = Image | Animation | Pixels | ModulePicture
 
 export type ImageOptions = {
 	-- "trilinear" (the default for stills): smooth, and clean when drawn
@@ -1301,6 +1345,10 @@ export type Gmnb = {
 	-- Any number, at any time; the same spec again is the same ramp. The
 	-- app holds the colours of eight at once and makes again one it let go.
 	ramp: (spec: RampSpec) -> Ramp,
+	-- A WebAssembly module: a .wasm file of the theme's folder, named at
+	-- the top of the file (four at most, 256 KiB together). The same file
+	-- again is the same module.
+	module: (file: string) -> Module,
 
 	-- Sound.
 	synth: (recipe: Recipe) -> Sound,

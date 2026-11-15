@@ -73,6 +73,9 @@ pub struct DrawLimits {
     pub canvas_side: u32,
     /// Pictures a theme may make to fill.
     pub canvases: usize,
+    /// Pictures a theme's modules may fill (`module:picture`): each up to
+    /// [`DrawLimits::canvas_side`] a side.
+    pub module_pictures: usize,
     /// Fields per `draw`.
     pub fields: usize,
     /// Ramps whose colours are held at once (a theme may make any number:
@@ -102,6 +105,7 @@ impl Default for DrawLimits {
             animations: 4,
             canvas_side: 512,
             canvases: 4,
+            module_pictures: 4,
             fields: 2,
             ramps: 8,
         }
@@ -1120,13 +1124,14 @@ pub struct Api {
 impl Api {
     /// Makes the `draw` table and adds the drawing constructors
     /// (`gmnb.path`, `gmnb.svg_path`, `gmnb.image`, `gmnb.noise`,
-    /// `gmnb.animation`, `gmnb.pixels`, `gmnb.ramp`) to `gmnb`. Called
-    /// while the engine's globals are registered.
+    /// `gmnb.animation`, `gmnb.pixels`, `gmnb.ramp`) and `gmnb.module`
+    /// to `gmnb`. Called while the engine's globals are registered.
     pub(crate) fn register(
         lua: &Lua,
         gmnb: &Table,
         limits: DrawLimits,
         pictures: Pictures,
+        modules: &Rc<RefCell<crate::module::Modules>>,
     ) -> mlua::Result<Api> {
         let shared = Rc::new(Shared {
             recorder: RefCell::new(Recorder::new(limits)),
@@ -1141,6 +1146,7 @@ impl Api {
         path::register(lua, gmnb)?;
         crate::picture::register(lua, gmnb, &shared)?;
         crate::field::register(lua, gmnb, &shared)?;
+        crate::module::register(lua, gmnb, &shared, modules)?;
         let table = draw_table(lua, &shared)?;
         Ok(Api { shared, table })
     }
@@ -1599,7 +1605,7 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     let Value::Table(image) = image else {
                         return Err(bad(
                             name,
-                            "expected a picture (gmnb.image, gmnb.noise, gmnb.animation, gmnb.pixels)",
+                            "expected a picture (gmnb.image, gmnb.noise, gmnb.animation, gmnb.pixels, module:picture)",
                         ));
                     };
                     let rect = rect(name, x, y, w, h)?;

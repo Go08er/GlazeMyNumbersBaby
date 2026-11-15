@@ -140,6 +140,18 @@ struct CanvasState {
     canvas: Canvas,
     /// How often it may change: 30 times a second, two in hand.
     allowance: Bucket,
+    /// A module's picture (`module:picture`), whose size each `take`
+    /// sets; else `gmnb.pixels`'.
+    module: bool,
+}
+
+/// Why a module picture didn't take what it was given.
+pub(crate) enum Refused {
+    /// Too soon after the last change: it can be taken in this many
+    /// seconds.
+    TooSoon(f64),
+    /// Over a cap: the note for the theme's author.
+    Over(String),
 }
 
 /// How an animation's own clock stands (docs/theming-media.md, "plays
@@ -169,6 +181,8 @@ pub struct Pictures {
     decoded: u64,
     noises: usize,
     canvases: HashMap<ImageId, CanvasState>,
+    /// Module pictures made.
+    module_pictures: usize,
     playheads: HashMap<ImageId, Playhead>,
     /// Pictures whose pixels turned out not to be there: not tried again.
     spoiled: Vec<ImageId>,
@@ -195,6 +209,7 @@ impl Pictures {
             decoded: 0,
             noises: 0,
             canvases: HashMap::new(),
+            module_pictures: 0,
             playheads: HashMap::new(),
             spoiled: Vec::new(),
             notes: Vec::new(),
@@ -516,7 +531,7 @@ impl Pictures {
             );
             return self.refuse(key, note);
         }
-        if self.canvases.len() >= self.limits.canvases {
+        if self.canvases.values().filter(|c| !c.module).count() >= self.limits.canvases {
             let note = format!(
                 "gmnb.pixels: a theme may make {} pictures to fill; left out",
                 self.limits.canvases
@@ -547,9 +562,109 @@ impl Pictures {
                     version: 0,
                 },
                 allowance: Bucket::new(),
+                module: false,
             },
         );
         Some(id)
+    }
+
+    /// `module:picture()`: a new picture a module fills, of no size until
+    /// its first `take`. Each call makes another, up to
+    /// [`DrawLimits::module_pictures`].
+    pub(crate) fn module_picture(&mut self) -> Option<ImageId> {
+        if self.module_pictures >= self.limits.module_pictures {
+            let note = format!(
+                "module:picture: a theme's modules may fill {} pictures; left out",
+                self.limits.module_pictures
+            );
+            self.note(note);
+            return None;
+        }
+        self.module_pictures += 1;
+        let id = self.add(
+            format!("module-picture:{}", self.module_pictures),
+            Picture {
+                kind: PictureKind::Canvas,
+                width: 0,
+                height: 0,
+            },
+        )?;
+        self.canvases.insert(
+            id,
+            CanvasState {
+                canvas: Canvas {
+                    width: 0,
+                    height: 0,
+                    pixels: Bytes::new(Vec::new()),
+                    version: 0,
+                },
+                allowance: Bucket::new(),
+                module: true,
+            },
+        );
+        Some(id)
+    }
+
+    /// Seconds from `now` until module picture `id` would take a change:
+    /// 0 if it would now. (Infinite: not a module picture.)
+    pub(crate) fn module_wait(&self, id: ImageId, now: f64) -> f64 {
+        match self.canvases.get(&id) {
+            Some(state) if state.module => state.allowance.wait(now),
+            _ => f64::INFINITY,
+        }
+    }
+
+    /// `picture:take(module, offset, w, h)` at `now`: module picture `id`
+    /// becomes the `width × height` picture of `bytes` (RGBA, as
+    /// `gmnb.pixels` takes them), charged to the image total at that size,
+    /// if it wasn't changed too recently. The same bytes at the same size
+    /// again change nothing and spend nothing.
+    pub(crate) fn take_module(
+        &mut self,
+        id: ImageId,
+        width: u32,
+        height: u32,
+        bytes: &[u8],
+        now: f64,
+    ) -> Result<(), Refused> {
+        let side = self.limits.canvas_side;
+        if width == 0 || height == 0 || width > side || height > side {
+            return Err(Refused::Over(format!(
+                "picture:take: {width}×{height}; a module's picture is at most {side}×{side}"
+            )));
+        }
+        let Some(state) = self.canvases.get(&id).filter(|s| s.module) else {
+            return Err(Refused::Over(
+                "picture:take was called on something that isn't a module's picture".into(),
+            ));
+        };
+        let c = &state.canvas;
+        if (c.width, c.height) == (width, height) && c.pixels[..] == *bytes {
+            return Ok(());
+        }
+        let held = u64::from(c.width) * u64::from(c.height) * 4;
+        let wanted = bytes.len() as u64;
+        if self.decoded - held + wanted > self.limits.image_bytes {
+            return Err(Refused::Over(format!(
+                "picture:take: {width}×{height}: the theme's pictures would be over {} MiB decoded",
+                self.limits.image_bytes >> 20
+            )));
+        }
+        let state = self.canvases.get_mut(&id).expect("looked up above");
+        if !state.allowance.take(now) {
+            return Err(Refused::TooSoon(state.allowance.wait(now)));
+        }
+        self.decoded = self.decoded - held + wanted;
+        let c = &mut state.canvas;
+        c.width = width;
+        c.height = height;
+        c.pixels = Bytes::new(bytes.to_vec());
+        c.version += 1;
+        if let Some(picture) = self.list.get_mut(id.0 as usize) {
+            picture.width = width;
+            picture.height = height;
+        }
+        Ok(())
     }
 
     /// `canvas:set(buffer)` at `now`: the picture takes `bytes`, if they
