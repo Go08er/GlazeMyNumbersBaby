@@ -1389,6 +1389,8 @@ impl Hub {
         // Once the next frame is drawn (the base look's, if a theme is
         // switched off), what the allocator holds free is given back.
         self.layers.after_frame(crate::memory::give_back);
+        // A theme waiting for its modules doesn't switch in after this.
+        self.pending.replace(None);
         if self.with_theme(|t| t.is_none()) {
             return;
         }
