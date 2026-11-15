@@ -245,16 +245,29 @@ impl CpuTimer {
         Some(CpuTimer { id })
     }
 
-    /// Fires after `after` more of this thread's processor time.
-    fn arm(&self, after: Duration) {
-        self.set(after.max(Duration::from_micros(1)));
+    /// Fires after `after` more of this thread's processor time. False:
+    /// it can't be (nothing would stop a call; none is made).
+    ///
+    /// The signal is unblocked on this thread first: a mask is inherited
+    /// across `exec` and by new threads, and with the signal blocked the
+    /// timer would stop nothing.
+    fn arm(&self, after: Duration) -> bool {
+        // SAFETY: builds a signal set on the stack and changes this
+        // thread's mask by it.
+        let unblocked = unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, tick_signal());
+            libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut()) == 0
+        };
+        unblocked && self.set(after.max(Duration::from_micros(1)))
     }
 
     fn disarm(&self) {
         self.set(Duration::ZERO);
     }
 
-    fn set(&self, after: Duration) {
+    fn set(&self, after: Duration) -> bool {
         let value = libc::itimerspec {
             it_interval: libc::timespec {
                 tv_sec: 0,
@@ -266,7 +279,7 @@ impl CpuTimer {
             },
         };
         // SAFETY: the timer is this one's, alive until it is dropped.
-        unsafe { libc::timer_settime(self.id, 0, &value, std::ptr::null_mut()) };
+        unsafe { libc::timer_settime(self.id, 0, &value, std::ptr::null_mut()) == 0 }
     }
 }
 
@@ -418,13 +431,14 @@ fn instantiate(module: &wasmtime::Module, memory: usize) -> Result<Live, String>
     store.limiter(|d| &mut d.limits);
     // The epoch moved: the call goes on unless the hook's time is up
     // (a tick from another thread's timer, or one early, arms this
-    // thread's again for what is left).
+    // thread's again for what is left; one that can't be armed again stops
+    // the call, which nothing would stop then).
     store.epoch_deadline_callback(|ctx| match ctx.data().span {
         Some(span) if span.is_over() => Err(wasmtime::Trap::Interrupt.into()),
-        Some(span) => {
-            with_timer(|t| t.arm(span.left()));
-            Ok(wasmtime::UpdateDeadline::Continue(1))
-        }
+        Some(span) => match with_timer(|t| t.arm(span.left())) {
+            Some(true) => Ok(wasmtime::UpdateDeadline::Continue(1)),
+            _ => Err(wasmtime::Trap::Interrupt.into()),
+        },
         None => Ok(wasmtime::UpdateDeadline::Continue(1)),
     });
     store.set_epoch_deadline(1);
@@ -579,7 +593,14 @@ impl Modules {
     /// [`Theme::prepare_modules`](crate::theme::Theme::prepare_modules)).
     pub(crate) fn prepare(&mut self) -> Option<Job> {
         self.closed = true;
-        if self.ready {
+        // Ready already, or a job is out: nothing more (and the hooks wait
+        // for that job's install).
+        if self.ready
+            || self
+                .slots
+                .iter()
+                .any(|s| matches!(s.state, State::Compiling))
+        {
             return None;
         }
         let mut items = Vec::new();
@@ -1076,12 +1097,12 @@ fn call(lua: &Lua, modules: &RefCell<Modules>, args: MultiValue) -> mlua::Result
     live.store.data_mut().span = Some(span);
     live.store.set_epoch_deadline(1);
     let done = match with_timer(|t| t.arm(span.left())) {
-        Some(()) => {
+        Some(true) => {
             let done = func.call(&mut live.store, &values, &mut out);
             with_timer(CpuTimer::disarm);
             Some(done)
         }
-        None => None,
+        _ => None,
     };
     live.store.data_mut().span = None;
     match done {

@@ -330,17 +330,19 @@ fn a_module_rebuilt_while_settings_is_open_reloads_its_theme() {
         &[
             ("GMNB_THEME", "modules"),
             ("GMNB_PREFS", "1"),
-            ("GMNB_STEPS", "wait:6000;quit"),
+            // For its line saying Settings is built (and watching); its
+            // own counters come after the run is over.
+            ("GMNB_THEME_STATS", "60000"),
         ],
     );
     app.line("gmnb theme modules: style bump 1");
-    // Settings is open (and watching) a moment after the window is.
-    std::thread::sleep(Duration::from_millis(1500));
+    app.line("theme: Settings built");
     // Written elsewhere and moved into place, as a build writes it.
     let next = profile.theme().join("modules/paint.wasm.new");
     std::fs::write(&next, module(100)).unwrap();
     std::fs::rename(&next, profile.module()).unwrap();
     app.line("gmnb theme modules: style bump 100");
-    let err = app.finish();
+    let err = app.stderr();
+    drop(app);
     assert!(!err.contains("still being compiled"), "{err}");
 }

@@ -644,6 +644,40 @@ fn an_endless_loop_in_a_frame_is_a_timeout_and_three_switch_the_hook_off() {
     assert_eq!(failed(&theme), Failure::Off);
 }
 
+/// A thread whose mask blocks the timer's signal (masks are inherited)
+/// still has its module stopped at the hook's deadline.
+#[test]
+fn a_call_is_stopped_on_a_thread_that_blocks_the_timers_signal() {
+    let d = dir("blocked");
+    d.wat("paint.wasm", PAINT);
+    std::fs::write(
+        d.0.join("theme.luau"),
+        format!(
+            "{LOOPS}\nreturn {{ api = 1, name = 'T', layers = {{ background = {{ draw = function() m:call('spin', 7) end }} }} }}"
+        ),
+    )
+    .unwrap();
+    let path = d.0.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // SAFETY: blocks one signal in this thread's own mask.
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, libc::SIGRTMIN() + 3);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        }
+        let mut theme = Theme::load(Source::folder("t", &path), limits()).unwrap();
+        ready(&mut theme);
+        let _ = tx.send(run(&theme, &Frame::sized(10.0, 10.0)).err());
+    });
+    // A call nothing stops would never come back.
+    let got = rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the call was stopped");
+    assert_eq!(got, Some(Failure::Failed(ThemeError::Timeout(ms(8)))));
+}
+
 #[test]
 fn a_module_call_runs_inside_whatever_deadline_its_hook_has() {
     let d = dir("load");
@@ -1000,7 +1034,8 @@ fn a_hook_never_runs_before_its_modules_are_ready() {
     assert!(theme.take_log().is_empty());
     let job = theme.prepare_modules().expect("a module to compile");
     assert!(job.bytes() > 0);
-    // Still held while it compiles.
+    // Still held while it compiles, prepared again or not.
+    assert!(theme.prepare_modules().is_none());
     assert!(!theme.modules_ready());
     assert!(matches!(failed(&theme), Failure::Failed(_)));
     let done = job.run();

@@ -1121,7 +1121,8 @@ impl Theme {
     /// What is left to compile, if anything, comes back: run it on a
     /// thread of its own ([`module::Job::spawn`]) and hand what it made to
     /// [`Theme::install_modules`]; the theme's hooks wait meanwhile. `None`:
-    /// the theme is ready now. (Call it once, on the theme's thread.)
+    /// the theme is ready now, or a job is already out (its hooks wait for
+    /// it still). (Call it on the theme's thread.)
     /// Listing a theme never calls it: nothing is read or compiled then.
     pub fn prepare_modules(&mut self) -> Option<module::Job> {
         let job = self.modules.borrow_mut().prepare();
