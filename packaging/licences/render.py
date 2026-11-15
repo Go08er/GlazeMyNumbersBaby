@@ -38,6 +38,20 @@ SUPPLEMENTS = {
         "mlua-sys": "0.13.0",
         "luau0-src": "0.22.0+luau740",
     },
+    "wasmtime.txt": {
+        "cranelift-assembler-x64": "0.123.20",
+        "cranelift-bitset": "0.123.20",
+        "pulley-interpreter": "36.0.20",
+        "pulley-macros": "36.0.20",
+        "wasm-encoder": "0.236.1",
+        "wasmparser": "0.236.1",
+        "wasmprinter": "0.236.1",
+        "wasmtime-internal-asm-macros": "36.0.20",
+        "wasmtime-internal-jit-icache-coherence": "36.0.20",
+        "wasmtime-internal-math": "36.0.20",
+        "wasmtime-internal-slab": "36.0.20",
+        "wasmtime-internal-versioned-export-macros": "36.0.20",
+    },
 }
 
 # Build dependencies whose code is compiled into a program. cargo-about
