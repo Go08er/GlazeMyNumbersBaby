@@ -10,6 +10,12 @@
 //! The hub also holds the theme's sounds (`crate::sound::Voice`): it hands
 //! the engine each theme loaded, hears each event the layers are told of,
 //! and is what Settings' Sound rows ask and tell.
+//!
+//! A theme with WebAssembly modules (docs/theming.md, "Modules") is loaded
+//! beside the one showing, which stays while its modules compile on a
+//! thread of their own (`crate::compile`); it switches in when they are
+//! ready, and no hook of it runs before. At start the window waits for
+//! them instead, so that it never shows another look first.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -102,7 +108,8 @@ pub struct Listed {
 /// Counters for the gates (`GMNB_THEME_STATS`): what theming costs.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats {
-    /// Luau machines alive (0 in the base look).
+    /// Luau machines alive (0 in the base look; 2 while a theme with
+    /// modules waits for them beside the one showing).
     pub machines: u32,
     /// Times `style(ctx)` ran.
     pub style_calls: u32,
@@ -126,6 +133,10 @@ pub struct Stats {
     /// What Settings has asked of the theme (`visible`, `preview`), in its
     /// passes (`paced::Turns`).
     pub settings: SettingsStats,
+    /// What has been done with themes' WebAssembly modules: all 0 until a
+    /// theme with modules is applied (no engine, signal handler, timer or
+    /// thread before).
+    pub modules: gmnb_theme::module::Stats,
 }
 
 /// Settings' passes of calls into the theme.
@@ -140,8 +151,22 @@ pub struct SettingsStats {
     pub done: u32,
 }
 
+/// A theme applied whose modules are being compiled: it switches in when
+/// they are ready ([`Hub::compiled`]).
+struct Pending {
+    /// Which load it is: one that a later choice gave up is let go.
+    token: u64,
+    id: String,
+    theme: Theme,
+}
+
 pub struct Hub {
     theme: RefCell<Option<Theme>>,
+    /// The theme chosen last, while its modules compile: the one showing
+    /// stays meanwhile.
+    pending: RefCell<Option<Pending>>,
+    /// The last load's number.
+    loads: Cell<u64>,
     /// The theme chosen: "" for the base look. It may not be loaded (not
     /// installed, or failed).
     active: RefCell<String>,
@@ -179,6 +204,9 @@ pub struct Hub {
     /// hooks are good for, and its option tiles', lasts until then.
     epoch: Cell<u64>,
     style_subscribers: RefCell<Vec<StyleSubscriber>>,
+    /// Told when a theme switches in after its modules compiled (Settings
+    /// shows its options then).
+    switch_subscribers: RefCell<Vec<StyleSubscriber>>,
     /// How the user is told of a theme that failed (a toast).
     tell: RefCell<Option<Tell>>,
     /// How while Settings is open (its own toasts: the window's are under
@@ -315,6 +343,8 @@ impl Hub {
         }
         let hub = Rc::new(Hub {
             theme: RefCell::new(None),
+            pending: RefCell::new(None),
+            loads: Cell::new(0),
             active: RefCell::new(String::new()),
             error: RefCell::new(None),
             notes: RefCell::default(),
@@ -340,6 +370,7 @@ impl Hub {
             fonts: RefCell::default(),
             epoch: Cell::new(0),
             style_subscribers: RefCell::default(),
+            switch_subscribers: RefCell::default(),
             tell: RefCell::new(None),
             front: RefCell::new(None),
             untold: RefCell::default(),
@@ -405,7 +436,9 @@ impl Hub {
                 }
             });
         }
-        hub.load(&config.theme);
+        // At start a theme's modules are waited for (no flash of another
+        // look), bounded by what may be compiled.
+        hub.load(&config.theme, true);
         hub
     }
 
@@ -573,7 +606,7 @@ impl Hub {
         let there = self.sources().iter().any(|s| s.id == id);
         let loaded = self.theme.borrow().is_some();
         if (loaded && !there) || (self.missing.get() && there) {
-            self.load(&id);
+            self.load(&id, false);
             return true;
         }
         false
@@ -648,28 +681,87 @@ impl Hub {
 
     /// Chooses a theme ("" or "base": the base look) and shows it.
     pub fn set_theme(&self, id: &str) {
-        self.load(id);
+        self.load(id, false);
     }
 
-    /// Runs the chosen theme's file again (Settings' Reload).
+    /// Runs the chosen theme's file again (Settings' Reload, and the
+    /// folder watch when one of its modules changed).
     pub fn reload(&self) {
         let id = self.active();
-        self.load(&id);
+        self.load(&id, false);
     }
 
-    fn load(&self, id: &str) {
+    /// Loads the theme `id` ("" or "base": the base look) and shows it.
+    /// The theme's file runs first, beside the theme showing; if it has
+    /// modules to compile, the theme showing stays until they are ready
+    /// (`wait`: they are waited for here, as at start).
+    fn load(&self, id: &str, wait: bool) {
         let id = if id == themes::BASE_ID { "" } else { id };
+        *self.active.borrow_mut() = id.to_string();
+        // A theme still compiling is given up for this one.
+        let token = self.loads.get() + 1;
+        self.loads.set(token);
+        self.pending.replace(None);
+        let source = match id {
+            "" => None,
+            id => self.sources().into_iter().find(|s| s.id == id),
+        };
+        let mut loaded = source.map(|source| Theme::load(source, Limits::default()));
+        if let Some(Ok(theme)) = &mut loaded
+            && let Some(job) = theme.prepare_modules()
+        {
+            let refused = if wait {
+                Some(crate::compile::now(job))
+            } else {
+                crate::compile::start(job, token)
+            };
+            match refused {
+                Some(done) => theme.install_modules(done),
+                None => {
+                    let Some(Ok(theme)) = loaded else {
+                        unreachable!("matched above")
+                    };
+                    self.pending.replace(Some(Pending {
+                        token,
+                        id: id.to_string(),
+                        theme,
+                    }));
+                    return;
+                }
+            }
+        }
+        self.switch(id, loaded);
+    }
+
+    /// A theme's modules were compiled ([`crate::compile`]): if it is still
+    /// the one chosen last, it is started and switches in now.
+    pub fn compiled(&self, token: u64, done: gmnb_theme::module::Compiled) {
+        let pending = self.pending.borrow_mut().take_if(|p| p.token == token);
+        let Some(Pending { id, mut theme, .. }) = pending else {
+            return;
+        };
+        theme.install_modules(done);
+        self.switch(&id, Some(Ok(theme)));
+        let style = self.style();
+        tell_all(&self.switch_subscribers, &style);
+    }
+
+    /// Shows the theme loaded for `id` (`None`: it isn't installed), the
+    /// one showing let go.
+    fn switch(&self, id: &str, loaded: Option<Result<Theme, themes::LoadError>>) {
         *self.active.borrow_mut() = id.to_string();
         self.error.replace(None);
         self.missing.set(false);
         self.notes.borrow_mut().clear();
         self.style_failed.set(false);
         self.styled.set(false);
-        // Unload first: one machine at a time.
+        // The theme showing goes before the next is shown: one machine at
+        // a time but while a theme's file runs, and while its modules
+        // compile.
         self.theme.replace(None);
         self.epoch.set(self.epoch.get() + 1);
         if !id.is_empty() {
-            match self.sources().into_iter().find(|s| s.id == id) {
+            match loaded {
                 None => {
                     // Kept as the choice: the theme returns when its
                     // folder does. Told, as a theme that fails is.
@@ -678,20 +770,18 @@ impl Hub {
                         .replace(Some(format!("The theme “{id}” isn't installed")));
                     self.tell(&format!("Theme “{id}” isn't installed"));
                 }
-                Some(source) => match Theme::load(source, Limits::default()) {
-                    Ok(theme) => {
-                        self.register_fonts(&theme);
-                        self.notes.borrow_mut().extend(theme.notes.list.clone());
-                        if let Some(measure) = self.measure.borrow().as_ref() {
-                            theme.api().set_measure(measure.clone());
-                        }
-                        self.theme.replace(Some(theme));
+                Some(Ok(theme)) => {
+                    self.register_fonts(&theme);
+                    self.notes.borrow_mut().extend(theme.notes.list.clone());
+                    if let Some(measure) = self.measure.borrow().as_ref() {
+                        theme.api().set_measure(measure.clone());
                     }
-                    Err(e) => {
-                        self.error.replace(Some(e.to_string()));
-                        self.tell(&format!("Theme “{id}” couldn't be loaded"));
-                    }
-                },
+                    self.theme.replace(Some(theme));
+                }
+                Some(Err(e)) => {
+                    self.error.replace(Some(e.to_string()));
+                    self.tell(&format!("Theme “{id}” couldn't be loaded"));
+                }
             }
         }
         // Nothing of the theme that was keeps running; the layers of the
@@ -1366,11 +1456,7 @@ impl Hub {
     }
 
     fn notify(&self, style: &Rc<Style>) {
-        // Collect first: a subscriber may itself subscribe or open UI.
-        let subs = std::mem::take(&mut *self.style_subscribers.borrow_mut());
-        let mut keep: Vec<StyleSubscriber> = subs.into_iter().filter(|(_, f)| f(style)).collect();
-        keep.append(&mut self.style_subscribers.borrow_mut());
-        *self.style_subscribers.borrow_mut() = keep;
+        tell_all(&self.style_subscribers, style);
     }
 
     /// Call `f` now and whenever the style changes, while `widget` is
@@ -1395,9 +1481,44 @@ impl Hub {
         );
     }
 
+    /// Call `f` whenever a theme switches in once its modules have
+    /// compiled (some time after it was chosen), while `widget` is alive.
+    pub fn subscribe_switch<W: IsA<glib::Object>>(&self, widget: &W, f: impl Fn(&W) + 'static) {
+        let weak = widget.downgrade();
+        push_pruned(
+            &self.switch_subscribers,
+            widget.upcast_ref::<glib::Object>().downgrade(),
+            Box::new(move |_| match weak.upgrade() {
+                Some(w) => {
+                    f(&w);
+                    true
+                }
+                None => false,
+            }),
+        );
+    }
+
+    /// The module files of the chosen theme (the one showing, or the one
+    /// waiting for its modules), where they are: what Settings' watch on
+    /// the themes folder looks for changes of.
+    pub fn module_files(&self) -> Vec<std::path::PathBuf> {
+        let files = |t: &Theme| -> Vec<std::path::PathBuf> {
+            t.modules()
+                .iter()
+                .filter_map(|f| t.source.path(f).ok())
+                .collect()
+        };
+        if let Some(p) = self.pending.borrow().as_ref() {
+            return files(&p.theme);
+        }
+        self.with_theme(|t| t.map(files).unwrap_or_default())
+    }
+
     pub fn stats(&self) -> Stats {
         let mut stats = self.stats.get();
-        stats.machines = u32::from(self.theme.borrow().is_some());
+        stats.machines =
+            u32::from(self.theme.borrow().is_some()) + u32::from(self.pending.borrow().is_some());
+        stats.modules = gmnb_theme::module::stats();
         stats.layers = self.layers.stats();
         stats.textures = self.layers.cache.textures();
         stats.media = self.layers.cache.media();
@@ -1568,6 +1689,15 @@ pub fn options_from_env(value: &str) -> Vec<(String, String)> {
 /// Tells every sound subscriber `text`, and lets go of those whose widget
 /// has gone (they answer false). A subscriber that subscribes another while
 /// being told is kept too.
+/// Tells each style subscriber, letting go of those whose widget has gone.
+fn tell_all(subscribers: &RefCell<Vec<StyleSubscriber>>, style: &Rc<Style>) {
+    // Collect first: a subscriber may itself subscribe or open UI.
+    let subs = std::mem::take(&mut *subscribers.borrow_mut());
+    let mut keep: Vec<StyleSubscriber> = subs.into_iter().filter(|(_, f)| f(style)).collect();
+    keep.append(&mut subscribers.borrow_mut());
+    *subscribers.borrow_mut() = keep;
+}
+
 fn tell_and_prune(subscribers: &RefCell<Vec<SoundSubscriber>>, text: &str) {
     let subs = std::mem::take(&mut *subscribers.borrow_mut());
     let mut keep: Vec<SoundSubscriber> = subs.into_iter().filter(|f| f(text)).collect();
@@ -1765,7 +1895,9 @@ mod tests {
     /// frame (never for one that returned nil: `gmnb_theme::sched`), and
     /// `after_frame`, once, for a hook that failed. The media thread
     /// reaches the main loop in one place too, `wake`, with a frame of an
-    /// animation that a layer being drawn asked for. The keypad's one
+    /// animation that a layer being drawn asked for; a theme's compile
+    /// thread in one, `arrived`, once, with the modules it compiled. The
+    /// keypad's one
     /// timer is the 110 ms flash of a key typed on the keyboard, and its
     /// one idle makes it short or not again once it has been laid out at
     /// a height on the other side of `keys.short.below` (a resize, never
@@ -1801,6 +1933,11 @@ mod tests {
                 &[],
             ),
             ("layers/replay.rs", include_str!("layers/replay.rs"), &[]),
+            (
+                "compile.rs",
+                include_str!("compile.rs"),
+                &[("invoke", "arrived")],
+            ),
             ("sound.rs", include_str!("sound.rs"), &[]),
             ("layers/tile.rs", include_str!("layers/tile.rs"), &[]),
             (

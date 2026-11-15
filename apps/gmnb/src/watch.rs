@@ -1,8 +1,10 @@
 //! Settings' watch on the themes folder (`crate::theme::user_dir`): while
 //! Settings is open, a theme folder that appears there (dragged in from a
 //! file manager), goes, or whose `theme.luau` changes shows in its list
-//! without a restart, a moment after the last change. Nothing watches the
-//! folder while Settings is closed: GMNB wakes for nothing at rest.
+//! without a restart, a moment after the last change; and when one of the
+//! chosen theme's WebAssembly modules changes (a `.wasm` file it names,
+//! rebuilt), the theme is loaded again. Nothing watches the folder while
+//! Settings is closed: GMNB wakes for nothing at rest.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -27,6 +29,12 @@ pub struct Watch {
     on_change: Box<dyn Fn()>,
     /// The chosen theme's id, as it is when the folder is read.
     chosen: Box<dyn Fn() -> String>,
+    /// The chosen theme's module files (real paths), and what to do when
+    /// one of them changed.
+    modules: Box<dyn Fn() -> Vec<PathBuf>>,
+    on_modules: Box<dyn Fn()>,
+    /// One of them changed since the folder last settled.
+    module_changed: std::cell::Cell<bool>,
     /// A monitor on the themes folder, and one on each folder in it (a
     /// theme's `theme.luau` arrives after its folder, and a monitor on a
     /// folder sees only what is directly in it).
@@ -38,18 +46,26 @@ pub struct Watch {
 
 impl Watch {
     /// Watches `dir` (made if it isn't there): `on_change` is called a
-    /// moment after anything in it changed, until [`Watch::stop`].
-    /// `chosen`: the chosen theme's id, whose folder is always watched.
+    /// moment after anything in it changed, until [`Watch::stop`], and
+    /// then `on_modules` too if one of the files `modules` names (the
+    /// chosen theme's modules, whose folders are watched as well) was one
+    /// of them. `chosen`: the chosen theme's id, whose folder is always
+    /// watched.
     pub fn start(
         dir: &Path,
         chosen: impl Fn() -> String + 'static,
+        modules: impl Fn() -> Vec<PathBuf> + 'static,
         on_change: impl Fn() + 'static,
+        on_modules: impl Fn() + 'static,
     ) -> Rc<Watch> {
         let _ = std::fs::create_dir_all(dir);
         let watch = Rc::new(Watch {
             dir: dir.to_path_buf(),
             on_change: Box::new(on_change),
             chosen: Box::new(chosen),
+            modules: Box::new(modules),
+            on_modules: Box::new(on_modules),
+            module_changed: std::cell::Cell::new(false),
             monitors: RefCell::default(),
             pending: RefCell::default(),
         });
@@ -86,6 +102,15 @@ impl Watch {
         pending.sort();
         pending.truncate(PENDING);
         want.extend(pending);
+        // The folders of the chosen theme's modules (four at most), a
+        // module in a folder of its theme's among them.
+        for file in (self.modules)() {
+            if let Some(parent) = file.parent()
+                && !want.iter().any(|w| w == parent)
+            {
+                want.push(parent.to_path_buf());
+            }
+        }
         let mut monitors = self.monitors.borrow_mut();
         monitors.retain(|path, monitor| {
             let keep = want.contains(path);
@@ -104,18 +129,28 @@ impl Watch {
                 continue;
             };
             let weak = Rc::downgrade(self);
-            monitor.connect_changed(move |_, _, _, _| {
+            monitor.connect_changed(move |_, file, other, _| {
                 if let Some(watch) = weak.upgrade() {
-                    watch.changed();
+                    watch.changed(file, other);
                 }
             });
             monitors.insert(path, monitor);
         }
     }
 
-    /// Something in the folder changed: it is read again once it has
-    /// settled for [`SETTLE`].
-    fn changed(self: &Rc<Self>) {
+    /// Something in the folder changed (`file`, or `other` it was moved
+    /// to or from): it is read again once it has settled for [`SETTLE`].
+    fn changed(self: &Rc<Self>, file: &gio::File, other: Option<&gio::File>) {
+        if !self.module_changed.get() {
+            let modules = (self.modules)();
+            let named = |f: &gio::File| {
+                f.path()
+                    .and_then(|p| real(&p))
+                    .is_some_and(|p| modules.contains(&p))
+            };
+            self.module_changed
+                .set(named(file) || other.is_some_and(named));
+        }
         if let Some(id) = self.pending.borrow_mut().take() {
             id.remove();
         }
@@ -125,6 +160,9 @@ impl Watch {
             watch.pending.borrow_mut().take();
             watch.sync();
             (watch.on_change)();
+            if watch.module_changed.replace(false) {
+                (watch.on_modules)();
+            }
         });
         *self.pending.borrow_mut() = Some(id);
     }
@@ -139,6 +177,13 @@ impl Watch {
             monitor.cancel();
         }
     }
+}
+
+/// `path` as its folder's real path and its name (the file itself may be
+/// gone): what a theme's module files are compared by.
+fn real(path: &Path) -> Option<PathBuf> {
+    let dir = std::fs::canonicalize(path.parent()?).ok()?;
+    Some(dir.join(path.file_name()?))
 }
 
 impl Drop for Watch {
@@ -172,7 +217,7 @@ mod tests {
             theme(&format!("t{i:02}"));
         }
         theme("zz-chosen");
-        let watch = Watch::start(&dir, || "zz-chosen".to_string(), || {});
+        let watch = Watch::start(&dir, || "zz-chosen".to_string(), Vec::new, || {}, || {});
         let watched: Vec<PathBuf> = watch.monitors.borrow().keys().cloned().collect();
         watch.stop();
         let _ = std::fs::remove_dir_all(&dir);

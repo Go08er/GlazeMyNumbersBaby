@@ -513,6 +513,21 @@ impl ThemeSettings {
                 });
         }
         {
+            // A theme with modules switches in once they have compiled,
+            // a moment after it was chosen: its options are shown then, and
+            // the folders of its modules watched.
+            let weak = Rc::downgrade(&this);
+            this.ctx.hub.subscribe_switch(&this.options_box, move |_| {
+                if let Some(t) = weak.upgrade() {
+                    t.rebuild_list();
+                    t.rebuild_options();
+                    if let Some(watch) = t.watch.borrow().as_ref() {
+                        watch.sync();
+                    }
+                }
+            });
+        }
+        {
             let weak = Rc::downgrade(&this);
             reload.connect_clicked(move |b| {
                 let Some(t) = weak.upgrade() else { return };
@@ -639,9 +654,25 @@ impl ThemeSettings {
         let watch = crate::watch::Watch::start(
             &crate::theme::user_dir(),
             move || hub.upgrade().map(|h| h.active()).unwrap_or_default(),
+            {
+                let hub = Rc::downgrade(&self.ctx.hub);
+                move || hub.upgrade().map(|h| h.module_files()).unwrap_or_default()
+            },
             move || {
                 if let Some(t) = weak.upgrade() {
                     t.refresh();
+                }
+            },
+            {
+                // One of the chosen theme's modules changed: the theme is
+                // loaded again, as Reload loads it.
+                let weak = Rc::downgrade(self);
+                move || {
+                    if let Some(t) = weak.upgrade() {
+                        t.ctx.hub.reload();
+                        t.rebuild_list();
+                        t.rebuild_options();
+                    }
                 }
             },
         );

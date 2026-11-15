@@ -796,19 +796,17 @@ impl Job {
             .items
             .into_iter()
             .map(|item| {
-                let result = precheck(&item.bytes, self.memory).and_then(|()| {
-                    count(&COMPILES);
-                    // A panic in the compiler is the module refused, never
-                    // a compile that doesn't come back.
-                    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // A panic in the checks or the compiler is the module
+                // refused, never a compile that doesn't come back.
+                let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    precheck(&item.bytes, self.memory).and_then(|()| {
+                        count(&COMPILES);
                         wasmtime::Module::new(self.engine, &item.bytes)
-                    }));
-                    match compiled {
-                        Ok(Ok(module)) => Ok(module),
-                        Ok(Err(e)) => Err(format!("doesn't compile: {}", short(&e))),
-                        Err(_) => Err("couldn't be compiled (the compiler failed)".into()),
-                    }
-                });
+                            .map_err(|e| format!("doesn't compile: {}", short(&e)))
+                    })
+                }));
+                let result = compiled
+                    .unwrap_or_else(|_| Err("couldn't be compiled (the compiler failed)".into()));
                 if let Ok(module) = &result {
                     remember(item.hash, item.bytes.clone(), module);
                 }
