@@ -40,8 +40,8 @@
 //! The base look, and a theme that names no module, never make wasmtime's
 //! engine (so wasmtime's signal handlers are never installed), the timer or
 //! its signal handler, nor start a thread ([`stats`] counts them). Compiled
-//! code is kept in memory for the session only, by its bytes' hash (a few
-//! modules: [`CACHE`]); nothing is ever written to disk, and nothing
+//! code is kept in memory for the session only, by its bytes' hash (the
+//! last eight modules); nothing is ever written to disk, and nothing
 //! precompiled is ever loaded.
 //!
 //! [`Theme::prepare_modules`]: crate::theme::Theme::prepare_modules
