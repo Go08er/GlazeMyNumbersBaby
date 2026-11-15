@@ -12,7 +12,7 @@ authors.workspace = true
 [dependencies]
 # The version DGMNB's own dependencies already bring (tiny-skia's): one
 # `png` in the lock file.
-png = "0.17"
+png = "0.18"
 # The portable decoder only: none of its `unsafe` SIMD paths is built.
 zune-jpeg = { version = "0.5", default-features = false, features = ["std"] }
 # The decoder; `color_quant` is the encoder's.

@@ -2336,7 +2336,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------
 MIT License
-Used by: png 0.17.16
+Used by: png 0.17.16, png 0.18.1
 
 Copyright (c) 2015 nwin
 

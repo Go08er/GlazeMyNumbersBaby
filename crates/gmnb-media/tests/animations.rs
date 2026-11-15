@@ -194,14 +194,40 @@ fn an_animated_png_is_composited_with_its_blends_and_disposals() {
 #[test]
 fn an_animated_pngs_first_frame_cant_ask_for_the_previous_picture() {
     // "Previous" on the first frame means "background": the frame is
-    // cleared, since nothing came before it.
+    // cleared, since nothing came before it. (A first frame smaller than
+    // the canvas can't be the default image, which covers it all: the
+    // default image here is a still the animation doesn't show.)
     let frames = [
         ApngFrame::new(0, 0, 2, 2, RED).dispose(2),
         ApngFrame::new(2, 2, 2, 2, GREEN),
     ];
-    let mut s = stream(&apng(4, 4, None, &frames, None));
+    let mut s = stream(&apng(4, 4, Some(&[255; 64]), &frames, None));
     assert_eq!(frame(&mut s, 0).0, ["RR..", "RR..", "....", "...."]);
     assert_eq!(frame(&mut s, 1).0, ["....", "....", "..GG", "..GG"]);
+}
+
+#[test]
+fn an_animated_pngs_default_image_smaller_than_its_canvas_is_refused() {
+    // The default image's frame covers the canvas (PNG 3, fcTL): one that
+    // doesn't is a broken file, refused when it is drawn, as any other.
+    let frames = [
+        ApngFrame::new(0, 0, 2, 2, RED),
+        ApngFrame::new(2, 2, 2, 2, GREEN),
+    ];
+    let file = apng(4, 4, None, &frames, None);
+    let refused = match probe(&file) {
+        Err(e) => matches!(e, Error::Broken(_)),
+        Ok(info) => match Stream::open(
+            Bytes::new(file.clone()),
+            info.format,
+            info.width,
+            info.height,
+        ) {
+            Err(e) => matches!(e, Error::Broken(_)),
+            Ok(mut s) => matches!(s.seek(0), Err(Error::Broken(_))),
+        },
+    };
+    assert!(refused);
 }
 
 fn webp_file() -> Vec<u8> {
