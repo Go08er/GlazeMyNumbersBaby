@@ -88,7 +88,10 @@ fn png_still(bytes: Bytes, width: u32, height: u32) -> Result<Vec<u8>, Error> {
     let mut reader = png_decoder(bytes, decoder_room(width, height))
         .read_info()
         .map_err(broken)?;
-    let mut buf = vec![0; reader.output_buffer_size()];
+    let size = reader
+        .output_buffer_size()
+        .ok_or_else(|| broken("a picture too large to hold"))?;
+    let mut buf = vec![0; size];
     // The first image of the file: of an animated PNG, the picture meant
     // for programs that don't animate.
     let frame = reader.next_frame(&mut buf).map_err(broken)?;

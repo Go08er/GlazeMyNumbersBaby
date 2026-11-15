@@ -800,7 +800,7 @@ pub fn eval(
             }
         }
         Expr::Call(f, args) => {
-            let arg = |i: usize| args.get(i).and_then(&ev);
+            let arg = |i: usize| args.get(i).and_then(ev);
             let a0 = arg(0)?;
             let trig = |s: i32| -> Option<Ex> {
                 // s: 0 sin, 1 cos, 2 tan.

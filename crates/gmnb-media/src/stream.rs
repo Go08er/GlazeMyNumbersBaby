@@ -524,7 +524,11 @@ impl Stream {
                     // image if that isn't a frame.
                     Some(*apng.reader.next_frame_info().map_err(broken)?)
                 };
-                let mut buf = vec![0; apng.reader.output_buffer_size()];
+                let size = apng
+                    .reader
+                    .output_buffer_size()
+                    .ok_or_else(|| broken("a frame too large to hold"))?;
+                let mut buf = vec![0; size];
                 let frame = apng.reader.next_frame(&mut buf).map_err(broken)?;
                 if frame.bit_depth != png::BitDepth::Eight {
                     return Err(broken("a bit depth the decoder left in place"));
