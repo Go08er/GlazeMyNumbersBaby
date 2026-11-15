@@ -101,13 +101,13 @@ keys() { wtype -s 80 "$@"; sleep "${KEY_WAIT:-0.4}"; }
 # `-M shift -k Tab` does not move GTK's focus backwards.
 isokey() { wtype -M shift -k ISO_Left_Tab -m shift; sleep "${KEY_WAIT:-0.4}"; }
 _ptr() { swaymsg -q seat seat0 cursor "$@"; }
-mv() { _ptr set "$1" "$2"; }
+point() { _ptr set "$1" "$2"; }
 press() { _ptr press "${1:-button1}"; }
 release() { _ptr release "${1:-button1}"; }
-click() { mv "$1" "$2"; sleep 0.1; press; sleep 0.05; release; sleep "${CLICK_WAIT:-0.3}"; }
+click() { point "$1" "$2"; sleep 0.1; press; sleep 0.05; release; sleep "${CLICK_WAIT:-0.3}"; }
 # scroll X Y AMOUNT: the wheel (positive down), as button5/button4 presses.
 scroll() {
-  mv "$1" "$2"; local n=${3:-1} b=button5
+  point "$1" "$2"; local n=${3:-1} b=button5
   if [ "$n" -lt 0 ]; then b=button4; n=$((-n)); fi
   while [ "$n" -gt 0 ]; do press "$b"; release "$b"; n=$((n-1)); sleep 0.1; done
 }

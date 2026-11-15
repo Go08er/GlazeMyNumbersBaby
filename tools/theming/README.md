@@ -218,7 +218,7 @@ that combination's env (`THEME_ENV`). With `APP=dgmnb` there are no themes.
 | `app ENV...` | Starts the binary with `GSK_RENDERER=cairo GMNB_STILL=1 GMNB_SOUND=null GTK_A11Y=none NO_AT_BRIDGE=1`, `THEME_ENV` and the given env, then waits 3 s (`APP_WAIT`) |
 | `keys ARGS` | `wtype -s 80 ARGS` (text, or `-k Escape`, `-M ctrl -k h -m ctrl`), then waits 0.4 s (`KEY_WAIT`) |
 | `isokey` | Shift+Tab as a real keyboard sends it: Shift with the `ISO_Left_Tab` keysym. wtype's plain Shift+Tab (`-M shift -k Tab`) does not move GTK's focus backwards |
-| `mv X Y`, `press [BTN]`, `release [BTN]`, `click X Y` | The pointer, through sway's IPC (`swaymsg seat seat0 cursor set / press / release`) |
+| `point X Y`, `press [BTN]`, `release [BTN]`, `click X Y` | The pointer, through sway's IPC (`swaymsg seat seat0 cursor set / press / release`) |
 | `scroll X Y N` | The wheel, N notches (negative up), as `cursor press button5` / `button4` |
 | `wait_ S` | Sleeps |
 | `shot NAME` | `grim $OUT/NAME.png` |

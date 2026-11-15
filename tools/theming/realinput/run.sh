@@ -10,7 +10,10 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 RES=${1:?WxH}; SCN=${2:?scenario}; OUTBASE=${3:-realinput-out}
-LIM=${LIM:-/home/goober/Documents/wincalc/theming-work/tools/lim}
+REPO=$(cd "$HERE/../../.." && pwd)
+# The project's CPU and memory cap (theming-work/tools/lim); without one, runs uncapped.
+LIM=${LIM:-$REPO/theming-work/tools/lim}
+[ -x "$LIM" ] || LIM=env
 export CARGO_INCREMENTAL=0 LIM_JOBS=${LIM_JOBS:-2}
 APP=${APP:-gmnb}; export APP
 if [ "$APP" = dgmnb ]; then themes=dgmnb; else themes=${THEMES:-base aurora sprinkles swirls}; fi
