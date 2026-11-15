@@ -845,8 +845,8 @@ proves not to be enough.
 |---|---|---|
 | `crates/gmnb-media` (new) | What a file is and how big (`sniff.rs`); decoding stills (`still.rs`); an animation's timeline (`anim.rs`), its frames composited (`stream.rs`), the player and its thread (`player.rs`); ramps and the field pass (`field.rs`); the allowance (`bucket.rs`). No toolkit and no Luau: bytes in, RGBA bytes out. | `png`, `zune-jpeg`, `gif`, `image-webp`; `libc` for a thread's processor time |
 | `crates/gmnb-sound` (new) | The synthesiser (`synth.rs`); reading sound files (`file.rs`, `resample.rs`); the mixer (`mixer.rs`); the table of sounds by event and how an entry becomes a play (`table.rs`); the PulseAudio client (`pulse.rs`); the engine and its thread (`engine.rs`); for tests only, a stand-in sound server (`standin.rs`, the `stand-in` feature) | `crmath`, `hound`, `lewton`, `pulseaudio` |
-| `crates/gmnb-theme` | `gmnb.synth`, `gmnb.sound`, `gmnb.note`; checking the `sounds` table and what `sound` returns; an event's name, and what an event plays (`decide`: steps 1 to 4 below, which the app and the render example share) (`sound.rs`). It declares and decides; it makes no sound. And the pictures' functions: `gmnb.image`, `gmnb.animation`, `gmnb.pixels` (`picture.rs`), `gmnb.ramp` and `draw:field` (`field.rs`), `draw:image`'s options (`draw.rs`): the caps, which frame of an animation is due, the allowances. It decodes nothing while a theme's code runs. | `gmnb-sound`, for the types; `gmnb-media` |
-| `apps/gmnb` | Turning bytes into `gdk::MemoryTexture`, owning the animation player, and the one place its thread reaches the main loop (`layers/replay.rs`, `layers/mod.rs`); the one sound engine, handed each theme's sounds, and every event's plays (`src/sound.rs`, held by the hub in `src/theme.rs`); Settings | both |
+| `crates/gmnb-theme` | `gmnb.synth`, `gmnb.sound`, `gmnb.note`; checking the `sounds` table and what `sound` returns; an event's name, and what an event plays (`decide`: steps 1 to 4 below, which the app and the render example share) (`sound.rs`). It declares and decides; it makes no sound. And the pictures' functions: `gmnb.image`, `gmnb.animation`, `gmnb.pixels` and module pictures' canvases (`picture.rs`), `gmnb.ramp` and `draw:field` (`field.rs`), `draw:image`'s options (`draw.rs`): the caps, which frame of an animation is due, the allowances. It decodes nothing while a theme's code runs. And a theme's WebAssembly modules ([theming.md](theming.md#modules)): `gmnb.module` and its calls, the engine made when first needed, the checks before compiling, the compile job a thread of the app's runs, the timer on a thread's processor time that stops a call at its hook's deadline, the compiled modules kept for the session (`module.rs`). | `gmnb-sound`, for the types; `gmnb-media`; `wasmtime` (Cranelift, the 36 LTS line), `wasmparser` |
+| `apps/gmnb` | Turning bytes into `gdk::MemoryTexture`, owning the animation player, and the one place its thread reaches the main loop (`layers/replay.rs`, `layers/mod.rs`); the one sound engine, handed each theme's sounds, and every event's plays (`src/sound.rs`, held by the hub in `src/theme.rs`); a theme's modules compiled on a thread started for it, and the one place that thread reaches the main loop (`src/compile.rs`), the theme waiting for them beside the one showing (`src/theme.rs`); Settings | both |
 
 Rules these keep:
 
@@ -854,8 +854,9 @@ Rules these keep:
   ("DGMNB links no Luau") is widened to fail if `cargo tree -p dgmnb`
   names any of `gmnb-theme`, `gmnb-media`, `gmnb-sound`, `mlua`, `luau`,
   `pulseaudio`, `lewton`, `ogg`, `hound`, `gif`, `weezl`, `image-webp`,
-  `zune-jpeg`, `zune-core`. (`png`, `futures-*`, `bitflags` and `log` are
-  already DGMNB's through its own dependencies and are not in the list.)
+  `zune-jpeg`, `zune-core`, `wasmtime`, `wasmparser`, `cranelift-codegen`.
+  (`png`, `futures-*`, `bitflags` and `log` are already DGMNB's through
+  its own dependencies and are not in the list.)
 - **No new native library.** Every dependency above is Rust. GMNB's list
   of linked libraries (`readelf -d`) does not change, so nothing more is
   mapped when the base look starts.
@@ -867,6 +868,9 @@ Rules these keep:
   | The media thread | The first time an animation needs a frame after its first | The theme is unloaded |
   | The sound threads and the connection to the sound server | A theme with `sounds` or `sound` is loaded while *Theme sounds* is on and the desktop allows event sounds | The theme is unloaded, or the switch goes off |
   | The playback stream | With the connection, corked | With it |
+  | wasmtime's engine, and with it its signal handlers | A theme with modules is applied (its modules are read and counted first) | Never: it serves the session (compiled modules are kept with it, a few, in memory only) |
+  | A compile thread | That theme's modules are compiled (one thread for them all) | When they are |
+  | A timer on a thread's processor time, and its signal handler | That thread first calls a module; armed only while a call runs | With the thread |
 
 - Themes never reach any of this directly: a script has no file, socket or
   device access, only the functions here.

@@ -18,6 +18,8 @@ on it is also the specification the app is built to.
 - Animated pictures, pictures a theme computes, and sound have a chapter
   of their own, [Pictures that move, and sound](theming-media.md). Their
   limits, functions and events are also listed here.
+- A theme may ship WebAssembly modules for work Luau is too slow for
+  ([Modules](#modules)).
 
 Contents
 
@@ -33,13 +35,14 @@ Contents
 10. [Drawing](#drawing)
 11. [Options](#options)
 12. [The `gmnb` library](#the-gmnb-library)
-13. [Limits, and what happens when a theme fails](#limits-and-what-happens-when-a-theme-fails)
-14. [Versions](#versions)
-15. [What is scripted and what is built in](#what-is-scripted-and-what-is-built-in)
-16. [Acceptance: the base look is DGMNB's](#acceptance-the-base-look-is-dgmnbs)
-17. [Acceptance: Aurora carries 0.2 on](#acceptance-aurora-carries-02-on)
-18. [Readability rules](#readability-rules)
-19. [For implementers](#for-implementers)
+13. [Modules](#modules)
+14. [Limits, and what happens when a theme fails](#limits-and-what-happens-when-a-theme-fails)
+15. [Versions](#versions)
+16. [What is scripted and what is built in](#what-is-scripted-and-what-is-built-in)
+17. [Acceptance: the base look is DGMNB's](#acceptance-the-base-look-is-dgmnbs)
+18. [Acceptance: Aurora carries 0.2 on](#acceptance-aurora-carries-02-on)
+19. [Readability rules](#readability-rules)
+20. [For implementers](#for-implementers)
 
 ---------------------------------------------------------------------------
 
@@ -250,6 +253,7 @@ What `theme.luau` returns:
 | When | What runs | What the app keeps |
 |---|---|---|
 | The theme is chosen, at start, or on *Reload* | The file, once, top to bottom. Its return value is the theme. | The theme table; fonts registered; the file's locals live until the theme is unloaded. |
+| Right after, if it names [modules](#modules) | Nothing of the theme's: its modules are compiled, on a thread of their own. The theme showing stays until they are ready, and the new one then switches in (at start the window waits for them). | The compiled modules, for the session. |
 | Right after, and whenever `ctx` changes: light/dark, the desktop's accent, an option, the Background opacity, reduced motion, the desktop's font | `style(ctx)` | The checked result and the style generated from it. Regenerated only if the result differs. |
 | A layer needs a new picture (see [Drawing](#drawing)) | That layer's `draw` | The picture, until the layer next needs one. |
 | Settings shows the theme's options | `visible`, `preview`, an action's `run` | Each tile's picture until `ctx` changes. `visible` and `preview` are asked in passes of a shared budget ([Limits](#limits-and-what-happens-when-a-theme-fails)), never all at once. |
@@ -266,7 +270,8 @@ Rules the app keeps:
 - Settings asks a theme nothing while it is closed: no pass of its calls
   waits, and nothing is armed for it.
 - Listing themes in Settings runs each theme's file in a throwaway sandbox
-  to read its `name`, `description` and `options`, then discards it.
+  to read its `name`, `description` and `options`, then discards it. It
+  never compiles a module.
 - Without a theme no Luau machine is created at all.
 
 ## `ctx`: what a theme is told
@@ -1618,6 +1623,103 @@ Media and sound ([their chapter](theming-media.md)):
 | `gmnb.sound(file, { gain }?)` | A sound from a WAV or Ogg Vorbis file. |
 | `gmnb.note(name)` | A note name's frequency in hertz: `gmnb.note("A4")` is 440. |
 
+Modules ([their section](#modules)):
+
+| Function | Returns |
+|---|---|
+| `gmnb.module(file)` | A WebAssembly module of the theme's folder, named at the top of the file: `{ file }` with `:call`, `:write`, `:read`, `:picture`. |
+
+## Modules
+
+Some work is too slow for Luau within a frame: a field of colour
+computed for every pixel, grain made of noise. A theme can ship it as a
+WebAssembly module, a `.wasm` file in its folder, and call it from its
+hooks.
+
+```lua
+-- Top level: only names the file. Nothing is compiled while Settings lists themes.
+local paint = gmnb.module("paint.wasm")      -- a .wasm in the theme's own folder
+local picture = paint:picture()              -- a picture the module fills, any size up to the cap
+
+-- In a hook (draw, preview, ...): the module is always ready there.
+paint:write(offset, buf)                     -- copy a Luau buffer into the module's memory
+local n = paint:call("name", 1, 2.5)         -- call an export: numbers in, numbers out
+local buf = paint:read(offset, length)       -- copy bytes out as a Luau buffer (rarely needed)
+if picture:ready() then                      -- false: changed too recently; the last one is drawn
+	picture:take(paint, offset, w, h)        -- w × h × 4 bytes of the module's memory become the picture
+end
+draw:image(picture, x, y, w, h)
+```
+
+| Call | What it does |
+|---|---|
+| `gmnb.module(file)` | Names a `.wasm` file of the theme's folder (a path inside it, as for fonts and pictures). The same file again is the same module. At the top of the file only: one named first inside a hook is never compiled, and its calls do nothing (a note). |
+| `module:call(name, ...)` | Calls the function the module exports as `name`. Arguments and results are numbers: an `i32` takes a whole number from −2³¹ to 2³² − 1 (the top half as the same bits), an `i64` a whole number, an `f32` or `f64` any number. Results come back as numbers (an `i32` signed). |
+| `module:write(offset, buffer)` | Copies the buffer into the module's memory at `offset`. |
+| `module:read(offset, length)` | A new buffer of `length` bytes of its memory at `offset`, 1 MiB at most. |
+| `module:picture()` | A new picture for a module to fill: `{ width, height }` (its size now, 0 × 0 before the first `take`) with `:ready()` and `:take(module, offset, width, height)`. Each call makes another. Drawn by `draw:image` and `draw:tile` like any picture (smooth by default). |
+| `picture:take(module, offset, w, h)` | `w × h × 4` bytes of the module's memory at `offset` become the picture, as `gmnb.pixels`' `set` takes them: red, green, blue, opacity, not premultiplied, rows from the top; 1 × 1 to 512 × 512. `true` if it was taken. |
+| `picture:ready()` | Whether a `take` now would be taken. |
+
+The rules:
+
+1. **When modules compile.** When a theme is applied (chosen in
+   Settings, at start, on *Reload*), its modules are compiled on a thread
+   of their own, and the theme switches in when they are ready; the theme
+   showing stays meanwhile (some 30 ms for 22 KB). At start the window
+   waits for them, so that it shows no other look first. **No hook of a
+   theme runs before its modules are ready**, and in a hook a module is
+   always ready: there is nothing to wait for or test. At the top of the
+   file a module can only be named; calling it there is an error.
+   Settings' list never compiles a module. A module compiled once is kept
+   in memory for the session, by its bytes, so a theme reloaded is not
+   compiled again. Nothing compiled is ever written to disk, and nothing
+   precompiled is ever loaded.
+2. **What a module may be.** A core WebAssembly module of WebAssembly 2.0
+   (bulk memory, reference types to functions, multiple results, sign
+   extension, saturating conversions, SIMD): what `rustc` makes for
+   `wasm32-unknown-unknown`, with `-C target-feature=+simd128` if you like.
+   It **imports nothing** (it gets no functions from GMNB: it computes,
+   and the theme moves bytes in and out), has **no start function**, and
+   declares at most 64 MiB of memory. Its memory is the one it exports
+   (as `memory`).
+3. **Limits.** At most 4 modules and 256 KiB of them per theme, counted
+   before anything is compiled (the compiler can't be stopped midway, so
+   what it is given is bounded, not how long it takes). A module's memory
+   grows to 64 MiB at most: past that, `memory.grow` returns −1.
+4. **Time.** A call runs inside the deadline of the hook that makes it,
+   on the hook's own processor time: a frame's 8 ms, a `style`'s 50 ms,
+   all of them together. One that runs past it is stopped, within a
+   millisecond or so, and is the hook's timeout, with the strikes Luau's
+   own get. A `pcall` around it catches the error, not more time: the
+   hook's deadline has passed, and it ends there. Nothing ticks at rest.
+5. **Errors.** A trap (`unreachable`, a division by zero, memory out of
+   bounds, a stack too deep) is an error in the hook, as a Luau error is:
+   `pcall` catches it; uncaught, it is a strike. After a timeout the module
+   starts afresh, its memory as when it was loaded (it may have been
+   stopped halfway through writing it); after a trap it keeps its memory.
+   A call that is wrong (a function it doesn't export, arguments that
+   aren't numbers or don't fit, an offset or a length outside its memory,
+   a picture over 512 a side) does nothing and returns nothing (`take`:
+   `false`), with a note once for each place in the theme's code it is
+   made from.
+6. **Pictures.** A module's picture keeps `gmnb.pixels`' rules: it
+   changes 30 times a second at most, two in hand; the same bytes again
+   cost nothing; and a refused change leaves the layer owed a frame, so
+   that what stands on screen is never out of date. `ready()` says
+   whether a change now would be taken, so that a theme can skip the work
+   when it wouldn't; the layer is owed its frame then too. 4 module
+   pictures per theme, each up to 512 × 512, counted against the image
+   total at their current size.
+7. **The same everywhere.** Relaxed SIMD is off, NaNs are made canonical
+   and there are no threads: a module computes the same bytes on every
+   machine.
+
+A theme's modules are run by wasmtime (the 36 LTS line) with its
+Cranelift compiler. A module is someone else's machine code, compiled on
+your machine: the limits and the sandbox above are as good as they can
+be made, and the same rule as for any theme holds: trust its author.
+
 ## Limits, and what happens when a theme fails
 
 A theme is someone else's code running inside the calculator. It gets a
@@ -1666,6 +1768,9 @@ says so beside *Open themes folder*.
 | A `sounds` entry's list | 8 sounds |
 | A play: `volume`; `rate`; `pan`; `delay` | 0 to 1; 0.5 to 2; −1 to 1; 0 to 1 s |
 | Time: one `sound` call | 2 ms |
+| Modules: count; all together; a module's memory | 4; 256 KiB, counted before anything is compiled; 64 MiB, declared or grown |
+| Modules: time; `read` | A call runs inside its hook's deadline; 1 MiB a call |
+| Module pictures: size; count; changes | 512×512; 4; 30 a second each (counted against "Images: total decoded" at their current size) |
 
 Every entry into the theme's code runs under its time limit, the first
 load included. **A time limit is of processor time**: what the theme's
@@ -1701,6 +1806,11 @@ for a picture of 2 MiB).
 | An animation is too heavy to decode in time | It plays slower; a note, once. |
 | `sound` fails or runs out of time | The `sounds` table decides for that event. After 3 failures the function is switched off; a toast, once. |
 | There is no sound system | Silence. Settings → Sound says so. No toast. |
+| A module can't be read, is over a limit, isn't a module (by its first bytes, or isn't well-formed), imports something, has a start function, declares more than 64 MiB, doesn't compile or can't be started | The theme loads without it: its calls do nothing. A note under the theme in Settings; no toast. |
+| A module is used at the top of the file | The file doesn't load, as for any error there. |
+| A module call is wrong (an export it hasn't, arguments that don't fit, an offset outside its memory) | That call does nothing; a note, once for each place it is made from. |
+| A module traps | An error in the hook, as a Luau error is. |
+| A module call runs out of time | The hook's timeout: as for a `draw` that runs out of time. The module starts afresh. |
 
 ### Drawing per frame
 
@@ -1972,8 +2082,9 @@ changing the saved choice.
   follows it; that is the point.
 - Added to API 1 this way so far: animations, `gmnb.pixels`, `draw:field`
   and ramps, sound (`sounds`, `sound`, `gmnb.synth`, `gmnb.sound`), the
-  `mode` event, `action` and `via = "assistive"` on presses, and
-  `draw:image`'s options. What was left for later is listed in
+  `mode` event, `action` and `via = "assistive"` on presses,
+  `draw:image`'s options, and WebAssembly modules (`gmnb.module`, its
+  calls and pictures). What was left for later is listed in
   [What is in API 1 and what is deferred](theming-media.md#what-is-in-api-1-and-what-is-deferred).
 
 ## What is scripted and what is built in
@@ -2555,6 +2666,19 @@ tables, says `library:0:`.
     table says `fade = false`, then at full strength over it; the same
     picture either way on an opaque window; the key noted on any other
     layer.
+14. Modules (`crates/gmnb-theme/tests/modules.rs`, `module_lazy.rs`; in
+    the running app `tests/modules.rs`): a module that fills a picture,
+    end to end, hashed; every limit hit on purpose (too many, too large,
+    memory grown past 64 MiB, 65 536 pages declared, an import, a start
+    function, malformed and truncated files); an endless loop in a frame
+    (`Timeout(8ms)`, one strike, three switch the hook off) and in a hook
+    given a load's 250 ms; under `pcall`, and 100 of them; the module
+    afresh after a timeout; recursion and traps; `take` at a bad offset;
+    the allowance and the owed frame; a hook never run before its
+    theme's modules are ready; listing never compiling; the base look and
+    the built-in themes making no engine, signal handler, timer or thread
+    (`GMNB_THEME_STATS`' `modules`); the watch reloading a theme when one
+    of its modules changes.
 
 ### Open points
 
