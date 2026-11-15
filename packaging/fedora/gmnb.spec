@@ -10,8 +10,8 @@ Release:        1%{?dist}
 Summary:        GlazeMyNumbers,Baby: a pointlessly beautiful calculator
 # The Inter, Noto subset, Outfit and Jersey 10 typefaces embedded in the binary are OFL-1.1; Swirls'
 # swirl is adapted from ly's ColorMix (WTFPL); the rest are the crates compiled in
-# (THIRD-PARTY-LICENSES.txt).
-License:        MIT AND OFL-1.1 AND WTFPL AND Apache-2.0 AND BSD-3-Clause AND CDLA-Permissive-2.0 AND ISC AND Unicode-3.0 AND Zlib
+# (THIRD-PARTY-LICENSES.txt), wasmtime's and Cranelift's under Apache-2.0 WITH LLVM-exception.
+License:        MIT AND OFL-1.1 AND WTFPL AND Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-3-Clause AND CDLA-Permissive-2.0 AND ISC AND Unicode-3.0 AND Zlib
 URL:            https://github.com/Go08er/GlazeMyNumbersBaby
 Source0:        %{url}/archive/v%{version}/GlazeMyNumbersBaby-%{version}.tar.gz
 

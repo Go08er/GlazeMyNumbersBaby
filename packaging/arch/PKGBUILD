@@ -9,8 +9,8 @@ url='https://github.com/Go08er/GlazeMyNumbersBaby'
 # The apps' own code and fonts, Swirls' swirl (adapted from ly's ColorMix,
 # WTFPL), then the crates compiled in (their texts are in
 # THIRD-PARTY-LICENSES.txt). Each package lists its own below.
-license=('MIT' 'OFL-1.1' 'WTFPL' 'Apache-2.0' 'BSD-2-Clause' 'BSD-3-Clause' 'CDLA-Permissive-2.0'
-         'ISC' 'Unicode-3.0' 'Zlib')
+license=('MIT' 'OFL-1.1' 'WTFPL' 'Apache-2.0' 'Apache-2.0 WITH LLVM-exception' 'BSD-2-Clause'
+         'BSD-3-Clause' 'CDLA-Permissive-2.0' 'ISC' 'Unicode-3.0' 'Zlib')
 makedepends=('cargo' 'gtk4' 'libadwaita' 'wayland' 'libxkbcommon')
 # Rust handles its own LTO; makepkg's -flto would also hit the bundled C and
 # C++ (ring, Luau). base-devel's gcc builds both.
@@ -55,8 +55,9 @@ check() {
 
 package_gmnb() {
   pkgdesc='GlazeMyNumbers,Baby: Windows Calculator ported to Rust, made pointlessly beautiful'
-  license=('MIT' 'OFL-1.1' 'WTFPL' 'Apache-2.0' 'BSD-3-Clause' 'CDLA-Permissive-2.0' 'ISC'
-           'Unicode-3.0' 'Zlib')
+  # wasmtime's and Cranelift's: Apache-2.0 WITH LLVM-exception (DGMNB has neither).
+  license=('MIT' 'OFL-1.1' 'WTFPL' 'Apache-2.0' 'Apache-2.0 WITH LLVM-exception' 'BSD-3-Clause'
+           'CDLA-Permissive-2.0' 'ISC' 'Unicode-3.0' 'Zlib')
   depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'cairo' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
   # A sound server that speaks PulseAudio's protocol; GMNB links no sound
   # library and is silent without one.

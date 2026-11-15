@@ -56,3 +56,15 @@ license = "MIT"
 checksum = "6a5b303976bc1b405e340cc30d1361e04bb1ebb48fcaf5d045bec77349cdf456"
 start = "The MIT License (MIT)"
 end = "SOFTWARE."
+
+# libm (wasmtime's maths, through wasmtime-internal-math) keeps its licence
+# in LICENSE.txt, a name cargo-about doesn't look for: the MIT licence it is
+# under, the Apache-2.0 its contributors also grant, and its copyrights
+# (musl's among them), taken whole.
+[libm.clarify]
+license = "MIT"
+
+[[libm.clarify.files]]
+path = "LICENSE.txt"
+license = "MIT"
+checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"

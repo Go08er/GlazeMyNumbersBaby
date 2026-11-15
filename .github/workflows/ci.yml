@@ -17,18 +17,19 @@ jobs:
       - uses: cachix/install-nix-action@91f6a0f59e94dfb2cfed0f4000f36a68ead1d20c # v31.11.4
       - name: Test suite (incl. golden tests against the C++ engine)
         run: nix develop -c cargo test --workspace --locked
-      - name: DGMNB links no Luau, no theme media, no theme sound
+      - name: DGMNB links no Luau, no theme media, no theme sound, no WebAssembly
         run: |
           set -o pipefail
-          # The theme engine (mlua, Luau's C++), and the image decoders and
-          # sound client themes use (docs/theming-media.md), are GMNB's
-          # alone: none may reach DGMNB through a shared crate. (`png` is
-          # DGMNB's own already, through tiny-skia, and is not listed.)
+          # The theme engine (mlua, Luau's C++), the image decoders and
+          # sound client themes use (docs/theming-media.md), and the runtime
+          # of themes' modules (wasmtime, Cranelift) are GMNB's alone: none
+          # may reach DGMNB through a shared crate. (`png` is DGMNB's own
+          # already, through tiny-skia, and is not listed.)
           nix develop -c cargo tree --locked -p dgmnb -e normal,build --prefix none \
             > dgmnb-tree.txt
           grep -q "^dgmnb v" dgmnb-tree.txt
-          if grep -Ei "^(mlua|luau|(gmnb-theme|gmnb-media|gmnb-sound|pulseaudio|lewton|ogg|hound|gif|weezl|image-webp|zune-jpeg|zune-core) )" dgmnb-tree.txt; then
-            echo "::error::DGMNB depends on the theme engine, or on a theme media or sound crate"
+          if grep -Ei "^(mlua|luau|(gmnb-theme|gmnb-media|gmnb-sound|pulseaudio|lewton|ogg|hound|gif|weezl|image-webp|zune-jpeg|zune-core|wasmtime|wasmparser|cranelift-codegen) )" dgmnb-tree.txt; then
+            echo "::error::DGMNB depends on the theme engine, on a theme media or sound crate, or on wasmtime"
             exit 1
           fi
       - name: Built-in themes' sounds within the level budget (sound_check.py)

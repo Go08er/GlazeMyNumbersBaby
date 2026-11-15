@@ -7,6 +7,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use mlua::{Lua, Table, Value};
 
@@ -14,6 +15,7 @@ use crate::check::{Note, Notes, parse_hex};
 use crate::draw::{self, DisplayList};
 use crate::layer::{self, Drawn, Failure, Frame, Frames, LayerKind};
 use crate::library::{self, API};
+use crate::module;
 use crate::picture::Pictures;
 use crate::style::{Resolved, resolve};
 use crate::tokens::{Colors, Ctx, OptionValue, Tokens};
@@ -1001,6 +1003,8 @@ pub struct Theme {
     frames: RefCell<Frames>,
     /// What a preview is told.
     preview: HostTable,
+    /// The theme's WebAssembly modules (`gmnb.module`).
+    modules: Rc<RefCell<module::Modules>>,
 }
 
 /// One theme of the Settings list.
@@ -1041,11 +1045,18 @@ impl Theme {
     pub fn load(source: Source, limits: Limits) -> Result<Theme, LoadError> {
         let text = source.text(limits.source_bytes)?;
         let pictures = Pictures::new(source.clone(), limits.draw.clone());
+        let modules = Rc::new(RefCell::new(module::Modules::new(source.clone(), &limits)));
         let draw_limits = limits.draw.clone();
         let mut api = None;
         let engine = Engine::with_globals(limits, |lua| {
             library::register(lua, |lua, gmnb| {
-                api = Some(draw::Api::register(lua, gmnb, draw_limits, pictures)?);
+                api = Some(draw::Api::register(
+                    lua,
+                    gmnb,
+                    draw_limits,
+                    pictures,
+                    &modules,
+                )?);
                 Ok(())
             })
         })
@@ -1057,6 +1068,11 @@ impl Theme {
         };
         let name = format!("@{}/{THEME_FILE}", source.id);
         let value = engine.load(&name, &text).map_err(LoadError::Script)?;
+        // A theme with modules runs no hook until they are compiled
+        // (`Theme::prepare_modules`, `Theme::install_modules`).
+        if modules.borrow().named() {
+            engine.hold(Some(module::HELD));
+        }
         let mut notes = Notes::default();
         let def = parse(&value, &mut notes)?;
         let ctx = engine.host_table(0, 8).map_err(LoadError::Script)?;
@@ -1073,9 +1089,65 @@ impl Theme {
             api,
             frames: RefCell::new(frames),
             preview,
+            modules,
         };
         theme.check_files();
         Ok(theme)
+    }
+
+    // ---- Modules -------------------------------------------------------------------
+
+    /// The module files the theme names (`gmnb.module`), in order, by
+    /// their paths in its folder.
+    pub fn modules(&self) -> Vec<String> {
+        self.modules.borrow().files()
+    }
+
+    /// Whether the theme's hooks may run: it names no module, or each one
+    /// it names is compiled (or left out) and started. Until then every
+    /// hook call fails without running.
+    pub fn modules_ready(&self) -> bool {
+        let modules = self.modules.borrow();
+        !modules.named() || modules.is_ready()
+    }
+
+    /// The theme is being applied: its module files are read, and their
+    /// sizes counted before anything is compiled (a file past
+    /// [`Limits::module_bytes`], with those before it, is left out, with a
+    /// note). A module compiled earlier this session, of the same bytes,
+    /// is taken as it is. wasmtime's engine is made here, the first time
+    /// any theme has a module to run.
+    ///
+    /// What is left to compile, if anything, comes back: run it on a
+    /// thread of its own ([`module::Job::spawn`]) and hand what it made to
+    /// [`Theme::install_modules`]; the theme's hooks wait meanwhile. `None`:
+    /// the theme is ready now, or a job is already out (its hooks wait for
+    /// it still). (Call it on the theme's thread.)
+    /// Listing a theme never calls it: nothing is read or compiled then.
+    pub fn prepare_modules(&mut self) -> Option<module::Job> {
+        let job = self.modules.borrow_mut().prepare();
+        if job.is_none() {
+            self.modules_done();
+        }
+        job
+    }
+
+    /// What a [`module::Job`] of this theme's compiled: each module is
+    /// started, those that couldn't be are left out (with a note), and
+    /// the theme's hooks may run from now on.
+    pub fn install_modules(&mut self, compiled: module::Compiled) {
+        self.modules.borrow_mut().install(compiled);
+        self.modules_done();
+    }
+
+    fn modules_done(&mut self) {
+        let mut modules = self.modules.borrow_mut();
+        for (file, why) in modules.take_load_notes() {
+            self.notes.push(&file, why);
+        }
+        if modules.is_ready() || !modules.named() {
+            self.engine.hold(None);
+        }
     }
 
     /// Drops the fonts and credits that can't be read or are too big: the
@@ -1494,14 +1566,26 @@ impl Theme {
     /// What the theme's author should know of its drawing since the last
     /// call: each message once in the theme's life.
     pub fn take_draw_notes(&self) -> Vec<Note> {
-        self.api
+        let mut notes: Vec<Note> = self
+            .api
             .take_notes()
             .into_iter()
             .map(|message| Note {
                 path: "draw".into(),
                 message,
             })
-            .collect()
+            .collect();
+        notes.extend(
+            self.modules
+                .borrow_mut()
+                .take_notes()
+                .into_iter()
+                .map(|message| Note {
+                    path: "modules".into(),
+                    message,
+                }),
+        );
+        notes
     }
 
     /// Each hook of the theme's layers: its name, its failures so far and

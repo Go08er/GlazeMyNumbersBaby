@@ -1,5 +1,6 @@
 mod a11y;
 mod bench;
+mod compile;
 mod inert;
 mod keymap;
 mod launch;

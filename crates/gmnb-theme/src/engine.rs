@@ -324,8 +324,37 @@ struct Shared {
     /// The fatal error that stopped the engine (the heap cap, or a panic
     /// inside mlua): everything after fails with it.
     dead: RefCell<Option<ThemeError>>,
+    /// Why no hook may run yet, if one may not: the theme's modules are
+    /// still being compiled ([`Engine::hold`]).
+    held: Cell<Option<&'static str>>,
     print_nesting: Cell<u32>,
     log: RefCell<LogBuf>,
+}
+
+/// What a host function may know of the entry that is running it: its
+/// span, and a way to say it was stopped there ([`running`]). A theme's
+/// module runs inside the deadline of the hook that calls it.
+pub(crate) struct Running(Rc<Shared>);
+
+impl Running {
+    /// The running entry's span (the earliest of nested ones), if an
+    /// entry is running.
+    pub(crate) fn span(&self) -> Option<Span> {
+        self.0.span.get()
+    }
+
+    /// The running entry was stopped at its deadline by the host function
+    /// (a module call): it ends in [`ThemeError::Timeout`] however the
+    /// script goes on, as when the interrupt stops it.
+    pub(crate) fn stop(&self) {
+        self.0.timed_out.set(true);
+    }
+}
+
+/// The running entry of the engine `lua` belongs to ([`Running`]).
+pub(crate) fn running(lua: &Lua) -> Option<Running> {
+    lua.app_data_ref::<Running>()
+        .map(|r| Running(Rc::clone(&r.0)))
 }
 
 impl Shared {
@@ -439,6 +468,11 @@ impl Span {
     pub fn is_over(&self) -> bool {
         self.past(self.limit)
     }
+
+    /// What is left of the limit, in processor time.
+    pub(crate) fn left(&self) -> Duration {
+        self.limit.saturating_sub(self.used())
+    }
 }
 
 impl Engine {
@@ -461,6 +495,7 @@ impl Engine {
             span: Cell::new(None),
             timed_out: Cell::new(false),
             dead: RefCell::new(None),
+            held: Cell::new(None),
             print_nesting: Cell::new(0),
             log: RefCell::new(LogBuf {
                 lines: VecDeque::new(),
@@ -485,6 +520,7 @@ impl Engine {
 
     fn set_up(&self, register: impl FnOnce(&Lua) -> mlua::Result<()>) -> mlua::Result<()> {
         let lua = &self.lua;
+        lua.set_app_data(Running(Rc::clone(&self.shared)));
         // Name the host's category first, so that it is number 1, and go
         // back to the theme's.
         lua.set_memory_category(HOST_CATEGORY)?;
@@ -621,6 +657,9 @@ impl Engine {
         if h.disabled.get() {
             return Err(ThemeError::Disabled(h.strikes.get()));
         }
+        if let Some(why) = self.shared.held.get() {
+            return Err(ThemeError::Unsupported(why.into()));
+        }
         if span.is_over() {
             return Err(ThemeError::Timeout(span.limit));
         }
@@ -646,6 +685,15 @@ impl Engine {
             }
         }
         result
+    }
+
+    /// Holds every hook, with `why`, until it is called with `None`: a
+    /// call meanwhile fails with [`ThemeError::Unsupported`] without
+    /// running and without a strike. A theme's hooks wait so for its
+    /// modules to be compiled. (The file's load isn't held: it is what
+    /// names them.)
+    pub(crate) fn hold(&self, why: Option<&'static str>) {
+        self.shared.held.set(why);
     }
 
     /// Counts a failure the host found in what a hook did after its call
