@@ -1789,6 +1789,12 @@ mod tests {
         let bytes: usize = shown.iter().map(|(_, t)| t.len()).sum();
         assert!(bytes <= LEGAL_CREDITS_MAX + 4096, "{bytes} bytes");
         let context = pangocairo::FontMap::default().create_context();
+        // The process's first text sets up the fonts (fontconfig reads its
+        // cache, or scans the machine's fonts: seconds on a fresh CI
+        // runner, alongside the other tests starting): not what is timed.
+        let warm = pango::Layout::new(&context);
+        warm.set_text("x lorem ipsum\n\u{4e2d}");
+        let _ = warm.pixel_size();
         let start = std::time::Instant::now();
         let mut height = 0;
         for (_, text) in &shown {
