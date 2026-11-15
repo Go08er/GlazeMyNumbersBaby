@@ -111,8 +111,12 @@
             # The graphing crate's `mpfr-oracle` feature (development only).
             gmp
             mpfr
+            # Theme modules (WebAssembly, 0.4): rustc has the wasm32 target's
+            # standard library; lld's wasm-ld links them.
+            lld
           ];
           RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER = "wasm-ld";
           # DGMNB loads the keymap library at run time.
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (
             with pkgs;
