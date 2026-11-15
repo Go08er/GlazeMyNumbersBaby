@@ -180,3 +180,67 @@ a frame. The timings move with the machine (a fifth, run to run) and with
 what else it is doing; the shape (which kinds and parameters are dear) is
 what to trust. Translucent paints are used so the toolkit can't skip what is
 covered over.
+
+## Real input: a private headless sway (`realinput/`)
+
+`realinput/sw.sh` drives GMNB or DGMNB as a person would: real key events and
+a real pointer, in a headless sway of its own, with `grim` screenshots. Use it
+for bugs that only show with real input (focus, hover, grabs, popovers, the
+History sheet), which the `GMNB_KEYS` / `DGMNB_CLICKS` hooks don't reproduce.
+
+**Isolation.** It re-runs itself inside `unshare -rn` (no network), on the
+private bus (`privbus.conf`), with a fresh `XDG_RUNTIME_DIR` and fresh XDG
+config/data/cache/state folders (all in one temporary folder, removed on exit),
+`DISPLAY`, `WAYLAND_DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`, `PULSE_SERVER` and
+`PULSE_RUNTIME_PATH` unset, and `GMNB_SOUND=null` on every app. Nothing touches
+the owner's desktop or settings. Sway, wtype, grim and python3 come from
+`nix shell --inputs-from . nixpkgs#sway nixpkgs#wtype nixpkgs#grim nixpkgs#python3`
+(the repo's pinned nixpkgs; no store paths). Every process it starts (sway,
+wtype, the pointer holder, the app) is killed by PID in a trap, whatever
+happens. Run it as every run of this project, under `lim`:
+
+    export CARGO_INCREMENTAL=0
+    OUT=/tmp/x/out BIN=target/release LIM_JOBS=2 theming-work/tools/lim \
+        tools/theming/realinput/sw.sh 1000x800 tools/theming/realinput/scenarios/standard.sh
+
+`WxH` is the screen's size; the app's window floats at 0,0. `BIN` holds
+`gmnb` and `dgmnb` (default `target/release`), `OUT` is where `shot` writes,
+`APP=dgmnb` runs the twin. `run.sh WxH SCENARIO [OUTDIR]` runs a scenario over
+`THEMES` (default `base aurora sprinkles swirls`), `DARKS` (`0 1`) and
+`OPACITIES` (default: the app's own; GMNB only) under `lim`, one compositor per
+combination, into `OUTDIR/<theme>-d<D>[-o<O>]/`; each `app` call there gets
+that combination's env (`THEME_ENV`). With `APP=dgmnb` there are no themes.
+
+**Scenario functions** (a bash file, sourced inside the compositor):
+
+| Function | Does |
+|---|---|
+| `app ENV...` | Starts the binary with `GSK_RENDERER=cairo GMNB_STILL=1 GMNB_SOUND=null GTK_A11Y=none NO_AT_BRIDGE=1`, `THEME_ENV` and the given env, then waits 3 s (`APP_WAIT`) |
+| `keys ARGS` | `wtype -s 80 ARGS` (text, or `-k Escape`, `-M ctrl -k h -m ctrl`), then waits 0.4 s (`KEY_WAIT`) |
+| `isokey` | Shift+Tab as a real keyboard sends it: Shift with the `ISO_Left_Tab` keysym. wtype's plain Shift+Tab (`-M shift -k Tab`) does not move GTK's focus backwards |
+| `mv X Y`, `press [BTN]`, `release [BTN]`, `click X Y` | The pointer, through sway's IPC (`swaymsg seat seat0 cursor set / press / release`) |
+| `scroll X Y N` | The wheel, N notches (negative up), as `cursor press button5` / `button4` |
+| `wait_ S` | Sleeps |
+| `shot NAME` | `grim $OUT/NAME.png` |
+| `size W H` | Resizes the window (`swaymsg resize set`) |
+
+A headless sway has no pointer device, so the seat would have no pointer and a
+click would reach nothing; `realinput/vptr.py` (standard-library Python, plain
+Wayland wire protocol) holds a wlr virtual pointer open so the seat has one,
+and the IPC does the rest.
+
+Example (`realinput/scenarios/standard.sh`, run at 1000x800: GMNB's Standard
+page in a narrow window):
+
+    app GMNB_MODE=standard GMNB_SIZE=420x640
+    click 62 382                         # the 7 key
+    keys '+2='
+    shot sum
+    keys -M ctrl -k h -m ctrl            # Ctrl+H: the History sheet
+    wait_ 1
+    shot history
+    keys -k Escape                       # closes it
+    isokey                               # Shift+Tab, as a keyboard sends it
+
+DGMNB takes the `DGMNB_*` equivalents (`APP=dgmnb`; the example picks them by
+itself). `scenarios/length.sh` clicks the Length converter's second field.
