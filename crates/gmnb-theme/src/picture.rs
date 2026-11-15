@@ -670,7 +670,8 @@ impl Pictures {
     /// becomes the `width × height` picture of `bytes` (RGBA,
     /// premultiplied: each colour is clamped to the pixel's opacity as it
     /// is copied), charged to the image total at that size, if it wasn't
-    /// changed too recently. The same bytes at the same size again change
+    /// changed too recently (`charged`: the allowance applies; in a
+    /// preview it doesn't). The same bytes at the same size again change
     /// nothing and spend nothing.
     pub(crate) fn take_module(
         &mut self,
@@ -679,6 +680,7 @@ impl Pictures {
         height: u32,
         bytes: &[u8],
         now: f64,
+        charged: bool,
     ) -> Result<(), Refused> {
         module_size(&self.limits, width.into(), height.into())
             .map_err(|why| Refused::Over(format!("picture:take: {why}")))?;
@@ -700,7 +702,7 @@ impl Pictures {
             )));
         }
         let state = self.canvases.get_mut(&id).expect("looked up above");
-        if !state.allowance.take(now) {
+        if charged && !state.allowance.take(now) {
             return Err(Refused::TooSoon(state.allowance.wait(now)));
         }
         self.decoded = self.decoded - held + wanted;

@@ -749,7 +749,8 @@ export type ModulePicture = {
 	height: number,
 	-- Whether a take now would be taken: false if the picture changed
 	-- too recently (30 times a second at most). The layer being drawn is
-	-- then drawn once more when it can be, take or no take.
+	-- then drawn once more when it can be, take or no take. Always true
+	-- in a preview (a tile is drawn once).
 	ready: (self: ModulePicture) -> boolean,
 	-- width × height × 4 bytes of the module's memory at offset become
 	-- the picture: red, green, blue, opacity, premultiplied (unlike

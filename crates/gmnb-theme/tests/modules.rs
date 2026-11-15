@@ -1119,6 +1119,75 @@ fn a_module_picture_is_premultiplied_its_colours_clamped_as_it_is_taken() {
     assert!(notes(&theme).is_empty(), "{:?}", notes(&theme));
 }
 
+/// A theme whose option's tiles each take its one module picture three
+/// times, something else each time, and draw it; and whose background
+/// takes it once a frame and says whether it was taken (1) or not (2).
+const TILES: &str = r#"
+local paint = gmnb.module("paint.wasm")
+local picture = paint:picture()
+local n = 0
+local SIDE = SIDE_HERE
+local function fill(v)
+    paint:call("fill", v, SIDE * SIDE, 1024)
+    return picture:take(paint, 1024, SIDE, SIDE)
+end
+return {
+    api = 1,
+    name = "Tiles",
+    options = { {
+        id = "o",
+        type = "choice",
+        label = "O",
+        choices = { { id = "a", label = "A" }, { id = "b", label = "B" } },
+        preview = function(draw, frame, choice)
+            for i = 1, TAKES_HERE do
+                assert(picture:ready(), "a tile is never refused")
+                n += 1
+                fill(n % 256)
+            end
+            draw:image(picture, 0, 0, frame.width, frame.height)
+        end,
+    } },
+    layers = { background = { draw = function(draw, frame)
+        n += 1
+        local taken = fill(n % 256)
+        draw:image(picture, 0, 0, frame.width, frame.height)
+        return if taken then 1 else 2
+    end } },
+}
+"#;
+
+fn tiles(d: &Dir, side: u32, takes: u32, limits: Limits) -> Theme {
+    d.wat("paint.wasm", GREYS);
+    let source = TILES
+        .replace("SIDE_HERE", &side.to_string())
+        .replace("TAKES_HERE", &takes.to_string());
+    std::fs::write(d.0.join("theme.luau"), source).unwrap();
+    let mut theme =
+        Theme::load(Source::folder("t", &d.0), limits).unwrap_or_else(|e| panic!("{e}"));
+    ready(&mut theme);
+    theme
+}
+
+#[test]
+fn a_tile_has_no_allowance() {
+    let d = dir("tiles");
+    let theme = tiles(&d, 2, 3, limits());
+    let _now = clock(&theme, 100.0);
+    let option = theme.def.options[0].clone();
+    // Each tile takes the picture three times at one moment, every take
+    // taken (a frame of a layer has two in hand), and draws the last.
+    theme.preview(&option, "a", &Ctx::default()).unwrap();
+    theme.preview(&option, "b", &Ctx::default()).unwrap();
+    let canvas = theme.api().canvas(ImageId(0)).unwrap();
+    assert_eq!((canvas.version, canvas.pixels[0]), (6, 6));
+    // The tiles spent nothing of the allowance: at the same moment a
+    // frame has its two in hand, and is refused the third.
+    let again: Vec<_> = (0..3).map(|_| drawn(&theme).again).collect();
+    assert_eq!(again, [Some(1.0), Some(1.0), Some(2.0)]);
+    assert!(notes(&theme).is_empty(), "{:?}", notes(&theme));
+}
+
 // ---- When modules are ready -----------------------------------------------------------
 
 #[test]

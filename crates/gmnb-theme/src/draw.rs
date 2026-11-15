@@ -454,6 +454,12 @@ impl Recorder {
         self.still
     }
 
+    /// A preview's tile is being drawn now: a still picture, drawn once,
+    /// which the allowances of pictures that change don't apply to.
+    pub(crate) fn in_preview(&self) -> bool {
+        self.active && self.still
+    }
+
     /// A picture was refused for being asked for too soon, and can be
     /// had in `wait` seconds: if a hook is drawing, its layer is to be
     /// drawn once more then, so that what stands on screen is never a

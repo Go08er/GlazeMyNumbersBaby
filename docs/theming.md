@@ -1708,9 +1708,11 @@ The rules:
    cost nothing; and a refused change leaves the layer owed a frame, so
    that what stands on screen is never out of date. `ready()` says
    whether a change now would be taken, so that a theme can skip the work
-   when it wouldn't; the layer is owed its frame then too. 4 module
-   pictures per theme, each any shape of up to 262 144 pixels (a field's;
-   16 384 a side), counted against the image total at their current size.
+   when it wouldn't; the layer is owed its frame then too. In a preview
+   (a tile in Settings, drawn once) there is no allowance: `take` is
+   always taken and `ready()` is true. 4 module pictures per theme, each
+   any shape of up to 262 144 pixels (a field's; 16 384 a side), counted
+   against the image total at their current size.
 7. **The same everywhere.** Relaxed SIMD is off, NaNs are made canonical
    and there are no threads: a module computes the same bytes on every
    machine.

@@ -1271,12 +1271,15 @@ fn take(
                 )
             })?;
         let now = shared.now();
+        // (A preview's tile is a still picture, drawn once: no allowance.)
+        let charged = !shared.recorder.borrow().in_preview();
         match shared.pictures.borrow_mut().take_module(
             picture,
             width as u32,
             height as u32,
             from,
             now,
+            charged,
         ) {
             Ok(()) => Ok(true),
             // Too soon: the old picture stays, and a layer drawing is
@@ -1302,11 +1305,19 @@ fn take(
 /// `picture:ready()`: whether a `take` now would be taken. When it
 /// wouldn't, a layer drawing is owed a frame for when it would, as after a
 /// refused `take`: a theme that skips its work on `false` is never left
-/// showing a picture it has since moved past.
+/// showing a picture it has since moved past. In a preview it always
+/// would (a tile is drawn once: no allowance).
 fn ready(shared: &Shared, this: &Value) -> mlua::Result<bool> {
     let Some(picture) = picture_of(this)? else {
         return Ok(false);
     };
+    if shared.recorder.borrow().in_preview() {
+        return Ok(shared
+            .pictures
+            .borrow()
+            .module_wait(picture, 0.0)
+            .is_finite());
+    }
     let now = shared.now();
     let wait = shared.pictures.borrow().module_wait(picture, now);
     if wait <= 0.0 {
