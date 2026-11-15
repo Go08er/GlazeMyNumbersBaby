@@ -752,12 +752,12 @@ export type ModulePicture = {
 	-- then drawn once more when it can be, take or no take.
 	ready: (self: ModulePicture) -> boolean,
 	-- width × height × 4 bytes of the module's memory at offset become
-	-- the picture (as Pixels' set takes them: red, green, blue, opacity,
-	-- not premultiplied, rows from the top): any shape of up to 262 144
-	-- pixels, 1 to 16 384 a side. Returns
-	-- false, changing nothing, if it isn't ready, or if the bytes aren't
-	-- in the module's memory (with a note). The same bytes again change
-	-- nothing and cost nothing.
+	-- the picture: red, green, blue, opacity, premultiplied (unlike
+	-- Pixels' set; a colour above its opacity is clamped to it), rows from
+	-- the top; any shape of up to 262 144 pixels, 1 to 16 384 a side.
+	-- Returns false, changing nothing, if it isn't ready, or if the bytes
+	-- aren't in the module's memory (with a note). The same bytes again
+	-- change nothing and cost nothing.
 	take: (self: ModulePicture, module: Module, offset: number, width: number, height: number) -> boolean,
 }
 

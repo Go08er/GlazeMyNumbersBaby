@@ -124,16 +124,21 @@ pub enum Pixels {
     },
 }
 
-/// A picture the theme fills (`gmnb.pixels`), as it stands.
+/// A picture the theme fills (`gmnb.pixels`, or a module's), as it
+/// stands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Canvas {
     pub width: u32,
     pub height: u32,
-    /// RGBA8, **not** premultiplied, `width × 4` bytes a row.
+    /// RGBA8, `width × 4` bytes a row: not premultiplied (`gmnb.pixels`),
+    /// or premultiplied (a module's: [`Canvas::premultiplied`]).
     pub pixels: Bytes,
     /// Goes up each time the theme changes the picture: a texture made
     /// of an earlier version is out of date.
     pub version: u64,
+    /// The pixels are premultiplied, each colour no more than the
+    /// opacity: a module's picture (`picture:take`).
+    pub premultiplied: bool,
 }
 
 struct CanvasState {
@@ -161,6 +166,33 @@ pub(crate) fn module_size(limits: &DrawLimits, width: u64, height: u64) -> Resul
             "{width}×{height}; a module's picture is at most {pixels} pixels, 1 to {side} a side"
         ))
     }
+}
+
+/// `bytes` (RGBA) premultiplied as a module's picture is: each colour
+/// clamped to the pixel's opacity.
+pub(crate) fn premultiplied(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for p in out.as_chunks_mut::<4>().0 {
+        let a = p[3];
+        p[0] = p[0].min(a);
+        p[1] = p[1].min(a);
+        p[2] = p[2].min(a);
+    }
+    out
+}
+
+/// Whether `bytes`, premultiplied as a module's picture is, are `held`.
+fn same_premultiplied(held: &[u8], bytes: &[u8]) -> bool {
+    held.len() == bytes.len()
+        && held
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(bytes.as_chunks::<4>().0)
+            .all(|(h, b)| {
+                let a = b[3];
+                *h == [b[0].min(a), b[1].min(a), b[2].min(a), a]
+            })
 }
 
 /// Why a module picture didn't take what it was given.
@@ -578,6 +610,7 @@ impl Pictures {
                     // It starts transparent.
                     pixels: Bytes::new(vec![0; bytes]),
                     version: 0,
+                    premultiplied: false,
                 },
                 allowance: Bucket::new(),
                 module: false,
@@ -615,6 +648,7 @@ impl Pictures {
                     height: 0,
                     pixels: Bytes::new(Vec::new()),
                     version: 0,
+                    premultiplied: true,
                 },
                 allowance: Bucket::new(),
                 module: true,
@@ -633,10 +667,11 @@ impl Pictures {
     }
 
     /// `picture:take(module, offset, w, h)` at `now`: module picture `id`
-    /// becomes the `width × height` picture of `bytes` (RGBA, as
-    /// `gmnb.pixels` takes them), charged to the image total at that size,
-    /// if it wasn't changed too recently. The same bytes at the same size
-    /// again change nothing and spend nothing.
+    /// becomes the `width × height` picture of `bytes` (RGBA,
+    /// premultiplied: each colour is clamped to the pixel's opacity as it
+    /// is copied), charged to the image total at that size, if it wasn't
+    /// changed too recently. The same bytes at the same size again change
+    /// nothing and spend nothing.
     pub(crate) fn take_module(
         &mut self,
         id: ImageId,
@@ -653,7 +688,7 @@ impl Pictures {
             ));
         };
         let c = &state.canvas;
-        if (c.width, c.height) == (width, height) && c.pixels[..] == *bytes {
+        if (c.width, c.height) == (width, height) && same_premultiplied(&c.pixels, bytes) {
             return Ok(());
         }
         let held = u64::from(c.width) * u64::from(c.height) * 4;
@@ -672,7 +707,7 @@ impl Pictures {
         let c = &mut state.canvas;
         c.width = width;
         c.height = height;
-        c.pixels = Bytes::new(bytes.to_vec());
+        c.pixels = Bytes::new(premultiplied(bytes));
         c.version += 1;
         if let Some(picture) = self.list.get_mut(id.0 as usize) {
             picture.width = width;

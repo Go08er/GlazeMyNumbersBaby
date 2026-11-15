@@ -1658,7 +1658,7 @@ draw:image(picture, x, y, w, h)
 | `module:write(offset, buffer)` | Copies the buffer into the module's memory at `offset`. |
 | `module:read(offset, length)` | A new buffer of `length` bytes of its memory at `offset`, 1 MiB at most. |
 | `module:picture()` | A new picture for a module to fill: `{ width, height }` (its size now, 0 × 0 before the first `take`) with `:ready()` and `:take(module, offset, width, height)`. Each call makes another. Drawn by `draw:image` and `draw:tile` like any picture (smooth by default). |
-| `picture:take(module, offset, w, h)` | `w × h × 4` bytes of the module's memory at `offset` become the picture, as `gmnb.pixels`' `set` takes them: red, green, blue, opacity, not premultiplied, rows from the top; any shape of up to 262 144 pixels (a field's), 1 to 16 384 a side. `true` if it was taken. |
+| `picture:take(module, offset, w, h)` | `w × h × 4` bytes of the module's memory at `offset` become the picture: red, green, blue, opacity, **premultiplied** (each colour already multiplied by the opacity, as a field's pixels are, and unlike `gmnb.pixels`' `set`), rows from the top. A colour above its pixel's opacity is clamped to it as the bytes are copied. Any shape of up to 262 144 pixels (a field's), 1 to 16 384 a side. `true` if it was taken. |
 | `picture:ready()` | Whether a `take` now would be taken. |
 
 The rules:

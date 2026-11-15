@@ -221,8 +221,14 @@ impl Cache {
                 {
                     return Some(texture.clone());
                 }
-                // As the theme wrote it: not premultiplied.
-                let made = texture_of(canvas.width, canvas.height, canvas.pixels, false)?;
+                // A `gmnb.pixels` picture as the theme wrote it, not
+                // premultiplied; a module's premultiplied, as a field's is.
+                let made = texture_of(
+                    canvas.width,
+                    canvas.height,
+                    canvas.pixels,
+                    canvas.premultiplied,
+                )?;
                 canvases.insert(id, (canvas.version, made.clone()));
                 Some(made)
             }

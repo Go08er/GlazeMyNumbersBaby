@@ -1052,6 +1052,73 @@ fn module_pictures_are_capped_in_number_size_and_the_image_total() {
     );
 }
 
+/// `fill(n, count, out)`: `count` pixels at `out`, each (n, n, n, 255);
+/// and 16 bytes at 0 whose colours are above their opacity in places:
+/// (200, 100, 50, 128), (255, 255, 255, 0), (10, 20, 30, 255) and
+/// (130, 129, 128, 128).
+const GREYS: &str = r#"
+(module
+  (memory (export "memory") 8)
+  (data (i32.const 0) "\c8\64\32\80\ff\ff\ff\00\0a\14\1e\ff\82\81\80\80")
+  (func (export "fill") (param $n i32) (param $count i32) (param $out i32)
+    (local $end i32)
+    (local.set $end (i32.add (local.get $out) (i32.mul (local.get $count) (i32.const 4))))
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $out) (local.get $end)))
+      (i32.store8 (local.get $out) (local.get $n))
+      (i32.store8 offset=1 (local.get $out) (local.get $n))
+      (i32.store8 offset=2 (local.get $out) (local.get $n))
+      (i32.store8 offset=3 (local.get $out) (i32.const 255))
+      (local.set $out (i32.add (local.get $out) (i32.const 4)))
+      (br $l)))))
+"#;
+
+#[test]
+fn a_module_picture_is_premultiplied_its_colours_clamped_as_it_is_taken() {
+    let d = dir("premultiplied");
+    d.wat("paint.wasm", GREYS);
+    let theme = d.background(
+        r#"
+        local paint = gmnb.module("paint.wasm")
+        local picture = paint:picture()
+        local pixels = gmnb.pixels(2, 2)
+        "#,
+        r#"
+        assert(picture:take(paint, 0, 2, 2))
+        -- The same bytes again (clamped as before): nothing changes.
+        assert(picture:take(paint, 0, 2, 2))
+        draw:image(picture, 0, 0, 2, 2)
+        -- A picture the theme fills from a buffer stays as written.
+        assert(pixels:set(paint:read(0, 16)))
+        draw:image(pixels, 2, 0, 2, 2)
+        "#,
+    );
+    let d0 = drawn(&theme);
+    let clamped = [
+        128, 100, 50, 128, 0, 0, 0, 0, 10, 20, 30, 255, 128, 128, 128, 128,
+    ];
+    let canvas = theme.api().canvas(ImageId(0)).unwrap();
+    assert!(canvas.premultiplied);
+    assert_eq!(&canvas.pixels[..], &clamped);
+    assert_eq!(canvas.version, 1);
+    assert!(matches!(
+        d0.list.ops[0],
+        Op::Image {
+            image: ImageId(0),
+            ..
+        }
+    ));
+    let straight = theme.api().canvas(ImageId(1)).unwrap();
+    assert!(!straight.premultiplied);
+    assert_eq!(
+        &straight.pixels[..],
+        &[
+            200, 100, 50, 128, 255, 255, 255, 0, 10, 20, 30, 255, 130, 129, 128, 128
+        ]
+    );
+    assert!(notes(&theme).is_empty(), "{:?}", notes(&theme));
+}
+
 // ---- When modules are ready -----------------------------------------------------------
 
 #[test]

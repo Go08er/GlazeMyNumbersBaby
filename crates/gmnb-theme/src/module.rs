@@ -1227,7 +1227,8 @@ fn picture_of(this: &Value) -> mlua::Result<Option<ImageId>> {
 }
 
 /// `picture:take(module, offset, width, height)`: `width × height × 4`
-/// bytes of the module's memory become the picture.
+/// bytes of the module's memory become the picture: RGBA, premultiplied,
+/// each colour clamped to its pixel's opacity as it is copied.
 fn take(
     lua: &Lua,
     modules: &RefCell<Modules>,
