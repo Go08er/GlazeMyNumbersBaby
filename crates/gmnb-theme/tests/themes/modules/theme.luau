@@ -20,28 +20,32 @@ local function size(width: number, height: number): (number, number)
 	return math.clamp(math.floor(width / 8), 1, 512), math.clamp(math.floor(height / 8), 1, 512)
 end
 
+-- Typed apart, as the built-in themes do: an option's `type` is then one
+-- of the names, not any string.
+local options: { Option } = {
+	{
+		id = "tint",
+		type = "choice",
+		label = "Tint",
+		choices = { { id = "warm", label = "Warm" }, { id = "cool", label = "Cool" } },
+		preview = function(draw: Draw, frame: Preview, choice: string): ()
+			if choice == "warm" then
+				paint:call("tint", 255, 128, 0)
+			else
+				paint:call("tint", 0, 128, 255)
+			end
+			paint:call("fill", 16, 16, OUT)
+			tile:take(paint, OUT, 16, 16)
+			draw:image(tile, 0, 0, frame.width, frame.height, { filter = "nearest" })
+		end,
+	},
+}
+
 local theme: Theme = {
 	api = 1,
 	name = "Modules",
 	description = "A picture a WebAssembly module paints",
-	options = {
-		{
-			id = "tint",
-			type = "choice",
-			label = "Tint",
-			choices = { { id = "warm", label = "Warm" }, { id = "cool", label = "Cool" } },
-			preview = function(draw: Draw, frame: Preview, choice: string): ()
-				if choice == "warm" then
-					paint:call("tint", 255, 128, 0)
-				else
-					paint:call("tint", 0, 128, 255)
-				end
-				paint:call("fill", 16, 16, OUT)
-				tile:take(paint, OUT, 16, 16)
-				draw:image(tile, 0, 0, frame.width, frame.height, { filter = "nearest" })
-			end,
-		},
-	},
+	options = options,
 	layers = {
 		background = {
 			draw = function(draw: Draw, frame: Frame): number?
