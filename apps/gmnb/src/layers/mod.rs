@@ -1622,7 +1622,7 @@ end } } }
 
     /// A theme that draws one of each kind of picture: a still from a
     /// file, the same tiled, a picture it fills, an animation and a
-    /// field.
+    /// field. From its second second on it fills the picture again, red.
     const PICTURES: &str = r##"
 local still = gmnb.image("still.png")
 local moving = gmnb.animation("anim.gif")
@@ -1631,10 +1631,14 @@ local two = buffer.create(8)
 buffer.writeu32(two, 0, 0xff00ff00)   -- green
 buffer.writeu32(two, 4, 0x80ffffff)   -- white, half clear
 canvas:set(two)
+local red = buffer.create(8)
+buffer.writeu32(red, 0, 0xff0000ff)
+buffer.writeu32(red, 4, 0xff0000ff)
 local ramp = gmnb.ramp({ colors = { "#ffcf29", "#010609" }, edge = { 0.5, 0.5 } })
 local grid = buffer.create(2 * 2 * 4)
 for i, v in { 0, 2, 0, 2 } do buffer.writef32(grid, (i - 1) * 4, v) end
 return { api = 1, name = "Pictures", layers = { background = { draw = function(draw, frame)
+    if frame.time >= 1 then canvas:set(red) end
     draw:rect(0, 0, frame.width, frame.height, "#000000")
     draw:image(still, 0, 0, 160, 120, { filter = "nearest" })
     draw:image(canvas, 160, 0, 80, 40, { filter = "nearest" })
@@ -1709,11 +1713,12 @@ end } } }
             "{notes:?}"
         );
 
-        // A field that has changed is a new picture. Its texture is kept
-        // beside the old one's while the old picture is still someone's
-        // (here: the first frame's), and the old one's goes with it.
-        // (Drawn where nothing may move, so that the animation asks for
-        // no frame.)
+        // A field that has changed is a new picture, and so is a picture
+        // the theme has filled again. Each one's texture is kept beside
+        // the old one's while the old picture is still someone's (here:
+        // the first frame's), and the old one's goes with it. (Drawn
+        // where nothing may move, so that the animation asks for no
+        // frame.)
         let moved = Frame {
             time: 1.0,
             motion: false,
@@ -1724,7 +1729,13 @@ end } } }
             Err(e) => panic!("{e:?}"),
         };
         replay::replay(&gtk::Snapshot::new(), &moved.list, &scene);
-        assert_eq!(cache.textures(), 5);
+        assert_eq!(cache.textures(), 6);
+        // The first frame, drawn again now (a tile in Settings is): the
+        // picture the theme filled as it was then, green and white, not
+        // the red it is now.
+        let s = gtk::Snapshot::new();
+        replay::replay(&s, &drawn.list, &scene);
+        assert_eq!(cache.textures(), 6);
         drop(drawn);
         replay::replay(&gtk::Snapshot::new(), &moved.list, &scene);
         assert_eq!(cache.textures(), 4);

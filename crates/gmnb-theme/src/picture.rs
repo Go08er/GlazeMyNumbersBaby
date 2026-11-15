@@ -28,7 +28,7 @@
 //! the count, and is not tried again.
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use gmnb_media::{AnimLimits, Bucket, Bytes, Rgba as Decoded, Timeline};
@@ -125,7 +125,9 @@ pub enum Pixels {
 }
 
 /// A picture the theme fills (`gmnb.pixels`, or a module's), as it
-/// stands.
+/// stood at one version. A draw of it holds the version it drew
+/// ([`crate::draw::Op::Image`]'s `canvas`), so that what was drawn is what
+/// is shown, whatever the theme does with the picture afterwards.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Canvas {
     pub width: u32,
@@ -134,15 +136,20 @@ pub struct Canvas {
     /// or premultiplied (a module's: [`Canvas::premultiplied`]).
     pub pixels: Bytes,
     /// Goes up each time the theme changes the picture: a texture made
-    /// of an earlier version is out of date.
+    /// of an earlier version is of that version.
     pub version: u64,
     /// The pixels are premultiplied, each colour no more than the
     /// opacity: a module's picture (`picture:take`).
     pub premultiplied: bool,
 }
 
+/// Earlier versions of the theme's pictures that draws still hold, at
+/// most: past that, a change is refused (as past the image total).
+pub const EARLIER_HELD: usize = 1024;
+
 struct CanvasState {
-    canvas: Canvas,
+    /// The version standing: shared with each draw of it.
+    canvas: Rc<Canvas>,
     /// How often it may change: 30 times a second, two in hand.
     allowance: Bucket,
     /// A module's picture (`module:picture`), whose size each `take`
@@ -231,6 +238,10 @@ pub struct Pictures {
     decoded: u64,
     noises: usize,
     canvases: HashMap<ImageId, CanvasState>,
+    /// Versions of those pictures since changed that draws may still
+    /// hold (a layer's last frame, Settings' tiles): while one is alive it
+    /// counts against the image total, with the pictures as they stand.
+    earlier: Vec<Weak<Canvas>>,
     /// Module pictures made.
     module_pictures: usize,
     playheads: HashMap<ImageId, Playhead>,
@@ -259,6 +270,7 @@ impl Pictures {
             decoded: 0,
             noises: 0,
             canvases: HashMap::new(),
+            earlier: Vec::new(),
             module_pictures: 0,
             playheads: HashMap::new(),
             spoiled: Vec::new(),
@@ -384,7 +396,66 @@ impl Pictures {
 
     /// A picture the theme fills, as it stands.
     pub fn canvas(&self, id: ImageId) -> Option<&Canvas> {
-        self.canvases.get(&id).map(|c| &c.canvas)
+        self.canvases.get(&id).map(|c| &*c.canvas)
+    }
+
+    /// The version of a picture the theme fills standing now, shared:
+    /// what a draw of it holds.
+    pub fn snapshot(&self, id: ImageId) -> Option<Rc<Canvas>> {
+        self.canvases.get(&id).map(|c| c.canvas.clone())
+    }
+
+    /// Bytes of earlier versions of the theme's pictures that draws still
+    /// hold, and how many there are.
+    pub fn earlier_bytes(&self) -> (u64, usize) {
+        self.earlier
+            .iter()
+            .filter_map(Weak::upgrade)
+            .fold((0, 0), |(bytes, n), c| {
+                (bytes + c.pixels.len() as u64, n + 1)
+            })
+    }
+
+    /// Why picture `id` can't become `wanted` bytes now, if it can't: the
+    /// theme's pictures as they stand, and the earlier versions draws
+    /// still hold (this one's too, once it is changed, if a draw holds
+    /// it), are kept within the image total and [`EARLIER_HELD`].
+    fn room_for(&mut self, id: ImageId, wanted: u64) -> Result<(), String> {
+        // (Those no draw holds any more are forgotten.)
+        self.earlier.retain(|e| e.strong_count() > 0);
+        let (earlier, count) = self.earlier_bytes();
+        let Some(state) = self.canvases.get(&id) else {
+            return Ok(());
+        };
+        let held = state.canvas.pixels.len() as u64;
+        // (The picture's own table holds no version: only draws do.)
+        let drawn = Rc::strong_count(&state.canvas) > 1;
+        let kept = if drawn { held } else { 0 };
+        if self.decoded - held + wanted + earlier + kept > self.limits.image_bytes {
+            return Err(format!(
+                "the theme's pictures, with the earlier ones still shown, would be over {} MiB \
+                 decoded",
+                self.limits.image_bytes >> 20
+            ));
+        }
+        if drawn && count >= EARLIER_HELD {
+            return Err(format!(
+                "{EARLIER_HELD} earlier versions of the theme's pictures are still shown"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Picture `id` becomes `canvas`: the version it was is kept track
+    /// of while a draw holds it.
+    fn replace(&mut self, id: ImageId, canvas: Canvas) {
+        let Some(state) = self.canvases.get_mut(&id) else {
+            return;
+        };
+        let old = std::mem::replace(&mut state.canvas, Rc::new(canvas));
+        if Rc::strong_count(&old) > 1 {
+            self.earlier.push(Rc::downgrade(&old));
+        }
     }
 
     pub(crate) fn take_notes(&mut self) -> Vec<String> {
@@ -604,14 +675,14 @@ impl Pictures {
         self.canvases.insert(
             id,
             CanvasState {
-                canvas: Canvas {
+                canvas: Rc::new(Canvas {
                     width,
                     height,
                     // It starts transparent.
                     pixels: Bytes::new(vec![0; bytes]),
                     version: 0,
                     premultiplied: false,
-                },
+                }),
                 allowance: Bucket::new(),
                 module: false,
             },
@@ -643,13 +714,13 @@ impl Pictures {
         self.canvases.insert(
             id,
             CanvasState {
-                canvas: Canvas {
+                canvas: Rc::new(Canvas {
                     width: 0,
                     height: 0,
                     pixels: Bytes::new(Vec::new()),
                     version: 0,
                     premultiplied: true,
-                },
+                }),
                 allowance: Bucket::new(),
                 module: true,
             },
@@ -701,16 +772,24 @@ impl Pictures {
                 self.limits.image_bytes >> 20
             )));
         }
+        self.room_for(id, wanted)
+            .map_err(|why| Refused::Over(format!("picture:take: {width}×{height}: {why}")))?;
         let state = self.canvases.get_mut(&id).expect("looked up above");
         if charged && !state.allowance.take(now) {
             return Err(Refused::TooSoon(state.allowance.wait(now)));
         }
+        let version = state.canvas.version + 1;
         self.decoded = self.decoded - held + wanted;
-        let c = &mut state.canvas;
-        c.width = width;
-        c.height = height;
-        c.pixels = Bytes::new(premultiplied(bytes));
-        c.version += 1;
+        self.replace(
+            id,
+            Canvas {
+                width,
+                height,
+                pixels: Bytes::new(premultiplied(bytes)),
+                version,
+                premultiplied: true,
+            },
+        );
         if let Some(picture) = self.list.get_mut(id.0 as usize) {
             picture.width = width;
             picture.height = height;
@@ -728,10 +807,10 @@ impl Pictures {
         bytes: Vec<u8>,
         now: f64,
     ) -> Result<Result<(), f64>, String> {
-        let Some(state) = self.canvases.get_mut(&id) else {
+        let Some(state) = self.canvases.get(&id) else {
             return Ok(Err(f64::INFINITY));
         };
-        let c = &mut state.canvas;
+        let c = &state.canvas;
         let want = c.width as usize * c.height as usize * 4;
         if bytes.len() != want {
             return Err(format!(
@@ -746,11 +825,24 @@ impl Pictures {
         if c.pixels[..] == bytes[..] {
             return Ok(Ok(()));
         }
+        let (width, height) = (c.width, c.height);
+        self.room_for(id, want as u64)
+            .map_err(|why| format!("gmnb.pixels: {width}×{height}: set was refused: {why}"))?;
+        let state = self.canvases.get_mut(&id).expect("looked up above");
         if !state.allowance.take(now) {
             return Ok(Err(state.allowance.wait(now)));
         }
-        c.pixels = Bytes::new(bytes);
-        c.version += 1;
+        let version = state.canvas.version + 1;
+        self.replace(
+            id,
+            Canvas {
+                width,
+                height,
+                pixels: Bytes::new(bytes),
+                version,
+                premultiplied: false,
+            },
+        );
         Ok(Ok(()))
     }
 

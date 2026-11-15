@@ -252,6 +252,10 @@ end
   out of date.
 - Setting it to the bytes it already holds changes nothing and costs
   nothing.
+- A draw shows the picture as it was when it was drawn: setting it again
+  later changes the frames drawn after, not the ones before (a tile in
+  Settings stands as it was drawn, and two layers may draw one picture
+  in turn, each its own version).
 - The buffer is yours and counts against the theme's 8 MiB of memory; the
   picture is the app's and counts against the image budget.
 
@@ -1175,12 +1179,18 @@ painting a picture costs more than decoding it.
 `gmnb.pixels(w, h)` charges `w × h × 4` to the image total and starts
 transparent. Like the others it remembers its arguments: the same size is
 the same picture. `set(buffer)` checks the length and copies the bytes
-(`mlua::Buffer::to_vec`); the app makes a new `gdk::MemoryTexture`
-(`R8G8B8A8`, straight alpha) of them the next time the picture is drawn.
-The old texture is dropped; the toolkit frees its copy on the graphics
-card with it. Bytes equal to the ones it holds change nothing and spend
-nothing. A picture over a limit has no size, and a `set` that returns
-`false`.
+(`mlua::Buffer::to_vec`) into a new version of the picture. A draw holds
+the version it drew (`Op::Image`'s and `Op::Tile`'s `canvas`, shared, not
+copied), and the app makes a `gdk::MemoryTexture` (`R8G8B8A8`, straight
+alpha; a module's picture `R8G8B8A8_PREMULTIPLIED`, as a field's) of each
+version the first time it is drawn, kept while a draw of that version is
+alive. A version no draw holds is dropped with its texture; the toolkit
+frees its copy on the graphics card with it. While draws hold earlier
+versions (a layer's last frame, Settings' tiles), they count against the
+image total with the pictures as they stand, and at most 1024 of them
+are held: a `set` or a `take` past either is refused, with a note. Bytes
+equal to the ones it holds change nothing and spend nothing. A picture
+over a limit has no size, and a `set` that returns `false`.
 
 The allowance: each picture has up to 2 tokens, gains 30 a second, and a
 `set` spends one. (A plain "not within 33 ms" would refuse every other

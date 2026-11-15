@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use gmnb_theme::draw::{Filter, Op};
 use gmnb_theme::layer::{Drawn, Failure, Frame, LayerKind};
-use gmnb_theme::picture::ImageId;
+use gmnb_theme::picture::{EARLIER_HELD, ImageId};
 use gmnb_theme::theme::{Source, Theme};
 use gmnb_theme::{Budget, Ctx, Limits, ThemeError};
 
@@ -1101,13 +1101,14 @@ fn a_module_picture_is_premultiplied_its_colours_clamped_as_it_is_taken() {
     assert!(canvas.premultiplied);
     assert_eq!(&canvas.pixels[..], &clamped);
     assert_eq!(canvas.version, 1);
-    assert!(matches!(
-        d0.list.ops[0],
-        Op::Image {
-            image: ImageId(0),
-            ..
-        }
-    ));
+    // What the draw holds is the picture as taken.
+    let Op::Image {
+        canvas: Some(held), ..
+    } = &d0.list.ops[0]
+    else {
+        panic!("{:?}", d0.list.ops[0]);
+    };
+    assert_eq!(**held, canvas);
     let straight = theme.api().canvas(ImageId(1)).unwrap();
     assert!(!straight.premultiplied);
     assert_eq!(
@@ -1169,23 +1170,102 @@ fn tiles(d: &Dir, side: u32, takes: u32, limits: Limits) -> Theme {
     theme
 }
 
+/// The version of a module picture a list's first op drew, and its
+/// first byte.
+fn held(list: &gmnb_theme::draw::DisplayList) -> (u64, u8) {
+    match &list.ops[0] {
+        Op::Image {
+            canvas: Some(c), ..
+        } => (c.version, c.pixels[0]),
+        op => panic!("{op:?}"),
+    }
+}
+
 #[test]
-fn a_tile_has_no_allowance() {
+fn a_draw_shows_a_picture_as_it_was_and_a_tile_has_no_allowance() {
     let d = dir("tiles");
     let theme = tiles(&d, 2, 3, limits());
     let _now = clock(&theme, 100.0);
     let option = theme.def.options[0].clone();
     // Each tile takes the picture three times at one moment, every take
     // taken (a frame of a layer has two in hand), and draws the last.
-    theme.preview(&option, "a", &Ctx::default()).unwrap();
-    theme.preview(&option, "b", &Ctx::default()).unwrap();
-    let canvas = theme.api().canvas(ImageId(0)).unwrap();
-    assert_eq!((canvas.version, canvas.pixels[0]), (6, 6));
+    let a = theme.preview(&option, "a", &Ctx::default()).unwrap();
+    let b = theme.preview(&option, "b", &Ctx::default()).unwrap();
+    // Each tile holds the picture as it drew it, though the picture has
+    // changed since: the tiles in Settings stand as they were drawn.
+    assert_eq!(held(&a), (3, 3));
+    assert_eq!(held(&b), (6, 6));
+    assert_eq!(theme.api().canvas(ImageId(0)).unwrap().version, 6);
+    // The earlier version a tile still shows is counted (the versions
+    // taken over within a hook, which nothing drew, are not).
+    assert_eq!(theme.api().pictures().earlier_bytes(), (16, 1));
     // The tiles spent nothing of the allowance: at the same moment a
     // frame has its two in hand, and is refused the third.
-    let again: Vec<_> = (0..3).map(|_| drawn(&theme).again).collect();
+    let frames: Vec<_> = (0..3).map(|_| drawn(&theme)).collect();
+    let again: Vec<_> = frames.iter().map(|f| f.again).collect();
     assert_eq!(again, [Some(1.0), Some(1.0), Some(2.0)]);
+    // A frame refused shows what stands, which the frame before took.
+    assert_eq!(held(&frames[2].list), held(&frames[1].list));
+    drop(a);
+    drop(frames);
+    // The second tile's version is all that is held besides the one
+    // standing; and let go, nothing is.
+    assert_eq!(theme.api().pictures().earlier_bytes(), (16, 1));
+    assert_eq!(held(&b), (6, 6));
+    drop(b);
+    assert_eq!(theme.api().pictures().earlier_bytes(), (0, 0));
     assert!(notes(&theme).is_empty(), "{:?}", notes(&theme));
+}
+
+#[test]
+fn earlier_versions_still_shown_count_against_the_image_total() {
+    let d = dir("earlier");
+    // A picture of 256 KiB, and 1 MiB for all of them.
+    let mut lim = limits();
+    lim.draw.image_bytes = 1 << 20;
+    let theme = tiles(&d, 256, 1, lim);
+    let option = theme.def.options[0].clone();
+    let mut kept = Vec::new();
+    for k in 1..=5u64 {
+        kept.push(theme.preview(&option, "a", &Ctx::default()).unwrap());
+        let version = theme.api().canvas(ImageId(0)).unwrap().version;
+        // Four fit: the one standing and three earlier ones the tiles
+        // hold. The fifth would hold 1.25 MiB: refused, the picture stays.
+        assert_eq!(version, k.min(4), "tile {k}");
+    }
+    told(
+        &notes(&theme),
+        "picture:take: 256×256: the theme's pictures, with the earlier ones still shown, would \
+         be over 1 MiB decoded",
+    );
+    // Let go, they are counted no more.
+    kept.clear();
+    theme.preview(&option, "a", &Ctx::default()).unwrap();
+    assert_eq!(theme.api().canvas(ImageId(0)).unwrap().version, 5);
+}
+
+#[test]
+fn at_most_so_many_earlier_versions_are_held() {
+    let d = dir("held");
+    let theme = tiles(&d, 1, 1, limits());
+    let option = theme.def.options[0].clone();
+    let kept: Vec<_> = (0..=EARLIER_HELD)
+        .map(|_| theme.preview(&option, "a", &Ctx::default()).unwrap())
+        .collect();
+    // The one standing and EARLIER_HELD earlier: one more is refused.
+    let last = EARLIER_HELD as u64 + 1;
+    assert_eq!(theme.api().canvas(ImageId(0)).unwrap().version, last);
+    assert_eq!(
+        theme.api().pictures().earlier_bytes(),
+        (4 * EARLIER_HELD as u64, EARLIER_HELD)
+    );
+    let refused = theme.preview(&option, "a", &Ctx::default()).unwrap();
+    assert_eq!(held(&refused).0, last);
+    told(
+        &notes(&theme),
+        &format!("{EARLIER_HELD} earlier versions of the theme's pictures are still shown"),
+    );
+    drop(kept);
 }
 
 // ---- When modules are ready -----------------------------------------------------------

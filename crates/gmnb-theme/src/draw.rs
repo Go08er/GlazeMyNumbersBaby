@@ -287,6 +287,11 @@ pub enum Op {
         image: ImageId,
         rect: Rect,
         filter: Filter,
+        /// Of a picture the theme fills (`gmnb.pixels`, a module's): the
+        /// version drawn. It is what is shown, whatever the theme does
+        /// with the picture after (a tile in Settings stands; two
+        /// readouts may draw one picture in turn).
+        canvas: Option<Rc<Canvas>>,
     },
     /// The picture repeated at its own size over `rect` (of an animation,
     /// its first frame), sampled with `filter` on a screen of more pixels
@@ -295,6 +300,8 @@ pub enum Op {
         image: ImageId,
         rect: Rect,
         filter: Filter,
+        /// As [`Op::Image`]'s.
+        canvas: Option<Rc<Canvas>>,
     },
     /// One frame of an animation scaled into `rect`. `still`: nothing
     /// moves (reduced motion, a preview), and `frame` is the first; the
@@ -1678,12 +1685,18 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     let pixels = pictures
                         .get(image)
                         .map_or(0.0, |p| f64::from(p.width) * f64::from(p.height));
+                    // Of a picture the theme fills: the version drawn.
+                    let canvas = match kind {
+                        Some(PictureKind::Canvas) => pictures.snapshot(image),
+                        _ => None,
+                    };
                     let op = match kind {
                         // Of an animation a tile is its first frame.
                         _ if tile => Op::Tile {
                             image,
                             rect,
                             filter: filter.unwrap_or(Filter::Linear),
+                            canvas,
                         },
                         Some(PictureKind::Animation(_, timeline)) => {
                             // Nothing moves under reduced motion or in a
@@ -1725,11 +1738,13 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                             image,
                             rect,
                             filter: filter.unwrap_or(Filter::Linear),
+                            canvas,
                         },
                         _ => Op::Image {
                             image,
                             rect,
                             filter: filter.unwrap_or(Filter::Trilinear),
+                            canvas: None,
                         },
                     };
                     drop(pictures);

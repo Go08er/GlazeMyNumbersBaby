@@ -737,7 +737,8 @@ export type Pixels = {
 	-- opacity (not premultiplied), rows from the top. As one number with
 	-- buffer.writeu32: 0xAABBGGRR. Returns false, changing nothing, if
 	-- the picture was changed too recently (30 times a second at most);
-	-- the layer being drawn is then drawn once more when it can be.
+	-- the layer being drawn is then drawn once more when it can be. A
+	-- draw shows the picture as it was when drawn.
 	set: (self: Pixels, data: buffer) -> boolean,
 }
 
@@ -758,7 +759,8 @@ export type ModulePicture = {
 	-- the top; any shape of up to 262 144 pixels, 1 to 16 384 a side.
 	-- Returns false, changing nothing, if it isn't ready, or if the bytes
 	-- aren't in the module's memory (with a note). The same bytes again
-	-- change nothing and cost nothing.
+	-- change nothing and cost nothing. A draw shows the picture as it was
+	-- when drawn.
 	take: (self: ModulePicture, module: Module, offset: number, width: number, height: number) -> boolean,
 }
 
