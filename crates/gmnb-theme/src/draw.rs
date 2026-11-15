@@ -73,9 +73,14 @@ pub struct DrawLimits {
     pub canvas_side: u32,
     /// Pictures a theme may make to fill.
     pub canvases: usize,
-    /// Pictures a theme's modules may fill (`module:picture`): each up to
-    /// [`DrawLimits::canvas_side`] a side.
+    /// Pictures a theme's modules may fill (`module:picture`).
     pub module_pictures: usize,
+    /// A module's picture, in pixels: any shape, as many as a field's
+    /// (`draw:field`'s), so that a wide window's field fits (Swirls' at
+    /// 1920×1080 is 533×300; Aurora's light is as wide as the window).
+    pub module_picture_pixels: u32,
+    /// A module's picture: its width and height.
+    pub module_picture_side: u32,
     /// Fields per `draw`.
     pub fields: usize,
     /// Ramps whose colours are held at once (a theme may make any number:
@@ -106,6 +111,8 @@ impl Default for DrawLimits {
             canvas_side: 512,
             canvases: 4,
             module_pictures: 4,
+            module_picture_pixels: 262_144,
+            module_picture_side: 16_384,
             fields: 2,
             ramps: 8,
         }

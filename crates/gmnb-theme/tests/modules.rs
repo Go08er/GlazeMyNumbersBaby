@@ -360,8 +360,10 @@ fn wrong_calls_do_nothing_and_are_noted_once_per_call_site() {
         assert(paint:read(65530, 8) == nil)
         assert(paint:read(0, 2 ^ 21) == nil)
         assert(picture:take(paint, 65536 - 16, 4, 4) == false)
-        assert(picture:take(paint, 0, 513, 1) == false)
+        assert(picture:take(paint, 0, 16385, 1) == false)
         assert(picture:take(paint, 0, 0, 4) == false)
+        assert(picture:take(paint, 0, 600, 600) == false)
+        assert(picture:take(paint, 0, 2^32 - 1, 2^32 - 1) == false)
         assert(picture:take({}, 0, 1, 1) == false)
         -- The offset changes each frame; the note doesn't.
         assert(picture:take(paint, 65536 + n, 1, 1) == false)
@@ -382,8 +384,10 @@ fn wrong_calls_do_nothing_and_are_noted_once_per_call_site() {
         "8 bytes at 65530 aren't in its memory of 65536",
         "2097152 bytes; one read is at most 1048576",
         "4×4 at 65520 isn't in its memory of 65536",
-        "513×1; a module's picture is 1×1 to 512×512",
-        "0×4; a module's picture is 1×1 to 512×512",
+        "16385×1; a module's picture is at most 262144 pixels, 1 to 16384 a side",
+        "0×4; a module's picture is at most 262144 pixels",
+        "600×600; a module's picture is at most 262144 pixels",
+        "4294967295×4294967295; a module's picture is at most 262144 pixels",
         "picture:take takes a module",
         "1×1 at 65537 isn't in its memory",
     ] {
@@ -933,6 +937,55 @@ fn ready_says_whether_a_take_would_be_taken_and_owes_the_redraw() {
     assert_eq!(drawn(&theme).again, Some(3.0));
     let canvas = theme.api().canvas(ImageId(0)).unwrap();
     assert_eq!((canvas.width, canvas.height), (2, 3));
+}
+
+#[test]
+fn a_module_picture_is_any_shape_of_as_many_pixels_as_a_field() {
+    // A field's 262 144 pixels, in whatever shape the window gives it:
+    // Swirls' at 1920×1080 is 533×300, Aurora's light as wide as the
+    // window and a few rows tall.
+    let d = dir("picshape");
+    d.wat(
+        "paint.wasm",
+        &PAINT.replace(
+            "(memory (export \"memory\") 1)",
+            "(memory (export \"memory\") 17)",
+        ),
+    );
+    let theme = d.background(
+        r#"
+        local paint = gmnb.module("paint.wasm")
+        local wide, square, swirls = paint:picture(), paint:picture(), paint:picture()
+        "#,
+        r#"
+        paint:call("fill", 16384, 16, 0)
+        assert(wide:take(paint, 0, 16384, 16))
+        assert(wide.width == 16384 and wide.height == 16)
+        paint:call("fill", 512, 512, 0)
+        assert(square:take(paint, 0, 512, 512))
+        paint:call("fill", 533, 300, 0)
+        assert(swirls:take(paint, 0, 533, 300))
+        -- One row more, or one column: over.
+        assert(not swirls:take(paint, 0, 16384, 17))
+        assert(not swirls:take(paint, 0, 16385, 16))
+        assert(swirls.width == 533 and swirls.height == 300)
+        "#,
+    );
+    drawn(&theme);
+    assert_eq!(
+        theme.api().pictures().decoded_bytes(),
+        (16384 * 16 + 512 * 512 + 533 * 300) * 4
+    );
+    let all = notes(&theme);
+    told(
+        &all,
+        "16384×17; a module's picture is at most 262144 pixels",
+    );
+    told(
+        &all,
+        "16385×16; a module's picture is at most 262144 pixels",
+    );
+    assert_eq!(all.len(), 2, "{all:?}");
 }
 
 #[test]

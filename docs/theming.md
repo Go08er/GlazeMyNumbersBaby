@@ -1658,7 +1658,7 @@ draw:image(picture, x, y, w, h)
 | `module:write(offset, buffer)` | Copies the buffer into the module's memory at `offset`. |
 | `module:read(offset, length)` | A new buffer of `length` bytes of its memory at `offset`, 1 MiB at most. |
 | `module:picture()` | A new picture for a module to fill: `{ width, height }` (its size now, 0 × 0 before the first `take`) with `:ready()` and `:take(module, offset, width, height)`. Each call makes another. Drawn by `draw:image` and `draw:tile` like any picture (smooth by default). |
-| `picture:take(module, offset, w, h)` | `w × h × 4` bytes of the module's memory at `offset` become the picture, as `gmnb.pixels`' `set` takes them: red, green, blue, opacity, not premultiplied, rows from the top; 1 × 1 to 512 × 512. `true` if it was taken. |
+| `picture:take(module, offset, w, h)` | `w × h × 4` bytes of the module's memory at `offset` become the picture, as `gmnb.pixels`' `set` takes them: red, green, blue, opacity, not premultiplied, rows from the top; any shape of up to 262 144 pixels (a field's), 1 to 16 384 a side. `true` if it was taken. |
 | `picture:ready()` | Whether a `take` now would be taken. |
 
 The rules:
@@ -1770,7 +1770,7 @@ says so beside *Open themes folder*.
 | Time: one `sound` call | 2 ms |
 | Modules: count; all together; a module's memory | 4; 256 KiB, counted before anything is compiled; 64 MiB, declared or grown |
 | Modules: time; `read` | A call runs inside its hook's deadline; 1 MiB a call |
-| Module pictures: size; count; changes | 512×512; 4; 30 a second each (counted against "Images: total decoded" at their current size) |
+| Module pictures: size; count; changes | 262 144 pixels, any shape, 16 384 a side; 4; 30 a second each (counted against "Images: total decoded" at their current size) |
 
 Every entry into the theme's code runs under its time limit, the first
 load included. **A time limit is of processor time**: what the theme's

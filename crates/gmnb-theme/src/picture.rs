@@ -145,6 +145,24 @@ struct CanvasState {
     module: bool,
 }
 
+/// Why a module's picture can't be `width × height`, if it can't: 1 to
+/// [`DrawLimits::module_picture_side`] a side, and no more than
+/// [`DrawLimits::module_picture_pixels`] pixels (any shape).
+pub(crate) fn module_size(limits: &DrawLimits, width: u64, height: u64) -> Result<(), String> {
+    let side = u64::from(limits.module_picture_side);
+    let pixels = u64::from(limits.module_picture_pixels);
+    let fits = (1..=side).contains(&width)
+        && (1..=side).contains(&height)
+        && width.checked_mul(height).is_some_and(|n| n <= pixels);
+    if fits {
+        Ok(())
+    } else {
+        Err(format!(
+            "{width}×{height}; a module's picture is at most {pixels} pixels, 1 to {side} a side"
+        ))
+    }
+}
+
 /// Why a module picture didn't take what it was given.
 pub(crate) enum Refused {
     /// Too soon after the last change: it can be taken in this many
@@ -627,12 +645,8 @@ impl Pictures {
         bytes: &[u8],
         now: f64,
     ) -> Result<(), Refused> {
-        let side = self.limits.canvas_side;
-        if width == 0 || height == 0 || width > side || height > side {
-            return Err(Refused::Over(format!(
-                "picture:take: {width}×{height}; a module's picture is at most {side}×{side}"
-            )));
-        }
+        module_size(&self.limits, width.into(), height.into())
+            .map_err(|why| Refused::Over(format!("picture:take: {why}")))?;
         let Some(state) = self.canvases.get(&id).filter(|s| s.module) else {
             return Err(Refused::Over(
                 "picture:take was called on something that isn't a module's picture".into(),

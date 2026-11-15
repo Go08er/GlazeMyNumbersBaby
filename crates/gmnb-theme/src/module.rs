@@ -1243,7 +1243,7 @@ fn take(
     let Some(picture) = picture_of(&this)? else {
         return Ok(false);
     };
-    let side = shared.recorder.borrow().limits().canvas_side as usize;
+    let limits = shared.recorder.borrow().limits().clone();
     let taken = (|| {
         let (Some(offset), Some(width), Some(height)) =
             (index(&offset), index(&width), index(&height))
@@ -1252,11 +1252,9 @@ fn take(
                 "{what}: {file}: it takes an offset, a width and a height (whole numbers)"
             ));
         };
-        if width == 0 || height == 0 || width > side || height > side {
-            return Err(format!(
-                "{what}: {width}×{height}; a module's picture is 1×1 to {side}×{side}"
-            ));
-        }
+        // (The size is checked before it is multiplied out.)
+        crate::picture::module_size(&limits, width as u64, height as u64)
+            .map_err(|why| format!("{what}: {why}"))?;
         let memory = memory(&mut m, at, &file, what)?;
         let live = m.live(at).ok_or("not started")?;
         let bytes = memory.data(&live.store);
