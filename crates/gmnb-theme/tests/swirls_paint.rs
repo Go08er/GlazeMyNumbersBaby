@@ -479,3 +479,98 @@ fn what_the_module_refuses_and_a_fresh_one_has_no_ramp() {
     assert_eq!(paint.at(8, 0), 0);
     assert_eq!(paint.at(0, 4), 0);
 }
+
+/// This thread's processor time, in milliseconds: what a hook's deadline
+/// is of.
+fn cpu_ms() -> f64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `clock_gettime` writes the one `timespec` it is given.
+    assert_eq!(
+        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) },
+        0
+    );
+    ts.tv_sec as f64 * 1000.0 + ts.tv_nsec as f64 / 1e6
+}
+
+/// What a pass costs at Swirls' sizes, the module (as the app runs it:
+/// epoch interruption on, a deadline far off) against the native pass:
+/// the median of 50 after 5. Run with `--release -- --ignored
+/// --nocapture`.
+#[test]
+#[ignore = "a measurement: cargo test --release -p gmnb-theme --test swirls_paint -- --ignored --nocapture"]
+fn what_a_pass_costs() {
+    let mut config = wasmtime::Config::new();
+    config
+        .wasm_simd(true)
+        .wasm_relaxed_simd(false)
+        .cranelift_nan_canonicalization(true)
+        .epoch_interruption(true);
+    let engine = wasmtime::Engine::new(&config).unwrap();
+    let module = wasmtime::Module::new(&engine, PAINT).unwrap();
+    let mut store = wasmtime::Store::new(&engine, ());
+    store.set_epoch_deadline(u64::MAX / 2);
+    let instance = wasmtime::Instance::new(&mut store, &module, &[]).unwrap();
+    let mut paint = Paint {
+        memory: instance.get_memory(&mut store, "memory").unwrap(),
+        at: instance.get_typed_func(&mut store, "at").unwrap(),
+        ramp: instance.get_typed_func(&mut store, "ramp").unwrap(),
+        size: instance.get_typed_func(&mut store, "size").unwrap(),
+        render: instance.get_typed_func(&mut store, "render").unwrap(),
+        store,
+    };
+    let (colors, edge, cycle) = swirls_ramps().remove(0);
+    let ramp = Ramp::new(&colors, edge, cycle).unwrap();
+    assert_eq!(paint.set_ramp(0, &colors, edge, cycle), 1);
+    let mut rng = Rng(7);
+    let median = |mut t: Vec<f64>| {
+        t.sort_by(f64::total_cmp);
+        t[t.len() / 2]
+    };
+    for (window, cols, rows, w, h) in [
+        ("760x640", 65, 55, 380, 320),
+        ("1600x1000", 77, 49, 506, 316),
+        ("1920x1080", 82, 47, 533, 300),
+    ] {
+        let case = Case {
+            next: Some(Case::random(&mut rng, cols, rows, 2).data),
+            mix: 0.4,
+            ..Case::random(&mut rng, cols, rows, 2)
+        };
+        let (mut module, mut native, mut write) = (Vec::new(), Vec::new(), Vec::new());
+        for i in 0..55 {
+            // The inputs written, as a theme writes them when they change.
+            let t = cpu_ms();
+            let (a, b) = (paint.at(0, 0), paint.at(0, 1));
+            paint.write(a, &case.data);
+            paint.write(b, case.next.as_ref().unwrap());
+            let written = cpu_ms() - t;
+            let t = cpu_ms();
+            let done = paint
+                .render
+                .call(
+                    &mut paint.store,
+                    (0, cols as u32, rows as u32, 2, 1, case.mix, 1.25, 0.0, w, h),
+                )
+                .unwrap();
+            let took = cpu_ms() - t;
+            assert_eq!(done, 1);
+            let t = cpu_ms();
+            std::hint::black_box(case.native(&ramp, w, h));
+            let natively = cpu_ms() - t;
+            if i >= 5 {
+                module.push(took);
+                native.push(natively);
+                write.push(written);
+            }
+        }
+        println!(
+            "{window} ({w} x {h}): module {:.3} ms a pass, native {:.3} ms; writing both snapshots {:.3} ms",
+            median(module),
+            median(native),
+            median(write)
+        );
+    }
+}

@@ -90,7 +90,7 @@ pub struct Cache {
     /// Pictures a theme fills, by picture and version: each version's
     /// texture, kept while a draw of that version is alive (a layer's
     /// last frame, a tile in Settings), as fields' are.
-    canvases: RefCell<Vec<(ImageId, u64, Weak<Canvas>, gdk::Texture)>>,
+    canvases: RefCell<Vec<Version>>,
     frames: RefCell<HashMap<ImageId, Frames>>,
     /// The textures of fields' pictures, each kept while its picture is
     /// alive: in a layer's picture, or as the last a field made.
@@ -100,6 +100,10 @@ pub struct Cache {
     player: RefCell<Option<Player>>,
     layouts: RefCell<HashMap<String, pango::Layout>>,
 }
+
+/// The texture of one version of a picture a theme fills: the picture,
+/// its version, the version itself (while a draw holds it) and the texture.
+type Version = (ImageId, u64, Weak<Canvas>, gdk::Texture);
 
 /// Layouts kept at once: more, and the cache starts again.
 const LAYOUTS: usize = 256;
