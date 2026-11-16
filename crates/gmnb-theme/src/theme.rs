@@ -1132,6 +1132,40 @@ impl Theme {
         job
     }
 
+    /// [`Theme::load`], and the theme's modules compiled and started
+    /// before it returns: its hooks may run at once. For tools and tests
+    /// (the app compiles while the theme showing stays:
+    /// `apps/gmnb/src/compile.rs`); a theme without modules is only loaded.
+    pub fn load_ready(source: Source, limits: Limits) -> Result<Theme, LoadError> {
+        let mut theme = Theme::load(source, limits)?;
+        theme.compile_modules_now();
+        Ok(theme)
+    }
+
+    /// [`Theme::prepare_modules`] and [`Theme::install_modules`], the
+    /// compile done on a thread started for it ([`module::Job::spawn`]) and
+    /// waited for. A module that can't be compiled is left out, with a
+    /// note, as in the app.
+    pub fn compile_modules_now(&mut self) {
+        let Some(job) = self.prepare_modules() else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let done = match job.spawn(move |done| {
+            let _ = tx.send(done);
+        }) {
+            Ok(thread) => {
+                let done = rx.recv().ok();
+                let _ = thread.join();
+                done
+            }
+            Err(refused) => Some(refused),
+        };
+        if let Some(done) = done {
+            self.install_modules(done);
+        }
+    }
+
     /// What a [`module::Job`] of this theme's compiled: each module is
     /// started, those that couldn't be are left out (with a note), and
     /// the theme's hooks may run from now on.

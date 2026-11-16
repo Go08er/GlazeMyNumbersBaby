@@ -265,7 +265,7 @@ fn run(theme_path: &Path, out: &Path) -> Result<String, String> {
             theme_path.display()
         ));
     };
-    let theme = Theme::load(Source::folder("dev", &dir), Limits::default())
+    let theme = Theme::load_ready(Source::folder("dev", &dir), Limits::default())
         .map_err(|e| format!("{}: {e}", dir.display()))?;
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let write = |name: &str, samples: &[i16]| {

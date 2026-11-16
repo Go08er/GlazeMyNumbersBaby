@@ -20,7 +20,7 @@ use gmnb_theme::theme::{self, OptionDef, OptionKind, Source, Theme};
 use gmnb_theme::{Ctx, OptionValue};
 
 fn built_in(id: &str) -> Theme {
-    Theme::load(Source::built_in(id).unwrap(), common::limits()).unwrap()
+    Theme::load_ready(Source::built_in(id).unwrap(), common::limits()).unwrap()
 }
 
 fn text(s: &str) -> OptionValue {

@@ -230,7 +230,7 @@ return { api = 1, name = "T", layers = {
     assert!(!t.def.layers["display"].unfaded);
     assert!(!t.def.layers["keypad"].unfaded);
     let built_in =
-        |id: &str| Theme::load(Source::built_in(id).unwrap(), Limits::default()).unwrap();
+        |id: &str| Theme::load_ready(Source::built_in(id).unwrap(), Limits::default()).unwrap();
     for id in ["aurora", "sprinkles", "swirls"] {
         assert!(built_in(id).def.layers["background"].unfaded, "{id}");
     }

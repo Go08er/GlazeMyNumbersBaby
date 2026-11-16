@@ -2565,7 +2565,7 @@ fn a_preview_draws_a_tile_for_one_choice() {
 // ---- The built-in themes ----------------------------------------------------------------------------
 
 fn built_in(id: &str, limits: Limits) -> Theme {
-    Theme::load(Source::built_in(id).unwrap(), limits).unwrap()
+    Theme::load_ready(Source::built_in(id).unwrap(), limits).unwrap()
 }
 
 #[test]
