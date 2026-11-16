@@ -17,7 +17,7 @@ What a theme gains:
 | Animated pictures: GIF, APNG, animated WebP | `gmnb.animation`, drawn with `draw:image` |
 | Silent video loops | An animated WebP, made from the video with one command |
 | Pictures the theme computes | `gmnb.pixels`: a Luau `buffer` of pixels, drawn as a picture |
-| Swirls, plasma, contour bands, gradient maps | `draw:field`: a coarse grid of numbers the theme computes, coloured per pixel by the app through a `gmnb.ramp` |
+| Swirls, plasma, contour bands, gradient maps | `draw:field`: a coarse grid of numbers the theme computes, coloured per pixel by the app through a `gmnb.ramp` (Swirls itself, since 0.4: the same pass in a module it ships) |
 | Sounds for keys, results, errors | `sounds = { … }`, `sound(event)`, `gmnb.synth`, `gmnb.sound` |
 
 Not in API 1, and why: [What is in API 1 and what is deferred](#what-is-in-api-1-and-what-is-deferred).
@@ -252,6 +252,14 @@ end
   out of date.
 - Setting it to the bytes it already holds changes nothing and costs
   nothing.
+- A draw shows the picture as it was when it was drawn: setting it again
+  later changes the frames drawn after, not the ones before (a tile in
+  Settings stands as it was drawn). The picture has one allowance,
+  whichever layer sets it: two layers that set it to different bytes
+  every frame ask for 60 changes a second, and half are refused (each
+  then draws what the picture holds, the other's). Two layers that set
+  the same bytes cost one change. (A module's picture is kept per layer:
+  [theming.md](theming.md#modules).)
 - The buffer is yours and counts against the theme's 8 MiB of memory; the
   picture is the app's and counts against the image budget.
 
@@ -267,9 +275,10 @@ pixel art. For a whole window of smooth colour, use a field.
 > app's only effect-specific native code. In 0.4 they move out of GMNB:
 > themes get WebAssembly modules for their heavy work, near native speed in
 > a sandbox like Luau's, and the field pass becomes a module a theme ships
-> in its own folder (Swirls first), so no theme gets native speed another
-> theme can't. Until then they work as described here; a theme built on
-> them will need the module in 0.4.
+> in its own folder (Swirls first: its `paint.wasm`, built from
+> `modules/field`, is this pass byte for byte), so no theme gets native
+> speed another theme can't. Until then they work as described here; a
+> theme built on them will need the module in 0.4.
 >
 > **What belongs in the app.** A library or native building block is part
 > of GMNB itself only if it is general enough to serve most theme makers
@@ -400,7 +409,10 @@ this example grown into a theme: the same field behind glass keys, with a
 grid that keeps its number of points whatever the window's size, a clock
 quantised to thirtieths of a second, the paint stirred where keys are
 pressed (by moving where the field is looked up), and the readout's
-figures cut out of a slice of it.
+figures cut out of a slice of it. Since 0.4 it colours its fields with a
+WebAssembly module it ships (`paint.wasm`, built from `modules/field`):
+this pass, step for step, in its own folder, drawn with `draw:image`
+([theming.md](theming.md#modules)).
 
 A field that hasn't changed isn't coloured again. Drawn with the same
 numbers, the same ramp and the same size as last time, it is the picture
@@ -1175,12 +1187,24 @@ painting a picture costs more than decoding it.
 `gmnb.pixels(w, h)` charges `w × h × 4` to the image total and starts
 transparent. Like the others it remembers its arguments: the same size is
 the same picture. `set(buffer)` checks the length and copies the bytes
-(`mlua::Buffer::to_vec`); the app makes a new `gdk::MemoryTexture`
-(`R8G8B8A8`, straight alpha) of them the next time the picture is drawn.
-The old texture is dropped; the toolkit frees its copy on the graphics
-card with it. Bytes equal to the ones it holds change nothing and spend
-nothing. A picture over a limit has no size, and a `set` that returns
-`false`.
+(`mlua::Buffer::to_vec`) into a new version of the picture. (It reads the
+picture off the table it is called on; called on a module's picture,
+which changes only by its `take`, it does nothing and says so.) A draw holds
+the version it drew (`Op::Image`'s and `Op::Tile`'s `canvas`, shared, not
+copied), and the app makes a `gdk::MemoryTexture` (`R8G8B8A8`, straight
+alpha; a module's picture `R8G8B8A8_PREMULTIPLIED`, as a field's) of each
+version the first time it is drawn, kept while a draw of that version is
+alive. A version no draw holds is dropped with its texture; the toolkit
+frees its copy on the graphics card with it. While draws hold earlier
+versions (a layer's last frame, Settings' tiles), they count against the
+image total with the pictures as they stand (of a module's picture, each
+version a layer or the tile being drawn last took, once however many
+hold it: a tile's is let go as the next tile is begun, and counted as an
+earlier one to come till then), and at most 1024 of them are held: a
+`set` or a `take` past either is refused, with a note, and the layer
+owed a frame (the earlier versions go as frames are drawn). Bytes
+equal to the ones it holds change nothing and spend nothing. A picture
+over a limit has no size, and a `set` that returns `false`.
 
 The allowance: each picture has up to 2 tokens, gains 30 a second, and a
 `set` spends one. (A plain "not within 33 ms" would refuse every other

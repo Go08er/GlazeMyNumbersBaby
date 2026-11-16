@@ -90,10 +90,17 @@ pub static BUILT_IN: [BuiltIn; 3] = [
     BuiltIn {
         id: "swirls",
         source: include_str!("../../../apps/gmnb/themes/swirls/theme.luau"),
-        files: &[(
-            "credits/ColorMix.txt",
-            include_bytes!("../../../apps/gmnb/themes/swirls/credits/ColorMix.txt"),
-        )],
+        files: &[
+            (
+                "credits/ColorMix.txt",
+                include_bytes!("../../../apps/gmnb/themes/swirls/credits/ColorMix.txt"),
+            ),
+            // Its paint: built from modules/field (modules/build.sh).
+            (
+                "paint.wasm",
+                include_bytes!("../../../apps/gmnb/themes/swirls/paint.wasm"),
+            ),
+        ],
     },
 ];
 
@@ -1130,6 +1137,40 @@ impl Theme {
             self.modules_done();
         }
         job
+    }
+
+    /// [`Theme::load`], and the theme's modules compiled and started
+    /// before it returns: its hooks may run at once. For tools and tests
+    /// (the app compiles while the theme showing stays:
+    /// `apps/gmnb/src/compile.rs`); a theme without modules is only loaded.
+    pub fn load_ready(source: Source, limits: Limits) -> Result<Theme, LoadError> {
+        let mut theme = Theme::load(source, limits)?;
+        theme.compile_modules_now();
+        Ok(theme)
+    }
+
+    /// [`Theme::prepare_modules`] and [`Theme::install_modules`], the
+    /// compile done on a thread started for it ([`module::Job::spawn`]) and
+    /// waited for. A module that can't be compiled is left out, with a
+    /// note, as in the app.
+    pub fn compile_modules_now(&mut self) {
+        let Some(job) = self.prepare_modules() else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let done = match job.spawn(move |done| {
+            let _ = tx.send(done);
+        }) {
+            Ok(thread) => {
+                let done = rx.recv().ok();
+                let _ = thread.join();
+                done
+            }
+            Err(refused) => Some(refused),
+        };
+        if let Some(done) = done {
+            self.install_modules(done);
+        }
     }
 
     /// What a [`module::Job`] of this theme's compiled: each module is

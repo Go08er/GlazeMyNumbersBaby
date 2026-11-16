@@ -420,7 +420,7 @@ fn sprinkles_layers_draw_within_their_limits() {
         let wall = pics.walls[dark as usize];
         assert!(matches!(
             drawn.list.ops[0],
-            Op::Tile { image, rect, filter: Filter::Nearest } if image == wall && rect == [0.0, 0.0, 760.0, 640.0]
+            Op::Tile { image, rect, filter: Filter::Nearest, .. } if image == wall && rect == [0.0, 0.0, 760.0, 640.0]
         ));
         let hems: Vec<ImageId> = drawn
             .list
@@ -431,6 +431,7 @@ fn sprinkles_layers_draw_within_their_limits() {
                     image,
                     rect,
                     filter: Filter::Nearest,
+                    ..
                 } if *rect == [0.0, AWNING, 760.0, HEADER - AWNING] => Some(*image),
                 _ => None,
             })

@@ -14,7 +14,7 @@ on it is also the specification the app is built to.
   [`sprinkles`](../apps/gmnb/themes/sprinkles/theme.luau) (pictures, keys that
   move, an overlay, a scale of sounds) and
   [`swirls`](../apps/gmnb/themes/swirls/theme.luau) (a picture the theme
-  computes, behind glass).
+  computes, coloured by a WebAssembly module it ships, behind glass).
 - Animated pictures, pictures a theme computes, and sound have a chapter
   of their own, [Pictures that move, and sound](theming-media.md). Their
   limits, functions and events are also listed here.
@@ -1658,7 +1658,7 @@ draw:image(picture, x, y, w, h)
 | `module:write(offset, buffer)` | Copies the buffer into the module's memory at `offset`. |
 | `module:read(offset, length)` | A new buffer of `length` bytes of its memory at `offset`, 1 MiB at most. |
 | `module:picture()` | A new picture for a module to fill: `{ width, height }` (its size now, 0 × 0 before the first `take`) with `:ready()` and `:take(module, offset, width, height)`. Each call makes another. Drawn by `draw:image` and `draw:tile` like any picture (smooth by default). |
-| `picture:take(module, offset, w, h)` | `w × h × 4` bytes of the module's memory at `offset` become the picture, as `gmnb.pixels`' `set` takes them: red, green, blue, opacity, not premultiplied, rows from the top; any shape of up to 262 144 pixels (a field's), 1 to 16 384 a side. `true` if it was taken. |
+| `picture:take(module, offset, w, h)` | `w × h × 4` bytes of the module's memory at `offset` become the picture **for the layer taking it** (rule 6): red, green, blue, opacity, **premultiplied** (each colour already multiplied by the opacity, as a field's pixels are, and unlike `gmnb.pixels`' `set`), rows from the top. A colour above its pixel's opacity is clamped to it as the bytes are copied. Any shape of up to 262 144 pixels (a field's), 1 to 16 384 a side. `true` if it was taken. |
 | `picture:ready()` | Whether a `take` now would be taken. |
 
 The rules:
@@ -1703,14 +1703,38 @@ The rules:
    a picture over 262 144 pixels or 16 384 a side) does nothing and returns nothing (`take`:
    `false`), with a note once for each place in the theme's code it is
    made from.
-6. **Pictures.** A module's picture keeps `gmnb.pixels`' rules: it
-   changes 30 times a second at most, two in hand; the same bytes again
-   cost nothing; and a refused change leaves the layer owed a frame, so
-   that what stands on screen is never out of date. `ready()` says
-   whether a change now would be taken, so that a theme can skip the work
-   when it wouldn't; the layer is owed its frame then too. 4 module
-   pictures per theme, each any shape of up to 262 144 pixels (a field's;
-   16 384 a side), counted against the image total at their current size.
+6. **Pictures.** A module's picture is **kept per layer**, as a field is:
+   one picture serves every layer that draws it, a readout here and
+   another there, each as if it had the picture to itself.
+   - Each layer (in the place it is drawn: this readout, that keypad)
+     that takes it has its own allowance, 30 changes a second, two in
+     hand; `ready()` says whether its own next change would be taken, so
+     that a theme can skip the work when it wouldn't.
+   - What a layer draws is the version it took last: a take of its
+     refused, or skipped, leaves it drawing its own, whatever another
+     layer took since. A refused change, and a `false` from `ready()`,
+     leave the layer owed a frame, so that what stands on screen is never
+     out of date.
+   - The same bytes as that layer's last again change nothing and cost
+     nothing, whatever other layers took meanwhile.
+   - A layer that has never taken it draws the version taken last in any
+     layer or any other hook: a picture taken once (in `style`, say) is
+     drawn by every layer. Another hook's takes have an allowance of
+     their own.
+   - In a preview (a tile in Settings, drawn once) there is no allowance:
+     `take` is always taken and `ready()` is true. A tile's take is the
+     tile's alone: it changes nothing a window layer draws, and costs it
+     nothing; and it lasts for that tile only. Another tile draws what it
+     takes itself, or, if it takes nothing, what a layer that has never
+     taken the picture draws, never the tile drawn before it.
+   - 4 module pictures per theme, each any shape of up to 262 144 pixels
+     (a field's; 16 384 a side). Every version a layer or tile holds is
+     counted against the image total, once however many hold it, and
+     the earlier versions frames and tiles still show with them (see
+     [Pixel pictures](theming-media.md#pixel-pictures)); the layers kept
+     per picture are at most 32, and past that the one used longest ago
+     is let go (it draws the picture's latest version until it takes it
+     again, its allowance whole).
 7. **The same everywhere.** Relaxed SIMD is off, NaNs are made canonical
    and there are no threads: a module computes the same bytes on every
    machine.
@@ -2157,23 +2181,25 @@ the theme is built on that.
 
 | Effect | How | Why |
 |---|---|---|
-| The swirl | **Scripted field** (`background` layer, `draw:field`, `gmnb.ramp`): the theme works out the design's bent coordinate on a coarse grid in a Luau `buffer`, five times a second; the app glides between two snapshots and colours every pixel through the ramp, thirty times a second | The smooth part is cheap to compute coarsely and the sharp part (the bands' edges) is the app's, per pixel. The same picture per pixel in Luau takes 62 ms a frame. |
-| One cost at every window size | **Scripted**: the grid has about 3,600 points whatever the window's size (a point every 12 px at 760×640, every 48 px at 4K), at most 256 a side, and the app is asked for about 160,000 pixels of picture (`quality`: half size at 760×640, less in a bigger window) | The bands grow with the window, so they are as smooth on the coarser grid, and a frame never costs more. |
+| The swirl | **Scripted field, coloured by the theme's own module** (`background` layer; `paint.wasm`, [Modules](#modules)): the theme works out the design's bent coordinate on a coarse grid in a Luau `buffer`, five times a second, and writes it to its paint when it changes; the paint glides between two snapshots and colours every pixel through the ramp, thirty times a second, into a picture the layer draws scaled up smoothly (`draw:image`) | The smooth part is cheap to compute coarsely and the sharp part (the bands' edges) is the paint's, per pixel. The same picture per pixel in Luau takes 62 ms a frame. The paint is the field pass that was GMNB's own (`draw:field`) until 0.4, in Rust, pixel for pixel: built from `modules/field` (see below). |
+| One cost at every window size | **Scripted**: the grid has about 3,600 points whatever the window's size (a point every 12 px at 760×640, every 48 px at 4K), at most 256 a side, and the paint is asked for about 160,000 pixels of picture (`quality`: half size at 760×640, less in a bigger window) | The bands grow with the window, so they are as smooth on the coarser grid, and a frame never costs more. |
 | No frame carries a whole snapshot | **Scripted**: the snapshot *after* the two the picture glides between is worked out a fifth of its rows a frame | A snapshot is 1.6 ms of sines; a fifth of one is 0.3. Only the first frame at a new window size works out a whole one. |
 | A slow machine keeps the theme | **Scripted**: that first snapshot times its first nine rows (`os.clock`). Where a whole one would take over 5 ms, the grid and the picture are made coarser by as much as brings it to 3.5; and a frame that has used 4 ms leaves the oldest disturbances for the next | A hook that overruns its 8 ms three times is switched off for good. |
-| A frame drawn in between costs nothing | **Scripted**: the layer's clock is quantised to thirtieths of a second. Drawn again inside one (an event came, the colours changed), it asks for the numbers it had, and the app has that picture already | The app colours a layer's fields 30 times a second at most; a theme that asks for more is refused and owed a frame. |
+| A frame drawn in between costs nothing | **Scripted**: the layer's clock is quantised to thirtieths of a second. Drawn again inside one (an event came, the colours changed), it has the numbers it had, and so the picture it took: the paint isn't asked again | A module's picture changes 30 times a second at most for each layer; a theme that asks for more is refused and owed a frame (and `ready()` says so before the work is done). |
 | Thirty pictures a second, in step with the screen | **Scripted**: the hook returns the time left of its thirtieth, never a whole thirtieth | A wait of 1/30 s or more is a plain timer (see [Asking for the next frame](#asking-for-the-next-frame)), which is not in step with the screen: the paint ran at 20 pictures a second in one run and 28 in the next. |
 | Stirring, the ripple, the shudder | **Scripted**: a press, a result or an error moves *where the field is looked up* (a twist about the key that swings back; a ring pushed outward from the readout), inside the box of grid points it touches, on both snapshots | The field itself is three sines deep; looking it up somewhere else is four reads and three blends a point, for a few hundred points. |
 | Typing hurries the paint | **Scripted**: each recent press adds to the pace at which the swirl's phase advances, wearing off in a second | A function of the events the layer is handed, with their ages: no state to keep. |
 | Glass keys and panes; the design's hairline, hover and focus ring | **Declared** (style values) | Box drawing is the toolkit's. |
 | How strong the glass is | **Scripted** (`style`): the least strength at which every ink reads over every band, for this set of bands at this window opacity; the glass chosen is never thinner | White on the design's gold is 1.4 to 1. See [the readability rules](#readability-rules). |
 | A pressed key clears | **Declared** (`keys.active` with a thinner background, and a slow `transition` back) | The toolkit animates it. |
-| Figures made of paint | **Scripted** (`display` layer): the glyphs as a mask (`draw:push_mask`), and behind them a second, small field: a slice of the swirl as one number a point, kept inside the ramp's first band | With one channel and values between 0 and 1 a three-colour cyclic ramp gives only its first two colours and the blend between them, so no figure is ever dark. One ramp serves both layers. |
-| System and Freestyle | **Scripted** (`style`, `gmnb.ramp`): System's bands from the desktop's accent (the accent, kept vivid; the colour as far round the wheel from it as the design's cyan is from its gold; a near-black in the second's hue), Freestyle's from three colour options shown only while it is chosen. Whatever they are, the dark band keeps their hue at the design's near-black and the bright ones are lifted only as far as every blend between them needs to read as a figure on a panel over white paint. A new ramp each time the colours change | The glass is made of the dark band and the figures of the bright ones: any colour can be given, so the bands are made fit for both before anything else is worked out. A theme may make any number of ramps (eight are held at once). |
+| Figures made of paint | **Scripted** (`display` layer): the glyphs as a mask (`draw:push_mask`), and behind them a second, small field coloured by the same paint: a slice of the swirl as one number a point, kept inside the ramp's first band | With one channel and values between 0 and 1 a three-colour cyclic ramp gives only its first two colours and the blend between them, so no figure is ever dark. One ramp serves both layers. |
+| One picture for all of it | **Scripted**: the paint holds eight fields at once (the background's, one for each size of the figures' slices, the tiles'), and the theme has one picture of it, which every layer takes and draws: a module's picture is kept per layer, so each readout (two on the converter, three in a page's crossfade) and each tile has its own version and allowance | Readouts drawn in the same thirtieth would otherwise take turns with one picture. |
+| System and Freestyle | **Scripted** (`style`, and the paint's ramp): System's bands from the desktop's accent (the accent, kept vivid; the colour as far round the wheel from it as the design's cyan is from its gold; a near-black in the second's hue), Freestyle's from three colour options shown only while it is chosen. Whatever they are, the dark band keeps their hue at the design's near-black and the bright ones are lifted only as far as every blend between them needs to read as a figure on a panel over white paint. A new ramp each time the colours change, written to the paint (which makes its table) when a field is next drawn in it | The glass is made of the dark band and the figures of the bright ones: any colour can be given, so the bands are made fit for both before anything else is worked out. |
 | Every page in the least window, a long figure in its readout | **Declared**: keys and bits with no least size of their own; the readouts' figures name their optical size | The window may be 300×400; a readout shrunk in Inter's smaller cuts would run past its end ([Font](#font)). |
 | The panel's hairline round the readout | **Scripted** (`display` layer, `draw:border`) | The readout's own style has a background and a radius, no border. |
 | Keys swirling into place | **Scripted** (`place`): each key turned about the keypad's middle and brought in, the nearest first | |
-| The tiles in Settings | **Scripted** (`preview`): a 17 × 11 field through each set's ramp (System's and Freestyle's as their colours are now) | A tile is drawn once and stands. |
+| The tiles in Settings | **Scripted** (`preview`): a 17 × 11 field through each set's ramp (System's and Freestyle's as their colours are now), coloured by the paint | A tile is drawn once and stands, and takes nothing of a window layer's picture. |
+| A paint that stops | **Scripted**: a call of the paint stopped at its deadline starts it afresh, its memory as on load, and the theme isn't told; the paint says so (`render` answers 0, `made` 0 for a slot the theme believes made or gave a ramp, asked too before a new ramp is written), and the theme writes everything again: the next frame is the one a Swirls never stopped draws, flowing or still, with a new ramp or not | An edited copy whose `paint.wasm` is missing or broken: the module is left out, with a note, and no paint is drawn. |
 | The sounds | **Recipes** (`gmnb.synth`) and a **scripted** choice (`sound`): number keys fall on seven notes of one scale, and a result rings the last three that were typed | |
 | One look in light and in dark | **Scripted**: `style` doesn't read `ctx.dark` | The page it comes from has one look. |
 | A see-through window: ribbons of paint under the glass | **Scripted** (`background` layer with `fade = false`, and `style`): the paint's ramp is made with its bands' own opacities, the dark band's falling to nothing at 0.5 and the bright ones' to two fifths at 0.1 (a ramp for each 64th of opacity); `window.background` is a veil of the dark band under the paint, going from 1 to 0.7, so that the glass and what the faint text needs go from an opaque window's to a see-through one's over that range (by under 0.05 of the glass's opacity a 64th) rather than at once; the glass is as strong as its text needs over that paint and over the desktop, its hairline a little brighter as the paint clears; the figures and tiles stay solid | Faded as a whole, the near-black band laid a grey smoke over the desktop and the colour went with it. With the dark band gone first, the desktop shows clear between ribbons that keep their colour, and the glass is the same glass. |
@@ -2182,6 +2208,20 @@ Nothing in the app is specific to Swirls either. What it needed of the
 app was one line: the graph's analysis column is a `plain` container now,
 like the equations it replaces in the side panel (its text lies straight
 on the page too).
+
+**Its paint is built from source here.** `paint.wasm`, in the theme's
+folder, is built from [`modules/field`](../modules/field/src/lib.rs), a
+crate of its own (its own `Cargo.lock`, out of the workspace, no
+dependencies, `no_std`), by [`modules/build.sh`](../modules/build.sh):
+`nix develop -c modules/build.sh` rebuilds the committed file with the
+flake's pinned Rust and `lld`, with `simd128` and nothing relaxed, the
+same bytes from any checkout; `--check` rebuilds it elsewhere and
+compares, and CI runs that. The bytes follow the toolchain's build, so a
+nixpkgs or Rust update must rebuild the modules in the same commit.
+`crates/gmnb-theme/tests/swirls_paint.rs` holds its pictures to the field
+pass it came from (`gmnb_media::field`), byte for byte. GMNB carries the
+file with the theme's other files, and writes it into the theme's folder
+with them.
 
 Measured (release build, a 760×640 window on the private headless
 compositor, the machine under a processor cap and shared with other
@@ -2194,15 +2234,15 @@ two arcs, as it measured beside it:
 
 | | Swirls | Aurora | Aurora as it was |
 |---|---|---|---|
-| The background's hook per frame, flowing (processor time; the app's colouring pass is inside it) | 0.9 to 1.2 ms: 0.55 the pass, 0.3 a fifth of a snapshot. 3.0 ms for the first frame at a window size (a whole snapshot) | 0.8 to 1.1 ms drifting: 0.35 the pass, the rest a quarter of a snapshot's columns and 160 stars. 2.5 to 3 ms for the first frame at a window size (a whole snapshot; 4 to 4.5 for the very first of a theme just loaded) | 0.23 ms with thirteen pulses (its gradients were rasterised by the toolkit, after the hook) |
-| The same while somebody types (six stirs and a ripple alive at once) | 1.8 to 2.2 ms, 3.3 ms at worst; the limit is 8 | 0.9 ms with eight rays, a result and a new palette at once, 2.2 ms at worst | |
-| The readout's hook per frame | 0.15 ms | 0.06 ms mid-result | the same |
+| The background's hook per frame, flowing (processor time; the colouring pass is inside it) | Its paint since 0.4: 1.9 ms at 760×640, 2.3 at 1600×1000 (1.0 and 1.4 the paint's pass, 0.3 a fifth of a snapshot); 4 to 5 ms for the first frame at a window size (a whole snapshot, and the paint's first). With GMNB's own pass, as measured beside it: 1.2 and 1.3 ms (0.5 and 0.7 the pass) | 0.8 to 1.1 ms drifting: 0.35 the pass, the rest a quarter of a snapshot's columns and 160 stars. 2.5 to 3 ms for the first frame at a window size (a whole snapshot; 4 to 4.5 for the very first of a theme just loaded) | 0.23 ms with thirteen pulses (its gradients were rasterised by the toolkit, after the hook) |
+| The same while somebody types (six stirs and a ripple alive at once) | 2.4 to 2.5 ms, 3.2 ms at worst (1.7 to 1.8, 2.5 at worst, with GMNB's own pass, in the same harness); the limit is 8 | 0.9 ms with eight rays, a result and a new palette at once, 2.2 ms at worst | |
+| The readout's hook per frame | 0.2 ms (0.15 with GMNB's own pass) | 0.06 ms mid-result | the same |
 | The keypad's, its keys coming in | 0.04 to 0.09 ms | 0.12 ms with the pointer over it | the same |
-| A core, living, software renderer | 22 to 27% at 30 pictures a second (11% at 300×400, 14% at 360×600, 34% at 1280×800) | 15 to 17% at 15 (10% at 300×400, 13% at 360×600, 20% at 1280×800; 15% in the light; 19 to 20% see-through at 0.5) | 45 to 49% at 15 (44 to 63% when it was first measured) |
+| A core, living, software renderer | 24 to 25% at 30 pictures a second at 760×640, 50 to 52% at 1600×1000 (with GMNB's own pass, beside it: 21.5 to 22% and 48 to 49%; at first 22 to 27%, and 11% at 300×400, 14% at 360×600, 34% at 1280×800) | 15 to 17% at 15 (10% at 300×400, 13% at 360×600, 20% at 1280×800; 15% in the light; 19 to 20% see-through at 0.5) | 45 to 49% at 15 (44 to 63% when it was first measured) |
 | A core, living, GL on llvmpipe | 82 to 93% | 80 to 82% | 140 to 143% |
 | A core, typing all the while, software renderer | 33 to 41% | 65 to 67% (a key every quarter of a second: its rays are drawn thirty times a second) | 85 to 86% (its blooms every frame) |
 | At rest: reduced motion (the toolkit's animations off), the window not in use, held still, settled | 0 ticks of the clock in 10 s, each | 0, each, on both renderers; and with Living background off | 0 |
-| Resident memory (the base look: 69 MiB) | 78 to 82 MiB | 81 to 84 MiB living, 79 held still (in these runs: the base look 71, Swirls 84) | 79 MiB living, 77 held still |
+| Resident memory (the base look: 69 MiB) | 86 to 90 MiB at 760×640 (78 to 82 with GMNB's own pass): some 6 MiB of it the module compiler's own code, read in to compile the paint, and 0.7 to 0.9 MiB the paint's memory (11.5 MiB declared, touched as used) | 81 to 84 MiB living, 79 held still (in these runs: the base look 71, Swirls 84) | 79 MiB living, 77 held still |
 
 `crates/gmnb-theme/tests/swirls.rs` prints the hook's figures
 (`what_a_frame_costs`) and holds the background inside its limits at

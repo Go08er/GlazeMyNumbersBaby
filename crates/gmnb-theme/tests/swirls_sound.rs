@@ -62,7 +62,7 @@ const POURS: [(&str, &[usize]); 8] = [
 ];
 
 fn swirls() -> Theme {
-    Theme::load(Source::built_in("swirls").unwrap(), common::limits())
+    Theme::load_ready(Source::built_in("swirls").unwrap(), common::limits())
         .unwrap_or_else(|e| panic!("Swirls didn't load: {e}"))
 }
 

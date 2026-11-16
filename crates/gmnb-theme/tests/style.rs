@@ -689,7 +689,7 @@ const PALETTES: [&str; 7] = [
 ];
 
 fn built_in(id: &str) -> Theme {
-    let theme = Theme::load(Source::built_in(id).unwrap(), common::limits())
+    let theme = Theme::load_ready(Source::built_in(id).unwrap(), common::limits())
         .unwrap_or_else(|e| panic!("{id}: {e}"));
     assert!(theme.notes.is_empty(), "{id}: {:#?}", theme.notes);
     theme

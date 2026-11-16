@@ -40,7 +40,7 @@ fn limits() -> Limits {
 }
 
 fn built_in(id: &str) -> Theme {
-    Theme::load(Source::built_in(id).unwrap(), limits()).unwrap()
+    Theme::load_ready(Source::built_in(id).unwrap(), limits()).unwrap()
 }
 
 /// A small theme of the test's own (docs/theming.md's "A theme in twenty

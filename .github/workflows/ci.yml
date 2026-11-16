@@ -49,6 +49,14 @@ jobs:
           # Every picture a built-in theme ships is made by a script in its
           # folder: here, that the files committed are the ones it makes.
           python3 -I apps/gmnb/themes/sprinkles/make_assets.py --check
+      - name: The built-in themes' modules are what their source builds (modules/build.sh --check)
+        run: |
+          # Every WebAssembly module a built-in theme ships is built from its
+          # source in modules/ by the flake's pinned rustc and lld: here, that
+          # the files committed are the bytes it builds. The bytes follow the
+          # toolchain's build, so a nixpkgs or Rust update must rebuild the
+          # modules (nix develop -c modules/build.sh) in the same commit.
+          nix develop -c modules/build.sh --check
       - name: DGMNB Wayland clipboard test (private headless weston)
         run: |
           set -o pipefail

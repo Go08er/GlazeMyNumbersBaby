@@ -737,27 +737,34 @@ export type Pixels = {
 	-- opacity (not premultiplied), rows from the top. As one number with
 	-- buffer.writeu32: 0xAABBGGRR. Returns false, changing nothing, if
 	-- the picture was changed too recently (30 times a second at most);
-	-- the layer being drawn is then drawn once more when it can be.
+	-- the layer being drawn is then drawn once more when it can be. A
+	-- draw shows the picture as it was when drawn.
 	set: (self: Pixels, data: buffer) -> boolean,
 }
 
 -- A picture a theme's module fills (module:picture()). Each call of
--- module:picture() makes another, four at most.
+-- module:picture() makes another, four at most. It is kept per layer: each
+-- layer that takes it has its own allowance and draws the version it took
+-- last; one that never took it draws the latest taken anywhere but in a
+-- preview. A tile's take lasts for that tile only: a tile that takes
+-- nothing draws what a layer that never took it draws.
 export type ModulePicture = {
-	-- What its last take gave it: 0 × 0 before its first.
+	-- What the layer asking would draw: 0 × 0 before any take.
 	width: number,
 	height: number,
-	-- Whether a take now would be taken: false if the picture changed
-	-- too recently (30 times a second at most). The layer being drawn is
-	-- then drawn once more when it can be, take or no take.
+	-- Whether this layer's take now would be taken: false if it changed
+	-- the picture too recently (30 times a second at most, for each
+	-- layer). The layer being drawn is then drawn once more when it can
+	-- be, take or no take. Always true in a preview (a tile is drawn once).
 	ready: (self: ModulePicture) -> boolean,
 	-- width × height × 4 bytes of the module's memory at offset become
-	-- the picture (as Pixels' set takes them: red, green, blue, opacity,
-	-- not premultiplied, rows from the top): any shape of up to 262 144
-	-- pixels, 1 to 16 384 a side. Returns
-	-- false, changing nothing, if it isn't ready, or if the bytes aren't
-	-- in the module's memory (with a note). The same bytes again change
-	-- nothing and cost nothing.
+	-- the picture for this layer: red, green, blue, opacity,
+	-- premultiplied (unlike Pixels' set; a colour above its opacity is
+	-- clamped to it), rows from the top; any shape of up to 262 144
+	-- pixels, 1 to 16 384 a side. Returns false, changing nothing, if it
+	-- isn't ready, or if the bytes aren't in the module's memory (with a
+	-- note). The same bytes as this layer's last again change nothing and
+	-- cost nothing. A draw shows the picture as it was when drawn.
 	take: (self: ModulePicture, module: Module, offset: number, width: number, height: number) -> boolean,
 }
 

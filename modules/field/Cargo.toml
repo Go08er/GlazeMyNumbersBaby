@@ -1,0 +1,30 @@
+# Swirls' paint: the field pass a theme ships as a WebAssembly module
+# (docs/theming.md, "Modules"), the pass `draw:field` and `gmnb.ramp` made in
+# GMNB until 0.4. Built by `modules/build.sh` into
+# apps/gmnb/themes/swirls/paint.wasm, which is committed; not part of the
+# workspace (the root Cargo.toml excludes it), and nothing else uses it.
+[workspace]
+resolver = "3"
+
+[package]
+name = "field"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+# No dependencies: `no_std`, its memory laid out statically.
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false

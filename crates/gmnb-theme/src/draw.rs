@@ -28,7 +28,7 @@ use crate::ThemeValue;
 use crate::check::{self, Notes, parse_hex};
 use crate::field::{FieldPicture, Fields};
 use crate::path::{self, Path};
-use crate::picture::{Canvas, ImageId, PictureKind, Pictures};
+use crate::picture::{Canvas, ImageId, PictureKind, Pictures, Taker};
 use crate::types::*;
 
 /// The draw API's caps (docs/theming.md, "Limits").
@@ -287,6 +287,12 @@ pub enum Op {
         image: ImageId,
         rect: Rect,
         filter: Filter,
+        /// Of a picture the theme fills (`gmnb.pixels`, a module's): the
+        /// version drawn (of a module's, the drawing layer's own: a
+        /// module's picture is kept per layer). It is what is shown,
+        /// whatever the theme does with the picture after (a tile in
+        /// Settings stands).
+        canvas: Option<Rc<Canvas>>,
     },
     /// The picture repeated at its own size over `rect` (of an animation,
     /// its first frame), sampled with `filter` on a screen of more pixels
@@ -295,6 +301,8 @@ pub enum Op {
         image: ImageId,
         rect: Rect,
         filter: Filter,
+        /// As [`Op::Image`]'s.
+        canvas: Option<Rc<Canvas>>,
     },
     /// One frame of an animation scaled into `rect`. `still`: nothing
     /// moves (reduced motion, a preview), and `frame` is the first; the
@@ -452,6 +460,16 @@ impl Recorder {
     /// A hook is drawing a still picture (a preview's tile).
     pub(crate) fn still(&self) -> bool {
         self.still
+    }
+
+    /// Who a module's picture is taken or drawn by now: the layer drawing
+    /// (in the place it is drawn), a preview's tile, or another hook.
+    pub(crate) fn taker(&self) -> Taker {
+        match (self.active, self.still) {
+            (false, _) => Taker::Outside,
+            (true, true) => Taker::Preview,
+            (true, false) => Taker::Layer(self.layer),
+        }
     }
 
     /// A picture was refused for being asked for too soon, and can be
@@ -1206,6 +1224,11 @@ impl Api {
             offscreen,
             density,
         } = *frame;
+        // A preview's tile: what each tile takes of a module's picture is
+        // its own, for that tile only.
+        if still {
+            self.shared.pictures.borrow_mut().let_go_of_tiles();
+        }
         let mut rec = self.shared.recorder.borrow_mut();
         rec.time = time;
         rec.motion = motion;
@@ -1669,15 +1692,26 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     }
                     let image = ImageId(id as u32 - 1);
                     let kind = pictures.get(image).map(|p| p.kind.clone());
-                    let pixels = pictures
-                        .get(image)
-                        .map_or(0.0, |p| f64::from(p.width) * f64::from(p.height));
+                    // Of a picture the theme fills: the version drawn (a
+                    // module's, this layer's own: `Pictures::shown`), and
+                    // its pixels are what it costs.
+                    let canvas = match kind {
+                        Some(PictureKind::Canvas) => pictures.shown(image, rec.taker()),
+                        _ => None,
+                    };
+                    let pixels = match &canvas {
+                        Some(c) => f64::from(c.width) * f64::from(c.height),
+                        None => pictures
+                            .get(image)
+                            .map_or(0.0, |p| f64::from(p.width) * f64::from(p.height)),
+                    };
                     let op = match kind {
                         // Of an animation a tile is its first frame.
                         _ if tile => Op::Tile {
                             image,
                             rect,
                             filter: filter.unwrap_or(Filter::Linear),
+                            canvas,
                         },
                         Some(PictureKind::Animation(_, timeline)) => {
                             // Nothing moves under reduced motion or in a
@@ -1719,11 +1753,13 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                             image,
                             rect,
                             filter: filter.unwrap_or(Filter::Linear),
+                            canvas,
                         },
                         _ => Op::Image {
                             image,
                             rect,
                             filter: filter.unwrap_or(Filter::Trilinear),
+                            canvas: None,
                         },
                     };
                     drop(pictures);

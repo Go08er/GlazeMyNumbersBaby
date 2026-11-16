@@ -44,7 +44,7 @@ fn limits() -> Limits {
 
 /// Swirls, with the limits a theme really has (`limits`).
 fn swirls() -> Theme {
-    let theme = Theme::load(Source::built_in("swirls").unwrap(), limits())
+    let theme = Theme::load_ready(Source::built_in("swirls").unwrap(), limits())
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(theme.notes.is_empty(), "{:#?}", theme.notes);
     theme
@@ -187,19 +187,60 @@ fn outcome(kind: EventKind, width: f32) -> Event {
     e
 }
 
+/// A picture of paint, as a layer's frame drew it: Swirls' fields are its
+/// module's (0.4: `draw:field`'s were the app's), drawn as a picture the
+/// module fills (`Op::Image` with the version drawn), smoothly over the
+/// rectangle as a field's picture was. Its version is what a field's
+/// serial was: a number no other picture of the theme has. The pixels are
+/// premultiplied, as a field's.
+struct Painted {
+    serial: u64,
+    width: u32,
+    height: u32,
+    pixels: gmnb_media::Bytes,
+}
+
+/// What an op draws of paint, if it does: the picture and where.
+fn painted(op: &Op) -> Option<(Painted, [f32; 4])> {
+    match op {
+        Op::Image {
+            canvas: Some(c),
+            rect,
+            filter: gmnb_theme::draw::Filter::Linear,
+            ..
+        } => {
+            assert!(c.premultiplied);
+            Some((
+                Painted {
+                    serial: c.version,
+                    width: c.width,
+                    height: c.height,
+                    pixels: c.pixels.clone(),
+                },
+                *rect,
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// The one field a layer's frame drew.
-fn field(d: &Drawn) -> (&gmnb_theme::field::FieldPicture, [f32; 4]) {
-    let fields: Vec<_> = d
-        .list
-        .ops
-        .iter()
-        .filter_map(|op| match op {
-            Op::Field { picture, rect } => Some((&**picture, *rect)),
-            _ => None,
-        })
-        .collect();
+fn field(d: &Drawn) -> (Painted, [f32; 4]) {
+    let mut fields: Vec<_> = d.list.ops.iter().filter_map(painted).collect();
     assert_eq!(fields.len(), 1, "{:?}", d.list.ops.len());
-    fields[0]
+    fields.remove(0)
+}
+
+/// The three bands a style names: the warm, the cool and the dark one.
+fn colours(theme: &mut Theme, c: &Ctx) -> [[f32; 4]; 3] {
+    let style = theme.style(c).unwrap().style.clone();
+    let Some(Paint::Gradient(g)) = style.fill("window.background").0.first().cloned() else {
+        panic!("Swirls' window.background is a gradient of its three bands");
+    };
+    let [a, ground, b] = g.colors[..] else {
+        panic!("three bands, not {}", g.colors.len());
+    };
+    [a, b, ground]
 }
 
 /// The table of the ramp Swirls makes for the bands a style names (the
@@ -593,10 +634,7 @@ fn own_colours_paint_in_their_own_ramp() {
         let tiled: HashSet<[u8; 4]> = tile
             .ops
             .iter()
-            .filter_map(|op| match op {
-                Op::Field { picture, .. } => Some(picture.pixels.as_chunks::<4>().0.to_vec()),
-                _ => None,
-            })
+            .filter_map(|op| Some(painted(op)?.0.pixels.as_chunks::<4>().0.to_vec()))
             .flatten()
             .collect();
         let strays: Vec<_> = tiled.difference(&all).take(5).collect();
@@ -624,6 +662,7 @@ fn the_paint_thins_itself_on_a_see_through_window() {
     assert!(theme.def.layers["background"].unfaded);
     let mut c = ctx(&theme, &[]);
     let solid = table(&mut swirls(), &c);
+    let bands = colours(&mut swirls(), &c);
     let first: HashSet<[u8; 4]> = solid[..256].iter().copied().collect();
     let mut last: Option<(f32, f32)> = None;
     for step in (2..=20).rev() {
@@ -636,7 +675,7 @@ fn the_paint_thins_itself_on_a_see_through_window() {
         let d = draw_at(&theme, LayerKind::Background, &c, &f);
         assert!(!d.list.ops.iter().any(|op| matches!(op, Op::PushOpacity(_))));
         let (picture, _) = field(&d);
-        let ramp = &picture.ramp;
+        let ramp = &common::swirls_ramp(bands, c.opacity);
         let table: HashSet<[u8; 4]> = (0..3 * 256)
             .map(|k| ramp.at((k as f32 + 0.5) / 256.0))
             .collect();
@@ -715,7 +754,8 @@ fn the_glass_moves_smoothly_with_the_slider() {
     // (What a style costs is the app's budget, held in the running app
     // and measured here; this test runs wherever the code is built, with
     // four times the time.)
-    let mut theme = Theme::load(Source::built_in("swirls").unwrap(), common::limits()).unwrap();
+    let mut theme =
+        Theme::load_ready(Source::built_in("swirls").unwrap(), common::limits()).unwrap();
     let mut worst = (0.0f32, String::new());
     let mut slowest = 0.0f64;
     for bands in BANDS {
@@ -1128,13 +1168,7 @@ fn the_readouts_figures_are_paint_behind_a_mask() {
             .iter()
             .any(|op| matches!(op, Op::PushMask(MaskMode::Alpha)))
     };
-    let fields = |d: &Drawn| {
-        d.list
-            .ops
-            .iter()
-            .filter(|op| matches!(op, Op::Field { .. }))
-            .count()
-    };
+    let fields = |d: &Drawn| d.list.ops.iter().filter(|op| painted(op).is_some()).count();
     let border = |d: &Drawn| matches!(d.list.ops.first(), Some(Op::Border { .. }));
     // At rest: the panel's hairline, the nine glyphs as a mask, the slice
     // of the swirl behind them; and the paint flows.
@@ -1223,6 +1257,143 @@ fn the_readouts_figures_are_paint_behind_a_mask() {
     assert!(busiest > 0.0 && busiest < 0.25, "{busiest}");
 }
 
+/// Readouts of different sizes drawn in the same thirtieths, thirty a
+/// second, as in a page's crossfade from the converter (three: its two
+/// values and the next page's) and in one over the date page's slide
+/// (four): one picture of paint serves them all, kept per layer, so no
+/// readout's take is refused, nothing is noted, and each draws its own
+/// slice, the very picture it draws alone.
+#[test]
+fn readouts_drawn_together_each_paint_their_own_slice() {
+    let bands = [
+        [0.0, 40.0, 428.0, 68.0],
+        [0.0, 30.0, 300.0, 52.0],
+        [0.0, 12.0, 360.0, 44.0],
+        [0.0, 8.0, 240.0, 60.0],
+    ];
+    let (now, old) = (glyphs(9, 80.0), glyphs(4, 250.0));
+    for count in [3, 4] {
+        let theme = swirls();
+        let alone: Vec<Theme> = (0..count).map(|_| swirls()).collect();
+        let c = ctx(&theme, &[]);
+        let frame = |readout: usize, i: u32| {
+            let mut v = value(&now, &old, Role::Converter, false, None);
+            v.readout = 10 + readout as u64;
+            v.band = bands[readout];
+            Frame {
+                time: f64::from(i) / 30.0,
+                dt: 1.0 / 30.0,
+                value: Some(v),
+                ..Frame::sized(428.0, 116.0)
+            }
+        };
+        for i in 0..90 {
+            for (r, solo) in alone.iter().enumerate() {
+                let together = draw_at(&theme, LayerKind::Display, &c, &frame(r, i));
+                let by_itself = draw_at(solo, LayerKind::Display, &c, &frame(r, i));
+                assert_eq!(
+                    together.retry, None,
+                    "{count} readouts, frame {i}, readout {r}"
+                );
+                let (mine, rect) = field(&together);
+                let (own, _) = field(&by_itself);
+                assert_eq!(rect, bands[r]);
+                assert_eq!(
+                    (mine.width, mine.height, &mine.pixels[..]),
+                    (own.width, own.height, &own.pixels[..]),
+                    "{count} readouts, frame {i}, readout {r}"
+                );
+            }
+        }
+        let notes = theme.take_draw_notes();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(
+            theme
+                .hooks()
+                .iter()
+                .all(|(_, strikes, off)| *strikes == 0 && !off)
+        );
+    }
+}
+
+/// An edited copy of Swirls whose paint is missing, or isn't a module:
+/// the module is left out, with a note, as any theme's that can't be had;
+/// the theme runs, its paint drawn nowhere (no picture where it would have
+/// been: the background, the figures, the tiles), no hook struck, no crash.
+#[test]
+fn a_copy_whose_paint_is_missing_or_broken_draws_no_paint_and_says_so() {
+    let from =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/gmnb/themes/swirls");
+    for (case, paint) in [
+        ("missing", None),
+        ("broken", Some(b"\0asm\x01\0\0\0\x99".as_slice())),
+    ] {
+        let dir = std::env::temp_dir().join(format!("gmnb-swirls-{case}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("credits")).unwrap();
+        std::fs::copy(from.join("theme.luau"), dir.join("theme.luau")).unwrap();
+        std::fs::copy(
+            from.join("credits/ColorMix.txt"),
+            dir.join("credits/ColorMix.txt"),
+        )
+        .unwrap();
+        if let Some(bytes) = paint {
+            std::fs::write(dir.join("paint.wasm"), bytes).unwrap();
+        }
+        let theme = Theme::load_ready(Source::folder("swirls", &dir), limits()).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(theme.modules_ready(), "{case}");
+        let noted: Vec<_> = theme
+            .notes
+            .list
+            .iter()
+            .filter(|n| n.path == "paint.wasm")
+            .collect();
+        assert_eq!(noted.len(), 1, "{case}: {:?}", theme.notes);
+        let c = ctx(&theme, &[]);
+        let no_paint = |d: &Drawn| !d.list.ops.iter().any(|op| matches!(op, Op::Image { .. }));
+        for i in 0..10 {
+            let f = Frame {
+                time: f64::from(i) / 30.0,
+                ..Frame::sized(760.0, 640.0)
+            };
+            assert!(
+                no_paint(&draw_at(&theme, LayerKind::Background, &c, &f)),
+                "{case}"
+            );
+        }
+        let (now, old) = (glyphs(9, 80.0), glyphs(4, 250.0));
+        let f = Frame {
+            value: Some(value(&now, &old, Role::Calculator, false, None)),
+            ..Frame::sized(428.0, 116.0)
+        };
+        let d = draw_at(&theme, LayerKind::Display, &c, &f);
+        assert!(no_paint(&d), "{case}");
+        let option = theme
+            .def
+            .options
+            .iter()
+            .find(|o| o.id == "bands")
+            .unwrap()
+            .clone();
+        let tile = theme.preview(&option, "party", &c).unwrap();
+        assert!(
+            !tile.ops.iter().any(|op| matches!(op, Op::Image { .. })),
+            "{case}"
+        );
+        assert!(
+            theme
+                .hooks()
+                .iter()
+                .all(|(_, strikes, off)| *strikes == 0 && !off),
+            "{case}"
+        );
+        // What its author is told of the calls that did nothing.
+        let notes = theme.take_draw_notes();
+        assert!(!notes.is_empty(), "{case}");
+    }
+}
+
 /// Every tile Settings shows: a set of bands is its swirl through its
 /// own ramp, a glass a key of it over the swirl.
 #[test]
@@ -1249,20 +1420,13 @@ fn the_tiles_are_small_swirls() {
     for bands in BANDS {
         let c = ctx(&theme, &[("bands", text(bands))]);
         let tile = theme.preview(option("bands"), bands, &c).unwrap();
-        let fields: Vec<_> = tile
-            .ops
-            .iter()
-            .filter_map(|op| match op {
-                Op::Field { picture, rect } => Some((picture, rect)),
-                _ => None,
-            })
-            .collect();
+        let fields: Vec<_> = tile.ops.iter().filter_map(painted).collect();
         assert_eq!(fields.len(), 1, "{bands}");
-        assert_eq!(*fields[0].1, [0.0, 0.0, 96.0, 56.0]);
+        assert_eq!(fields[0].1, [0.0, 0.0, 96.0, 56.0]);
         pictures.insert(fields[0].0.pixels.to_vec());
         for glass in GLASS {
             let tile = theme.preview(option("glass"), glass, &c).unwrap();
-            assert!(tile.ops.iter().any(|op| matches!(op, Op::Field { .. })));
+            assert!(tile.ops.iter().any(|op| painted(op).is_some()));
             assert!(tile.ops.iter().any(|op| matches!(op, Op::Text { .. })));
         }
     }
@@ -1517,8 +1681,8 @@ fn swirls_advanced(name: &str, advance: &str) -> Theme {
     let (first, rest) = source.split_once('\n').unwrap();
     assert_eq!(first, "--!strict");
     std::fs::write(&file, format!("{first}\n{shim}{rest}")).unwrap();
-    let theme =
-        Theme::load(Source::folder("swirls", &dir), limits()).unwrap_or_else(|e| panic!("{e}"));
+    let theme = Theme::load_ready(Source::folder("swirls", &dir), limits())
+        .unwrap_or_else(|e| panic!("{e}"));
     let _ = std::fs::remove_dir_all(&dir);
     theme
 }

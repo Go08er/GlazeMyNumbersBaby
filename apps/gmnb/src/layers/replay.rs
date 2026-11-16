@@ -16,7 +16,7 @@ use gmnb_media::Player;
 use gmnb_theme::draw::{self, BlendMode, DisplayList, Filter, MaskMode, Op};
 use gmnb_theme::field::FieldPicture;
 use gmnb_theme::path::{Path, Segment};
-use gmnb_theme::picture::{ImageId, PictureKind};
+use gmnb_theme::picture::{Canvas, ImageId, PictureKind};
 use gmnb_theme::theme::Theme;
 use gmnb_theme::types::*;
 use gtk::prelude::*;
@@ -87,8 +87,10 @@ struct Frames {
 pub struct Cache {
     /// Stills and noise. `None`: the picture has no pixels to show.
     textures: RefCell<HashMap<ImageId, Option<gdk::Texture>>>,
-    /// Pictures a theme fills: the texture, and the version it is of.
-    canvases: RefCell<HashMap<ImageId, (u64, gdk::Texture)>>,
+    /// Pictures a theme fills, by picture and version: each version's
+    /// texture, kept while a draw of that version is alive (a layer's
+    /// last frame, a tile in Settings), as fields' are.
+    canvases: RefCell<Vec<Version>>,
     frames: RefCell<HashMap<ImageId, Frames>>,
     /// The textures of fields' pictures, each kept while its picture is
     /// alive: in a layer's picture, or as the last a field made.
@@ -99,11 +101,16 @@ pub struct Cache {
     layouts: RefCell<HashMap<String, pango::Layout>>,
 }
 
+/// The texture of one version of a picture a theme fills: the picture,
+/// its version, the version itself (while a draw holds it) and the texture.
+type Version = (ImageId, u64, Weak<Canvas>, gdk::Texture);
+
 /// Layouts kept at once: more, and the cache starts again.
 const LAYOUTS: usize = 256;
 /// Fields' textures kept at once, should more pictures than that ever be
 /// alive (a bound no theme within its limits comes near). The oldest
 /// goes, and is made again of its picture's own bytes if it is drawn.
+/// The same holds the versions of pictures a theme fills.
 const FIELDS: usize = 64;
 
 /// What the animations have cost, for the gates (`GMNB_THEME_STATS`).
@@ -209,21 +216,44 @@ impl Cache {
     }
 
     /// The texture of a theme's picture, as `draw:image` and `draw:tile`
-    /// show it: made the first time it is drawn, and again when a picture
-    /// the theme fills has changed. Of an animation, its first frame.
-    fn texture(&self, theme: &Theme, id: ImageId) -> Option<gdk::Texture> {
+    /// show it: made the first time it is drawn. Of a picture the theme
+    /// fills, the version the draw holds (`canvas`): made the first time
+    /// that version is drawn, and kept while a draw of it is. Of an
+    /// animation, its first frame.
+    fn texture(
+        &self,
+        theme: &Theme,
+        id: ImageId,
+        canvas: Option<&Rc<Canvas>>,
+    ) -> Option<gdk::Texture> {
         match theme.api().kind(id)? {
             PictureKind::Canvas => {
-                let canvas = theme.api().canvas(id)?;
+                // (A draw always holds its version; the one standing, for
+                // a list made otherwise.)
+                let canvas = match canvas {
+                    Some(canvas) => canvas.clone(),
+                    None => Rc::new(theme.api().canvas(id)?),
+                };
                 let mut canvases = self.canvases.borrow_mut();
-                if let Some((version, texture)) = canvases.get(&id)
-                    && *version == canvas.version
-                {
+                canvases.retain(|(_, _, of, _)| of.strong_count() > 0);
+                if let Some((.., texture)) = canvases.iter().find(|(at, version, of, _)| {
+                    (*at, *version) == (id, canvas.version)
+                        && std::ptr::eq(of.as_ptr(), Rc::as_ptr(&canvas))
+                }) {
                     return Some(texture.clone());
                 }
-                // As the theme wrote it: not premultiplied.
-                let made = texture_of(canvas.width, canvas.height, canvas.pixels, false)?;
-                canvases.insert(id, (canvas.version, made.clone()));
+                // A `gmnb.pixels` picture as the theme wrote it, not
+                // premultiplied; a module's premultiplied, as a field's is.
+                let made = texture_of(
+                    canvas.width,
+                    canvas.height,
+                    canvas.pixels.clone(),
+                    canvas.premultiplied,
+                )?;
+                if canvases.len() >= FIELDS {
+                    canvases.remove(0);
+                }
+                canvases.push((id, canvas.version, Rc::downgrade(&canvas), made.clone()));
                 Some(made)
             }
             PictureKind::Animation(..) => self.frame(theme, id, 0, true),
@@ -705,11 +735,14 @@ pub fn replay(s: &gtk::Snapshot, list: &DisplayList, scene: &Scene) {
                 image,
                 rect: r,
                 filter,
+                canvas,
             } => {
                 if empty(*r) {
                     continue;
                 }
-                let texture = scene.theme.and_then(|t| scene.cache.texture(t, *image));
+                let texture = scene
+                    .theme
+                    .and_then(|t| scene.cache.texture(t, *image, canvas.as_ref()));
                 if let Some(texture) = texture {
                     scaled_texture(s, &texture, *filter, *r, scene.scale);
                 }
@@ -745,11 +778,14 @@ pub fn replay(s: &gtk::Snapshot, list: &DisplayList, scene: &Scene) {
                 image,
                 rect: r,
                 filter,
+                canvas,
             } => {
                 if empty(*r) {
                     continue;
                 }
-                let texture = scene.theme.and_then(|t| scene.cache.texture(t, *image));
+                let texture = scene
+                    .theme
+                    .and_then(|t| scene.cache.texture(t, *image, canvas.as_ref()));
                 if let Some(texture) = texture {
                     let (w, h) = (texture.width() as f32, texture.height() as f32);
                     if *filter == Filter::Nearest && scene.scale > 1.0 {

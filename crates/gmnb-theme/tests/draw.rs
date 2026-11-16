@@ -261,6 +261,7 @@ fn every_call_records_its_operation() {
             image: ImageId(0),
             rect: [0.0, 0.0, 16.0, 16.0],
             filter: draw::Filter::Trilinear,
+            canvas: None,
         }
     );
     assert_eq!(
@@ -269,6 +270,7 @@ fn every_call_records_its_operation() {
             image: ImageId(0),
             rect: [0.0, 0.0, 400.0, 300.0],
             filter: draw::Filter::Linear,
+            canvas: None,
         }
     );
     assert_eq!(
@@ -2563,7 +2565,7 @@ fn a_preview_draws_a_tile_for_one_choice() {
 // ---- The built-in themes ----------------------------------------------------------------------------
 
 fn built_in(id: &str, limits: Limits) -> Theme {
-    Theme::load(Source::built_in(id).unwrap(), limits).unwrap()
+    Theme::load_ready(Source::built_in(id).unwrap(), limits).unwrap()
 }
 
 #[test]
