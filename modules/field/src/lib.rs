@@ -126,12 +126,14 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 
 // ---- Float arithmetic, exactly as the pass's -----------------------------------
 
+#[inline(always)]
 fn abs(x: f32) -> f32 {
-    f32::from_bits(x.to_bits() & 0x7fff_ffff)
+    x.abs()
 }
 
+#[inline(always)]
 fn copysign(x: f32, sign: f32) -> f32 {
-    f32::from_bits((x.to_bits() & 0x7fff_ffff) | (sign.to_bits() & 0x8000_0000))
+    x.copysign(sign)
 }
 
 /// The IEEE square root (`f32::sqrt`).
