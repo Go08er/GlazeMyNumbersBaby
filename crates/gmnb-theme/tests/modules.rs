@@ -1178,6 +1178,16 @@ fn consistent(theme: &Theme) {
     assert_eq!(pictures.decoded_bytes(), pictures.decoded_from_scratch());
 }
 
+/// The version of a module picture a list's first op drew, and its size.
+fn drew(list: &gmnb_theme::draw::DisplayList) -> (u64, u32, u32) {
+    match &list.ops[0] {
+        Op::Image {
+            canvas: Some(c), ..
+        } => (c.version, c.width, c.height),
+        op => panic!("{op:?}"),
+    }
+}
+
 /// The version of a module picture a list's first op drew, and its
 /// first byte.
 fn held(list: &gmnb_theme::draw::DisplayList) -> (u64, u8) {
@@ -1236,13 +1246,16 @@ fn earlier_versions_still_shown_count_against_the_image_total() {
     let theme = tiles(&d, 256, 1, lim);
     let option = theme.def.options[0].clone();
     let mut kept = Vec::new();
-    for k in 1..=5u64 {
+    for k in 1..=4u64 {
         kept.push(theme.preview(&option, "a", &Ctx::default()).unwrap());
-        let version = theme.api().canvas(ImageId(0)).unwrap().version;
-        // Four fit: the one standing and three earlier ones the tiles
-        // hold. The fifth would hold 1.25 MiB: refused, the picture stays.
-        assert_eq!(version, k.min(4), "tile {k}");
+        // Four fit: the one the tile took, and the three earlier ones the
+        // tiles before hold (each let go as the next tile was begun).
+        assert_eq!(drew(&kept[k as usize - 1]), (k, 256, 256), "tile {k}");
     }
+    // The fifth would hold 1.25 MiB: refused, and the tile draws what a
+    // layer that never took the picture draws (none has: no size).
+    let fifth = theme.preview(&option, "a", &Ctx::default()).unwrap();
+    assert_eq!(drew(&fifth), (0, 0, 0));
     told(
         &notes(&theme),
         "picture:take: 256×256: the theme's pictures, with the earlier ones still shown, would \
@@ -1251,8 +1264,9 @@ fn earlier_versions_still_shown_count_against_the_image_total() {
     consistent(&theme);
     // Let go, they are counted no more.
     kept.clear();
-    theme.preview(&option, "a", &Ctx::default()).unwrap();
-    assert_eq!(theme.api().canvas(ImageId(0)).unwrap().version, 5);
+    let taken = theme.preview(&option, "a", &Ctx::default()).unwrap();
+    assert_eq!(drew(&taken), (5, 256, 256));
+    consistent(&theme);
 }
 
 #[test]
@@ -1260,31 +1274,51 @@ fn at_most_so_many_earlier_versions_are_held() {
     let d = dir("held");
     let theme = tiles(&d, 1, 1, limits());
     let option = theme.def.options[0].clone();
-    let kept: Vec<_> = (0..=EARLIER_HELD)
-        .map(|_| theme.preview(&option, "a", &Ctx::default()).unwrap())
-        .collect();
-    // The one standing and EARLIER_HELD earlier: one more is refused.
-    let last = EARLIER_HELD as u64 + 1;
-    assert_eq!(theme.api().canvas(ImageId(0)).unwrap().version, last);
+    // Every tile kept: the version each took is an earlier one once the
+    // next is begun (and counted as one to come till then).
+    let mut kept = Vec::new();
+    for k in 0..EARLIER_HELD {
+        kept.push(theme.preview(&option, "a", &Ctx::default()).unwrap());
+        assert!(
+            theme.api().pictures().earlier_bytes().1 < EARLIER_HELD,
+            "tile {k}"
+        );
+    }
+    let last = EARLIER_HELD as u64;
+    assert_eq!(held(&kept[EARLIER_HELD - 1]).0, last);
     assert_eq!(
         theme.api().pictures().earlier_bytes(),
-        (4 * EARLIER_HELD as u64, EARLIER_HELD)
+        (4 * (last - 1), EARLIER_HELD - 1)
     );
+    // The next tile: the last one's version is the EARLIER_HELD-th earlier
+    // one, and this one's take is refused. It draws what a layer that
+    // never took the picture draws (none has: no size).
     let refused = theme.preview(&option, "a", &Ctx::default()).unwrap();
     consistent(&theme);
-    assert_eq!(held(&refused).0, last);
+    assert_eq!(
+        theme.api().pictures().earlier_bytes(),
+        (4 * last, EARLIER_HELD)
+    );
+    assert_eq!(drew(&refused), (0, 0, 0));
     told(
         &notes(&theme),
         &format!("{EARLIER_HELD} earlier versions of the theme's pictures are still shown"),
     );
+    // Let go, they are counted no more: the next tile's is taken.
     drop(kept);
+    drop(refused);
+    let taken = theme.preview(&option, "a", &Ctx::default()).unwrap();
+    assert_eq!(held(&taken).0, last + 1);
+    assert_eq!(theme.api().pictures().earlier_bytes(), (0, 0));
+    consistent(&theme);
 }
 
 /// A theme whose readouts each paint the one module picture the grey of
 /// their own number (`fill`), and draw it: once a frame, skipping the
 /// work when it wouldn't be taken (`ALWAYS`: taking all the same). Its
-/// background takes `bg` and draws it; its tile takes the number its
-/// choice names. What a frame returns: how many takes have been refused.
+/// background draws it, taking nothing; its tile takes the number its
+/// choice names, or ("none") draws it taking nothing. What a frame
+/// returns: how many takes have been refused.
 const PER_LAYER: &str = r#"
 local paint = gmnb.module("paint.wasm")
 local picture = paint:picture()
@@ -1306,8 +1340,14 @@ return {
         id = "o",
         type = "choice",
         label = "O",
-        choices = { { id = "77", label = "A" }, { id = "88", label = "B" } },
-        preview = function(draw, frame, choice) show(draw, tonumber(choice)) end,
+        choices = { { id = "77", label = "A" }, { id = "88", label = "B" }, { id = "none", label = "C" } },
+        preview = function(draw, frame, choice)
+            if choice == "none" then
+                draw:image(picture, 0, 0, 2, 2)
+            else
+                show(draw, tonumber(choice))
+            end
+        end,
     } },
     layers = {
         display = { draw = function(draw, frame)
@@ -1457,6 +1497,43 @@ fn a_tile_changes_nothing_a_window_layer_draws_or_spends() {
 }
 
 #[test]
+fn a_tiles_take_lasts_for_that_tile_only() {
+    let d = dir("tileonly");
+    let theme = per_layer(&d, true);
+    let _now = clock(&theme, 10.0);
+    let option = theme.def.options[0].clone();
+    let p = |theme: &Theme| {
+        consistent(theme);
+        let pictures = theme.api().pictures();
+        (pictures.decoded_bytes(), pictures.earlier_bytes())
+    };
+    // Tile 1 takes 77 and draws it; tile 2 draws it taking nothing: what a
+    // layer that never took the picture draws (none has: no size), not
+    // tile 1's.
+    let one = theme.preview(&option, "77", &Ctx::default()).unwrap();
+    assert_eq!(p(&theme), (16, (0, 0)));
+    let two = theme.preview(&option, "none", &Ctx::default()).unwrap();
+    assert_eq!((grey(&one).0, drew(&two)), (77, (0, 0, 0)));
+    // Tile 1's version, which its draw still holds, is an earlier one.
+    assert_eq!(p(&theme), (0, (16, 1)));
+    // A readout takes 40; tile 3 takes 88, and tile 4 draws taking
+    // nothing: the readout's.
+    let readout_40 = readout(&theme, 1, 40, 0.0);
+    let three = theme.preview(&option, "88", &Ctx::default()).unwrap();
+    let four = theme.preview(&option, "none", &Ctx::default()).unwrap();
+    assert_eq!((grey(&three).0, grey(&four).0), (88, 40));
+    // Earlier now: tile 1's and tile 3's, and the empty one tile 2 drew.
+    assert_eq!(p(&theme), (16, (32, 3)));
+    // Each tile still shows what it drew; let go, nothing earlier is
+    // counted, and the picture holds the readout's alone.
+    assert_eq!((grey(&one).0, grey(&readout_40.list).0), (77, 40));
+    drop((one, two, three, four));
+    assert_eq!(p(&theme), (16, (0, 0)));
+    assert_eq!(grey(&drawn(&theme).list).0, 40);
+    assert!(notes(&theme).is_empty(), "{:?}", notes(&theme));
+}
+
+#[test]
 fn past_so_many_layers_the_one_used_longest_ago_is_let_go() {
     let d = dir("evicted");
     let theme = per_layer(&d, false);
@@ -1494,6 +1571,44 @@ fn past_so_many_layers_the_one_used_longest_ago_is_let_go() {
     let three = readout(&theme, 3, 103, 0.0);
     assert_eq!((three.again, grey(&three.list).0), (Some(0.0), 103));
     assert!(notes(&theme).is_empty(), "{:?}", notes(&theme));
+}
+
+#[test]
+fn a_new_layer_taking_what_it_shows_is_refused_past_so_many_earlier_versions() {
+    let d = dir("pinfull");
+    let theme = per_layer(&d, false);
+    let _now = clock(&theme, 10.0);
+    // TAKERS readouts and EARLIER_HELD more, each something else, every
+    // draw kept: past TAKERS each lets the one used longest ago go, its
+    // version an earlier one.
+    let all = TAKERS + EARLIER_HELD;
+    let kept: Vec<_> = (1..=all as u64)
+        .map(|r| readout(&theme, r, (r % 200) as u32 + 1, 0.0))
+        .collect();
+    assert!(kept.iter().all(|d| d.again == Some(0.0)));
+    consistent(&theme);
+    assert_eq!(theme.api().pictures().earlier_bytes().1, EARLIER_HELD);
+    // One more readout, taking the very bytes the picture's fallback is
+    // (the last readout's): it would hold that version as its own, letting
+    // another go whose version is still drawn: refused, a note and a frame
+    // owed; it draws the fallback all the same.
+    let same = (all as u64 % 200) as u32 + 1;
+    let more = readout(&theme, all as u64 + 1, same, 0.0);
+    assert_eq!(more.again, Some(1.0));
+    assert!(close(more.retry, 1.0 / 30.0), "{:?}", more.retry);
+    assert_eq!(grey(&more.list).0, same as u8);
+    assert_eq!(theme.api().pictures().earlier_bytes().1, EARLIER_HELD);
+    consistent(&theme);
+    told(
+        &notes(&theme),
+        &format!("{EARLIER_HELD} earlier versions of the theme's pictures are still shown"),
+    );
+    // Let go, it is taken.
+    drop(kept);
+    let again = readout(&theme, all as u64 + 1, same, 0.0);
+    assert_eq!(again.again, Some(1.0), "no take refused since");
+    assert_eq!(theme.api().pictures().earlier_bytes(), (0, 0));
+    consistent(&theme);
 }
 
 #[test]

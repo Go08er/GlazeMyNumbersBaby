@@ -1224,6 +1224,11 @@ impl Api {
             offscreen,
             density,
         } = *frame;
+        // A preview's tile: what each tile takes of a module's picture is
+        // its own, for that tile only.
+        if still {
+            self.shared.pictures.borrow_mut().let_go_of_tiles();
+        }
         let mut rec = self.shared.recorder.borrow_mut();
         rec.time = time;
         rec.motion = motion;

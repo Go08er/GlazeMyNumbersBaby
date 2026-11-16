@@ -746,7 +746,8 @@ export type Pixels = {
 -- module:picture() makes another, four at most. It is kept per layer: each
 -- layer that takes it has its own allowance and draws the version it took
 -- last; one that never took it draws the latest taken anywhere but in a
--- preview.
+-- preview. A tile's take lasts for that tile only: a tile that takes
+-- nothing draws what a layer that never took it draws.
 export type ModulePicture = {
 	-- What the layer asking would draw: 0 × 0 before any take.
 	width: number,

@@ -176,7 +176,8 @@ pub(crate) enum Taker {
     /// keypad's): the draw's own `layer`, as fields' are kept by.
     Layer(u64),
     /// A preview's tile: no allowance, and nothing it takes changes what a
-    /// window layer draws.
+    /// window layer draws. Held for that tile only: let go as the next
+    /// tile is begun ([`Pictures::let_go_of_tiles`]).
     Preview,
     /// Any other hook (`style`, `sound`, an action...): an allowance of its
     /// own, and, as a layer's take does, the version a layer that has
@@ -308,6 +309,32 @@ fn leaving(state: &CanvasState, after: &[&Rc<Canvas>]) -> (u64, usize) {
     (bytes, n)
 }
 
+/// Whether, of a picture's state (or what it would be: `fallback` and
+/// `takers`), the tile's version is held by the tile alone: an earlier
+/// version once the next tile is begun, if a draw holds it then, and so
+/// counted as one already (`Pictures::tiles_alone`).
+fn tile_alone<'a>(
+    fallback: &Rc<Canvas>,
+    takers: impl Iterator<Item = (Taker, &'a Rc<Canvas>)>,
+) -> bool {
+    let takers: Vec<_> = takers.collect();
+    takers.iter().any(|(k, tile)| {
+        *k == Taker::Preview
+            && !Rc::ptr_eq(tile, fallback)
+            && !takers
+                .iter()
+                .any(|(o, v)| *o != Taker::Preview && Rc::ptr_eq(v, tile))
+    })
+}
+
+/// The same, of a picture's state as it stands.
+fn tile_alone_now(state: &CanvasState) -> bool {
+    tile_alone(
+        &state.canvas,
+        state.takers.iter().map(|(k, t)| (*k, &t.last)),
+    )
+}
+
 /// Why a module picture didn't take what it was given.
 pub(crate) enum Refused {
     /// Too soon after the last change: it can be taken in this many
@@ -319,6 +346,15 @@ pub(crate) enum Refused {
     /// the note, and the layer is owed a frame (they go as frames are
     /// drawn).
     Full(String),
+}
+
+/// A take refused for the earlier versions still shown: as many as are
+/// held.
+fn too_many_earlier(width: u32, height: u32) -> Refused {
+    Refused::Full(format!(
+        "picture:take: {width}×{height}: {EARLIER_HELD} earlier versions of the theme's pictures \
+         are still shown"
+    ))
 }
 
 /// How an animation's own clock stands (docs/theming-media.md, "plays
@@ -609,7 +645,9 @@ impl Pictures {
                 self.limits.image_bytes >> 20
             ));
         }
-        if drawn && count >= EARLIER_HELD {
+        // (A tile's version the tile alone holds is counted as one to
+        // come.)
+        if drawn && count + self.tiles_alone(id) >= EARLIER_HELD {
             return Err(format!(
                 "{EARLIER_HELD} earlier versions of the theme's pictures are still shown"
             ));
@@ -920,6 +958,48 @@ impl Pictures {
         }
     }
 
+    /// Of the module pictures but `except`, how many hold a tile's version
+    /// that the tile alone holds: earlier versions to come, counted with
+    /// the earlier ones against [`EARLIER_HELD`], so that letting them go
+    /// never takes the count past it.
+    fn tiles_alone(&self, except: ImageId) -> usize {
+        self.canvases
+            .iter()
+            .filter(|(id, state)| **id != except && state.module && tile_alone_now(state))
+            .count()
+    }
+
+    /// A preview's tile is about to be drawn: each module picture lets go
+    /// of the version the last tile took, so that a tile draws what it
+    /// takes itself, or, taking nothing, what a layer that never took the
+    /// picture draws; never another tile's. A version the last tile's draw
+    /// still holds is counted as an earlier one while it does (it was
+    /// counted as one to come: see [`Pictures::tiles_alone`]).
+    pub(crate) fn let_go_of_tiles(&mut self) {
+        let ids: Vec<ImageId> = self
+            .canvases
+            .iter()
+            .filter(|(_, state)| state.module && state.takers.contains_key(&Taker::Preview))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            let state = self.canvases.get_mut(&id).expect("listed above");
+            let before = held(state);
+            let old = distinct(state);
+            state.takers.remove(&Taker::Preview);
+            let after = distinct(state);
+            self.decoded =
+                self.decoded - before + distinct_bytes(&after.iter().collect::<Vec<_>>());
+            for v in old {
+                // (`old` holds one; the picture none, now.)
+                if !after.iter().any(|a| Rc::ptr_eq(a, &v)) && Rc::strong_count(&v) > 1 {
+                    self.earlier.push(Rc::downgrade(&v));
+                }
+            }
+        }
+        self.check();
+    }
+
     /// `picture:take(module, offset, w, h)` by `taker` at `now`: for that
     /// taker, module picture `id` becomes the `width × height` picture of
     /// `bytes` (RGBA, premultiplied: each colour is clamped to the pixel's
@@ -958,10 +1038,7 @@ impl Pictures {
             // taken it keeps the version it shows as its own.
             match state.takers.get_mut(&taker) {
                 Some(took) => took.used = tick,
-                None => {
-                    let last = state.canvas.clone();
-                    self.add_taker(id, taker, last, Bucket::new());
-                }
+                None => self.add_taker(id, taker, width, height)?,
             }
             self.check();
             return Ok(());
@@ -1002,12 +1079,23 @@ impl Pictures {
             .map(|(_, t)| &t.last)
             .collect();
         after.push(&new);
-        after.push(if taker == Taker::Preview {
+        let fallback_after = if taker == Taker::Preview {
             &state.canvas
         } else {
             &new
-        });
+        };
+        after.push(fallback_after);
         let after_bytes = distinct_bytes(&after);
+        let tile_before = tile_alone_now(state);
+        let tile_after = tile_alone(
+            fallback_after,
+            state
+                .takers
+                .iter()
+                .filter(|(k, _)| **k != taker && Some(**k) != evict)
+                .map(|(k, t)| (*k, &t.last))
+                .chain(std::iter::once((taker, &new))),
+        );
         // Versions the picture lets go of that draws still hold become
         // earlier ones, counted while they are.
         let (gone_bytes, gone) = leaving(state, &after);
@@ -1027,11 +1115,13 @@ impl Pictures {
                 self.limits.image_bytes >> 20
             )));
         }
-        if gone > 0 && count + gone > EARLIER_HELD {
-            return Err(Refused::Full(format!(
-                "picture:take: {width}×{height}: {EARLIER_HELD} earlier versions of the theme's \
-                 pictures are still shown"
-            )));
+        // (A tile's version the tile alone holds is counted as one to
+        // come.)
+        let tiles = self.tiles_alone(id);
+        let was = count + tiles + usize::from(tile_before);
+        let will = count + gone + tiles + usize::from(tile_after);
+        if will > was && will > EARLIER_HELD {
+            return Err(too_many_earlier(width, height));
         }
         let state = self.canvases.get_mut(&id).expect("looked up above");
         let mut allowance = match state.takers.get(&taker) {
@@ -1078,29 +1168,64 @@ impl Pictures {
         Ok(())
     }
 
-    /// `taker` holds `last` of module picture `id` (the version it shows,
-    /// already the picture's), with `allowance`: the taker used longest
-    /// ago let go to make room.
-    fn add_taker(&mut self, id: ImageId, taker: Taker, last: Rc<Canvas>, allowance: Bucket) {
-        let Some(state) = self.canvases.get_mut(&id) else {
-            return;
+    /// `taker`, which hadn't taken module picture `id`, takes the bytes
+    /// it shows already (`width × height`, the picture's fallback): it
+    /// holds that version as its own, with its whole allowance, the one
+    /// used longest ago let go if the picture keeps as many takers as it
+    /// may. Refused (Full) only if that one's version, still drawn, would
+    /// take the earlier ones past their number.
+    fn add_taker(
+        &mut self,
+        id: ImageId,
+        taker: Taker,
+        width: u32,
+        height: u32,
+    ) -> Result<(), Refused> {
+        self.earlier.retain(|e| e.strong_count() > 0);
+        let count = self.earlier_bytes().1;
+        let tiles = self.tiles_alone(id);
+        let Some(state) = self.canvases.get(&id) else {
+            return Ok(());
         };
-        let before = held(state);
-        let old = distinct(state);
-        if state.takers.len() >= TAKERS
-            && let Some(k) = state
+        let evict = (state.takers.len() >= TAKERS)
+            .then(|| {
+                state
+                    .takers
+                    .iter()
+                    .min_by_key(|(_, t)| t.used)
+                    .map(|(k, _)| *k)
+            })
+            .flatten();
+        let kept = || {
+            state
                 .takers
                 .iter()
-                .min_by_key(|(_, t)| t.used)
-                .map(|(k, _)| *k)
-        {
+                .filter(|(k, _)| Some(**k) != evict)
+                .map(|(k, t)| (*k, &t.last))
+                .chain(std::iter::once((taker, &state.canvas)))
+        };
+        let after: Vec<&Rc<Canvas>> = kept()
+            .map(|(_, v)| v)
+            .chain(std::iter::once(&state.canvas))
+            .collect();
+        let (_, gone) = leaving(state, &after);
+        let was = count + tiles + usize::from(tile_alone_now(state));
+        let will = count + gone + tiles + usize::from(tile_alone(&state.canvas, kept()));
+        if will > was && will > EARLIER_HELD {
+            return Err(too_many_earlier(width, height));
+        }
+        let state = self.canvases.get_mut(&id).expect("looked up above");
+        let before = held(state);
+        let old = distinct(state);
+        if let Some(k) = evict {
             state.takers.remove(&k);
         }
         let used = state.used;
+        let last = state.canvas.clone();
         state.takers.insert(
             taker,
             Took {
-                allowance,
+                allowance: Bucket::new(),
                 last,
                 used,
             },
@@ -1113,6 +1238,7 @@ impl Pictures {
             }
         }
         self.check();
+        Ok(())
     }
 
     /// `canvas:set(buffer)` at `now`: the picture takes `bytes`, if they

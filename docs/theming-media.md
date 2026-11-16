@@ -1198,10 +1198,11 @@ alive. A version no draw holds is dropped with its texture; the toolkit
 frees its copy on the graphics card with it. While draws hold earlier
 versions (a layer's last frame, Settings' tiles), they count against the
 image total with the pictures as they stand (of a module's picture, each
-version a layer or a tile last took, once however many hold it), and at
-most 1024 of them are held: a `set` or a `take` past either is refused,
-with a note, and the layer owed a frame (the earlier versions go as
-frames are drawn). Bytes
+version a layer or the tile being drawn last took, once however many
+hold it: a tile's is let go as the next tile is begun, and counted as an
+earlier one to come till then), and at most 1024 of them are held: a
+`set` or a `take` past either is refused, with a note, and the layer
+owed a frame (the earlier versions go as frames are drawn). Bytes
 equal to the ones it holds change nothing and spend nothing. A picture
 over a limit has no size, and a `set` that returns `false`.
 

@@ -1724,7 +1724,9 @@ The rules:
    - In a preview (a tile in Settings, drawn once) there is no allowance:
      `take` is always taken and `ready()` is true. A tile's take is the
      tile's alone: it changes nothing a window layer draws, and costs it
-     nothing.
+     nothing; and it lasts for that tile only. Another tile draws what it
+     takes itself, or, if it takes nothing, what a layer that has never
+     taken the picture draws, never the tile drawn before it.
    - 4 module pictures per theme, each any shape of up to 262 144 pixels
      (a field's; 16 384 a side). Every version a layer or tile holds is
      counted against the image total, once however many hold it, and
