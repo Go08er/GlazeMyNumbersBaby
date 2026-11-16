@@ -2,7 +2,9 @@
 //! 5): it starts afresh, its memory as on load, and Swirls isn't told. It
 //! finds out itself (its paint's `render` answers 0, `made` 0), writes all
 //! it had written again, and the frame after is the very picture a Swirls
-//! that was never stopped draws. A process of its own: what modules have
+//! that was never stopped draws; so it is when the frame after the stop
+//! brings a new ramp too (the window's opacity changed), flowing or under
+//! reduced motion. A process of its own, and one test: what modules have
 //! done (`module::stats`) is the process's.
 
 use gmnb_theme::layer::{Drawn, Failure, Frame, LayerKind};
@@ -75,9 +77,10 @@ local gmnb = setmetatable({{
     theme
 }
 
-fn ctx(theme: &Theme) -> Ctx {
+fn ctx(theme: &Theme, opacity: f32) -> Ctx {
     Ctx {
         dark: true,
+        opacity,
         options: theme::complete_options(&theme.def.options, &Default::default()),
         ..Ctx::default()
     }
@@ -130,31 +133,70 @@ enum Stopped {
     InLuau,
 }
 
-/// One try: Swirls stopped once and one never stopped, the same frames.
-/// The most processor time an ordinary frame of the stopped one took
-/// comes back too.
-fn one_try() -> (Stopped, f64) {
-    let undisturbed = Theme::load_ready(Source::built_in("swirls").unwrap(), limits(8)).unwrap();
-    let mut theme = stopped_once(12);
-    let c = ctx(&theme);
-    // (Its colours worked out by `style`, on the style's time: a frame
-    // then has only the paint to do.)
-    theme.style(&c).unwrap();
+/// What the frames after the stop are drawn with.
+#[derive(Clone, Copy, Debug)]
+enum Then {
+    /// What the frame stopped was.
+    Same,
+    /// Another opacity, from the very draw after the stop: a new ramp for
+    /// the paint as it finds out it was started afresh.
+    Opacity,
+}
+
+/// One try: Swirls stopped once and one never stopped, the same frames
+/// (`motion`: flowing, or under reduced motion), drawn with the same
+/// context. The most processor time an ordinary frame of the stopped one
+/// took comes back too.
+fn one_try(motion: bool, then: Then) -> (Stopped, f64) {
+    let mut undisturbed =
+        Theme::load_ready(Source::built_in("swirls").unwrap(), limits(8)).unwrap();
+    // Flowing, the paint makes a picture each thirtieth: the twelfth is
+    // stopped. Still, it makes one when its ramp changes: the frame after
+    // the first is at another opacity, and its picture is stopped.
+    let mut theme = stopped_once(if motion { 12 } else { 2 });
+    let first = ctx(&theme, 1.0);
+    let stopped_at = if motion {
+        first.clone()
+    } else {
+        ctx(&theme, 0.75)
+    };
+    let after = match then {
+        Then::Same => stopped_at.clone(),
+        Then::Opacity => ctx(&theme, 0.5),
+    };
+    // (Their colours worked out by `style`, on the style's time: a frame
+    // then has only the paint to do. The same for both: a frame that
+    // worked them out would be a long one, which Swirls' guard against a
+    // slow machine would see.)
+    for c in [&first, &stopped_at, &after] {
+        theme.style(c).unwrap();
+        undisturbed.style(c).unwrap();
+    }
     let before = module::stats();
     let (mut stopped, mut longest) = (None, 0.0f64);
     for i in 0..60u32 {
         let f = Frame {
             time: f64::from(i) / 30.0,
             dt: 1.0 / 30.0,
+            motion,
             ..Frame::sized(W, H)
         };
-        let want = draw(&undisturbed, LayerKind::Background, &c, &f).unwrap();
+        let c = match stopped {
+            Some(_) => &after,
+            None if motion || i == 0 => &first,
+            None => &stopped_at,
+        };
+        // The one never stopped draws what the other drew: not the frame
+        // stopped, which took nothing (had it drawn that frame, it would
+        // have spent its layer's allowance on one more picture, and been
+        // refused one a few frames on).
         let started = cpu_ms();
-        let got = draw(&theme, LayerKind::Background, &c, &f);
+        let got = draw(&theme, LayerKind::Background, c, &f);
         let took = cpu_ms() - started;
         match got {
             Ok(got) => {
                 longest = longest.max(took);
+                let want = draw(&undisturbed, LayerKind::Background, c, &f).unwrap();
                 assert_eq!(paint(&got), paint(&want), "frame {i}");
             }
             Err(Failure::Failed(ThemeError::Timeout(_))) => {
@@ -167,15 +209,17 @@ fn one_try() -> (Stopped, f64) {
             }
             Err(e) => panic!("frame {i}: {e:?}"),
         }
-        // Drawn again inside the same thirtieth: the same picture.
+        // Drawn again inside the same thirtieth: the same picture (after
+        // the stop, with what follows it).
         let again = Frame {
             time: f.time + 0.004,
             ..f.clone()
         };
-        let want = draw(&undisturbed, LayerKind::Background, &c, &again).unwrap();
+        let c = if stopped.is_some() { &after } else { c };
         let started = cpu_ms();
-        let got = draw(&theme, LayerKind::Background, &c, &again);
+        let got = draw(&theme, LayerKind::Background, c, &again);
         longest = longest.max(cpu_ms() - started);
+        let want = draw(&undisturbed, LayerKind::Background, c, &again).unwrap();
         assert_eq!(paint(&got.unwrap()), paint(&want), "frame {i}, again");
     }
     assert!(stopped.is_some(), "the paint was never stopped");
@@ -196,14 +240,29 @@ fn one_try() -> (Stopped, f64) {
 
 #[test]
 fn swirls_writes_its_paint_again_after_a_timeout() {
-    // A try whose stop landed in the theme's own code (the paint's call had
-    // returned before its timer fired) is made again, on new themes.
+    // One after another (what modules have done is the process's).
+    for (motion, then) in [
+        (true, Then::Same),
+        (true, Then::Opacity),
+        (false, Then::Same),
+        (false, Then::Opacity),
+    ] {
+        stopped_in_the_paint(motion, then);
+    }
+}
+
+/// A try whose stop landed in the theme's own code (the paint's call had
+/// returned before its timer fired) is made again, on new themes.
+fn stopped_in_the_paint(motion: bool, then: Then) {
     for attempt in 1..=12 {
-        let (how, longest) = one_try();
-        println!("try {attempt}: an ordinary frame took {longest:.2} ms at most of the 1 ms");
+        let (how, longest) = one_try(motion, then);
+        println!(
+            "motion {motion}, then {then:?}, try {attempt}: an ordinary frame took {longest:.2} ms \
+             at most of the 1 ms"
+        );
         if let Stopped::InThePaint = how {
             return;
         }
     }
-    panic!("in twelve tries the deadline never stopped the paint's own call");
+    panic!("motion {motion}, then {then:?}: in twelve tries the deadline never stopped the paint");
 }

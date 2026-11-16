@@ -1199,6 +1199,15 @@ local function set_ramp(slot: number, ramp: PaintRamp): boolean
 	if h.ramp == ramp.key then
 		return true
 	end
+	-- A slot given a ramp before whose paint holds none has started
+	-- afresh: its snapshots are gone too, and every slot's, so everything
+	-- is written again. (Else a new ramp written alone, the picture would
+	-- be made of a snapshot no longer there. Asked only when the ramp
+	-- changes.)
+	if h.ramp ~= nil and paint:call("made", slot) == 0 then
+		forget()
+		h = in_slot[slot]
+	end
 	local into = at(slot, 2)
 	if not into then
 		return false
