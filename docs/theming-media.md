@@ -1187,7 +1187,9 @@ painting a picture costs more than decoding it.
 `gmnb.pixels(w, h)` charges `w × h × 4` to the image total and starts
 transparent. Like the others it remembers its arguments: the same size is
 the same picture. `set(buffer)` checks the length and copies the bytes
-(`mlua::Buffer::to_vec`) into a new version of the picture. A draw holds
+(`mlua::Buffer::to_vec`) into a new version of the picture. (It reads the
+picture off the table it is called on; called on a module's picture,
+which changes only by its `take`, it does nothing and says so.) A draw holds
 the version it drew (`Op::Image`'s and `Op::Tile`'s `canvas`, shared, not
 copied), and the app makes a `gdk::MemoryTexture` (`R8G8B8A8`, straight
 alpha; a module's picture `R8G8B8A8_PREMULTIPLIED`, as a field's) of each

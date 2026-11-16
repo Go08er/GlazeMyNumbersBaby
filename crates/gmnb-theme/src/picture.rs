@@ -1131,6 +1131,18 @@ impl Pictures {
         let Some(state) = self.canvases.get(&id) else {
             return Ok(Err(f64::INFINITY));
         };
+        // (`set` reads the picture off the table it is called on.) A
+        // module's picture changes only by `take`: per layer, clamped,
+        // counted as its layers hold it. No frame would take it: none is
+        // owed.
+        if state.module {
+            return Err((
+                "gmnb.pixels: set was called on a module's picture, which changes only by \
+                 picture:take"
+                    .into(),
+                false,
+            ));
+        }
         let c = &state.canvas;
         let want = c.width as usize * c.height as usize * 4;
         if bytes.len() != want {

@@ -1497,6 +1497,58 @@ fn past_so_many_layers_the_one_used_longest_ago_is_let_go() {
 }
 
 #[test]
+fn a_pixels_set_called_on_a_module_picture_changes_nothing() {
+    let d = dir("setmodule");
+    d.wat("paint.wasm", GREYS);
+    // The background takes the module's picture each frame, something else
+    // each time; and calls a pixels picture's `set` on it (`set` reads the
+    // picture off the table it is called on), with as many bytes as it
+    // holds, which a module's picture never takes. (The pixels picture of
+    // one pixel: 4 bytes of the image total.)
+    let theme = d.background(
+        r#"
+        local paint = gmnb.module("paint.wasm")
+        local picture = paint:picture()
+        local pixels = gmnb.pixels(1, 1)
+        local n = 0
+        "#,
+        r#"
+        n += 1
+        paint:call("fill", n, 4, 1024)
+        assert(picture:take(paint, 1024, 2, 2))
+        local set = pixels.set(picture, buffer.create(16))
+        draw:image(picture, 0, 0, 2, 2)
+        return if set then 1 else 0
+        "#,
+    );
+    let now = clock(&theme, 10.0);
+    let first = drawn(&theme);
+    // Refused, and nothing owed: no frame would take it.
+    assert_eq!((first.again, first.retry), (Some(0.0), None));
+    assert_eq!(grey(&first.list).0, 1);
+    consistent(&theme);
+    assert_eq!(theme.api().pictures().decoded_bytes(), 4 + 16);
+    // The layer's next take: the picture as the layer took it, counted
+    // once.
+    now.set(11.0);
+    let second = drawn(&theme);
+    assert_eq!((second.again, second.retry), (Some(0.0), None));
+    assert_eq!(grey(&second.list).0, 2);
+    consistent(&theme);
+    assert_eq!(theme.api().pictures().decoded_bytes(), 4 + 16);
+    // Said once, though called each frame.
+    let all = notes(&theme);
+    let said = "gmnb.pixels: set was called on a module's picture, which changes only by \
+                picture:take";
+    assert_eq!(
+        all.iter().filter(|n| n.contains(said)).count(),
+        1,
+        "{all:?}"
+    );
+    assert_eq!(all.len(), 1, "{all:?}");
+}
+
+#[test]
 fn a_pixels_picture_refused_for_earlier_versions_is_a_note_and_a_frame_owed() {
     let d = dir("pixelsfull");
     // 1 MiB in all; a picture of 256 KiB.
