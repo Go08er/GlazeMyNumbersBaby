@@ -106,8 +106,34 @@ fn paint(d: &Drawn) -> (u32, u32, Vec<u8>) {
     found.into_iter().next().unwrap()
 }
 
-#[test]
-fn swirls_writes_its_paint_again_after_a_timeout() {
+/// This thread's processor time, in milliseconds: what a hook's deadline
+/// is of.
+fn cpu_ms() -> f64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `clock_gettime` writes the one `timespec` it is given.
+    assert_eq!(
+        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) },
+        0
+    );
+    ts.tv_sec as f64 * 1000.0 + ts.tv_nsec as f64 / 1e6
+}
+
+/// How the frame that runs over its deadline ended.
+enum Stopped {
+    /// In the paint's own call: it was started afresh.
+    InThePaint,
+    /// In the theme's code, after a call that returned (its timer may be a
+    /// tick late: up to 4 ms on a 250 Hz kernel): this try tells nothing.
+    InLuau,
+}
+
+/// One try: Swirls stopped once and one never stopped, the same frames.
+/// The most processor time an ordinary frame of the stopped one took
+/// comes back too.
+fn one_try() -> (Stopped, f64) {
     let undisturbed = Theme::load_ready(Source::built_in("swirls").unwrap(), limits(8)).unwrap();
     let mut theme = stopped_once(12);
     let c = ctx(&theme);
@@ -115,7 +141,7 @@ fn swirls_writes_its_paint_again_after_a_timeout() {
     // then has only the paint to do.)
     theme.style(&c).unwrap();
     let before = module::stats();
-    let mut stopped = 0;
+    let (mut stopped, mut longest) = (None, 0.0f64);
     for i in 0..60u32 {
         let f = Frame {
             time: f64::from(i) / 30.0,
@@ -123,31 +149,39 @@ fn swirls_writes_its_paint_again_after_a_timeout() {
             ..Frame::sized(W, H)
         };
         let want = draw(&undisturbed, LayerKind::Background, &c, &f).unwrap();
-        match draw(&theme, LayerKind::Background, &c, &f) {
-            Ok(got) => assert_eq!(paint(&got), paint(&want), "frame {i}"),
+        let started = cpu_ms();
+        let got = draw(&theme, LayerKind::Background, &c, &f);
+        let took = cpu_ms() - started;
+        match got {
+            Ok(got) => {
+                longest = longest.max(took);
+                assert_eq!(paint(&got), paint(&want), "frame {i}");
+            }
             Err(Failure::Failed(ThemeError::Timeout(_))) => {
-                stopped += 1;
-                // The paint's call ran out of the frame's time, not Luau.
+                assert!(stopped.is_none(), "frame {i}: a second frame ran over");
+                if module::stats().timeouts == before.timeouts {
+                    return (Stopped::InLuau, longest);
+                }
                 assert_eq!(module::stats().timeouts, before.timeouts + 1, "frame {i}");
+                stopped = Some(i);
             }
             Err(e) => panic!("frame {i}: {e:?}"),
         }
-        // Drawn again inside the same thirtieth: the same picture, the
-        // paint not asked again.
+        // Drawn again inside the same thirtieth: the same picture.
         let again = Frame {
             time: f.time + 0.004,
             ..f.clone()
         };
         let want = draw(&undisturbed, LayerKind::Background, &c, &again).unwrap();
-        if let Ok(got) = draw(&theme, LayerKind::Background, &c, &again) {
-            assert_eq!(paint(&got), paint(&want), "frame {i}, again");
-        }
+        let started = cpu_ms();
+        let got = draw(&theme, LayerKind::Background, &c, &again);
+        longest = longest.max(cpu_ms() - started);
+        assert_eq!(paint(&got.unwrap()), paint(&want), "frame {i}, again");
     }
-    assert_eq!(stopped, 1);
+    assert!(stopped.is_some(), "the paint was never stopped");
     let after = module::stats();
     assert_eq!(after.timeouts, before.timeouts + 1);
-    // Started afresh once: one instance more than the undisturbed theme's
-    // two (each one's, at load).
+    // Started afresh once: one instance more than the two themes' own.
     assert_eq!(after.instances, before.instances + 1);
     // One strike, and the hook still on.
     let hook = theme
@@ -157,4 +191,19 @@ fn swirls_writes_its_paint_again_after_a_timeout() {
         .unwrap();
     assert_eq!((hook.1, hook.2), (1, false));
     assert!(theme.take_draw_notes().is_empty());
+    (Stopped::InThePaint, longest)
+}
+
+#[test]
+fn swirls_writes_its_paint_again_after_a_timeout() {
+    // A try whose stop landed in the theme's own code (the paint's call had
+    // returned before its timer fired) is made again, on new themes.
+    for attempt in 1..=12 {
+        let (how, longest) = one_try();
+        println!("try {attempt}: an ordinary frame took {longest:.2} ms at most of the 1 ms");
+        if let Stopped::InThePaint = how {
+            return;
+        }
+    }
+    panic!("in twelve tries the deadline never stopped the paint's own call");
 }

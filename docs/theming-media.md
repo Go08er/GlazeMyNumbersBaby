@@ -17,7 +17,7 @@ What a theme gains:
 | Animated pictures: GIF, APNG, animated WebP | `gmnb.animation`, drawn with `draw:image` |
 | Silent video loops | An animated WebP, made from the video with one command |
 | Pictures the theme computes | `gmnb.pixels`: a Luau `buffer` of pixels, drawn as a picture |
-| Swirls, plasma, contour bands, gradient maps | `draw:field`: a coarse grid of numbers the theme computes, coloured per pixel by the app through a `gmnb.ramp` |
+| Swirls, plasma, contour bands, gradient maps | `draw:field`: a coarse grid of numbers the theme computes, coloured per pixel by the app through a `gmnb.ramp` (Swirls itself, since 0.4: the same pass in a module it ships) |
 | Sounds for keys, results, errors | `sounds = { … }`, `sound(event)`, `gmnb.synth`, `gmnb.sound` |
 
 Not in API 1, and why: [What is in API 1 and what is deferred](#what-is-in-api-1-and-what-is-deferred).
@@ -275,9 +275,10 @@ pixel art. For a whole window of smooth colour, use a field.
 > app's only effect-specific native code. In 0.4 they move out of GMNB:
 > themes get WebAssembly modules for their heavy work, near native speed in
 > a sandbox like Luau's, and the field pass becomes a module a theme ships
-> in its own folder (Swirls first), so no theme gets native speed another
-> theme can't. Until then they work as described here; a theme built on
-> them will need the module in 0.4.
+> in its own folder (Swirls first: its `paint.wasm`, built from
+> `modules/field`, is this pass byte for byte), so no theme gets native
+> speed another theme can't. Until then they work as described here; a
+> theme built on them will need the module in 0.4.
 >
 > **What belongs in the app.** A library or native building block is part
 > of GMNB itself only if it is general enough to serve most theme makers
@@ -408,7 +409,10 @@ this example grown into a theme: the same field behind glass keys, with a
 grid that keeps its number of points whatever the window's size, a clock
 quantised to thirtieths of a second, the paint stirred where keys are
 pressed (by moving where the field is looked up), and the readout's
-figures cut out of a slice of it.
+figures cut out of a slice of it. Since 0.4 it colours its fields with a
+WebAssembly module it ships (`paint.wasm`, built from `modules/field`):
+this pass, step for step, in its own folder, drawn with `draw:image`
+([theming.md](theming.md#modules)).
 
 A field that hasn't changed isn't coloured again. Drawn with the same
 numbers, the same ramp and the same size as last time, it is the picture
