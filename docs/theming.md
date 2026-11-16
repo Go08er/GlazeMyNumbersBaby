@@ -1658,7 +1658,7 @@ draw:image(picture, x, y, w, h)
 | `module:write(offset, buffer)` | Copies the buffer into the module's memory at `offset`. |
 | `module:read(offset, length)` | A new buffer of `length` bytes of its memory at `offset`, 1 MiB at most. |
 | `module:picture()` | A new picture for a module to fill: `{ width, height }` (its size now, 0 × 0 before the first `take`) with `:ready()` and `:take(module, offset, width, height)`. Each call makes another. Drawn by `draw:image` and `draw:tile` like any picture (smooth by default). |
-| `picture:take(module, offset, w, h)` | `w × h × 4` bytes of the module's memory at `offset` become the picture: red, green, blue, opacity, **premultiplied** (each colour already multiplied by the opacity, as a field's pixels are, and unlike `gmnb.pixels`' `set`), rows from the top. A colour above its pixel's opacity is clamped to it as the bytes are copied. Any shape of up to 262 144 pixels (a field's), 1 to 16 384 a side. `true` if it was taken. |
+| `picture:take(module, offset, w, h)` | `w × h × 4` bytes of the module's memory at `offset` become the picture **for the layer taking it** (rule 6): red, green, blue, opacity, **premultiplied** (each colour already multiplied by the opacity, as a field's pixels are, and unlike `gmnb.pixels`' `set`), rows from the top. A colour above its pixel's opacity is clamped to it as the bytes are copied. Any shape of up to 262 144 pixels (a field's), 1 to 16 384 a side. `true` if it was taken. |
 | `picture:ready()` | Whether a `take` now would be taken. |
 
 The rules:
@@ -1703,16 +1703,36 @@ The rules:
    a picture over 262 144 pixels or 16 384 a side) does nothing and returns nothing (`take`:
    `false`), with a note once for each place in the theme's code it is
    made from.
-6. **Pictures.** A module's picture keeps `gmnb.pixels`' rules: it
-   changes 30 times a second at most, two in hand; the same bytes again
-   cost nothing; and a refused change leaves the layer owed a frame, so
-   that what stands on screen is never out of date. `ready()` says
-   whether a change now would be taken, so that a theme can skip the work
-   when it wouldn't; the layer is owed its frame then too. In a preview
-   (a tile in Settings, drawn once) there is no allowance: `take` is
-   always taken and `ready()` is true. 4 module pictures per theme, each
-   any shape of up to 262 144 pixels (a field's; 16 384 a side), counted
-   against the image total at their current size.
+6. **Pictures.** A module's picture is **kept per layer**, as a field is:
+   one picture serves every layer that draws it, a readout here and
+   another there, each as if it had the picture to itself.
+   - Each layer (in the place it is drawn: this readout, that keypad)
+     that takes it has its own allowance, 30 changes a second, two in
+     hand; `ready()` says whether its own next change would be taken, so
+     that a theme can skip the work when it wouldn't.
+   - What a layer draws is the version it took last: a take of its
+     refused, or skipped, leaves it drawing its own, whatever another
+     layer took since. A refused change, and a `false` from `ready()`,
+     leave the layer owed a frame, so that what stands on screen is never
+     out of date.
+   - The same bytes as that layer's last again change nothing and cost
+     nothing, whatever other layers took meanwhile.
+   - A layer that has never taken it draws the version taken last in any
+     layer or any other hook: a picture taken once (in `style`, say) is
+     drawn by every layer. Another hook's takes have an allowance of
+     their own.
+   - In a preview (a tile in Settings, drawn once) there is no allowance:
+     `take` is always taken and `ready()` is true. A tile's take is the
+     tile's alone: it changes nothing a window layer draws, and costs it
+     nothing.
+   - 4 module pictures per theme, each any shape of up to 262 144 pixels
+     (a field's; 16 384 a side). Every version a layer or tile holds is
+     counted against the image total, once however many hold it, and
+     the earlier versions frames and tiles still show with them (see
+     [Pixel pictures](theming-media.md#pixel-pictures)); the layers kept
+     per picture are at most 32, and past that the one used longest ago
+     is let go (it draws the picture's latest version until it takes it
+     again, its allowance whole).
 7. **The same everywhere.** Relaxed SIMD is off, NaNs are made canonical
    and there are no threads: a module computes the same bytes on every
    machine.

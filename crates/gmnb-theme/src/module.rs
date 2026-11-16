@@ -1271,15 +1271,16 @@ fn take(
                 )
             })?;
         let now = shared.now();
-        // (A preview's tile is a still picture, drawn once: no allowance.)
-        let charged = !shared.recorder.borrow().in_preview();
+        // The layer's own (a preview's tile is a still picture, drawn
+        // once: no allowance).
+        let taker = shared.recorder.borrow().taker();
         match shared.pictures.borrow_mut().take_module(
             picture,
+            taker,
             width as u32,
             height as u32,
             from,
             now,
-            charged,
         ) {
             Ok(()) => Ok(true),
             // Too soon: the old picture stays, and a layer drawing is
@@ -1291,6 +1292,12 @@ fn take(
                 Ok(false)
             }
             Err(Refused::Over(why)) => Err(why),
+            // Earlier versions still shown take up the image total: they
+            // go as frames are drawn, so the layer is owed one.
+            Err(Refused::Full(why)) => {
+                shared.recorder.borrow_mut().retry(1.0 / 30.0);
+                Err(why)
+            }
         }
     })();
     match taken {
@@ -1311,15 +1318,9 @@ fn ready(shared: &Shared, this: &Value) -> mlua::Result<bool> {
     let Some(picture) = picture_of(this)? else {
         return Ok(false);
     };
-    if shared.recorder.borrow().in_preview() {
-        return Ok(shared
-            .pictures
-            .borrow()
-            .module_wait(picture, 0.0)
-            .is_finite());
-    }
+    let taker = shared.recorder.borrow().taker();
     let now = shared.now();
-    let wait = shared.pictures.borrow().module_wait(picture, now);
+    let wait = shared.pictures.borrow().module_wait(picture, taker, now);
     if wait <= 0.0 {
         return Ok(true);
     }
@@ -1355,8 +1356,10 @@ pub(crate) fn register(
         let Value::String(key) = key else {
             return Ok(Value::Nil);
         };
-        let canvas = picture_of(&this)?.and_then(|id| s.pictures.borrow().canvas(id).cloned());
-        let (w, h) = canvas.map_or((0, 0), |c| (c.width, c.height));
+        // (The size of the version the layer asking would draw.)
+        let taker = s.recorder.borrow().taker();
+        let (w, h) =
+            picture_of(&this)?.map_or((0, 0), |id| s.pictures.borrow().shown_size(id, taker));
         Ok(match &*key.as_bytes() {
             b"width" => Value::Number(f64::from(w)),
             b"height" => Value::Number(f64::from(h)),

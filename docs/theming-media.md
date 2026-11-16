@@ -254,8 +254,12 @@ end
   nothing.
 - A draw shows the picture as it was when it was drawn: setting it again
   later changes the frames drawn after, not the ones before (a tile in
-  Settings stands as it was drawn, and two layers may draw one picture
-  in turn, each its own version).
+  Settings stands as it was drawn). The picture has one allowance,
+  whichever layer sets it: two layers that set it to different bytes
+  every frame ask for 60 changes a second, and half are refused (each
+  then draws what the picture holds, the other's). Two layers that set
+  the same bytes cost one change. (A module's picture is kept per layer:
+  [theming.md](theming.md#modules).)
 - The buffer is yours and counts against the theme's 8 MiB of memory; the
   picture is the app's and counts against the image budget.
 
@@ -1187,8 +1191,11 @@ version the first time it is drawn, kept while a draw of that version is
 alive. A version no draw holds is dropped with its texture; the toolkit
 frees its copy on the graphics card with it. While draws hold earlier
 versions (a layer's last frame, Settings' tiles), they count against the
-image total with the pictures as they stand, and at most 1024 of them
-are held: a `set` or a `take` past either is refused, with a note. Bytes
+image total with the pictures as they stand (of a module's picture, each
+version a layer or a tile last took, once however many hold it), and at
+most 1024 of them are held: a `set` or a `take` past either is refused,
+with a note, and the layer owed a frame (the earlier versions go as
+frames are drawn). Bytes
 equal to the ones it holds change nothing and spend nothing. A picture
 over a limit has no size, and a `set` that returns `false`.
 

@@ -148,14 +148,53 @@ pub struct Canvas {
 pub const EARLIER_HELD: usize = 1024;
 
 struct CanvasState {
-    /// The version standing: shared with each draw of it.
+    /// `gmnb.pixels`': the version standing, shared with each draw of it.
+    /// A module's: the version a layer that has never taken it draws (the
+    /// last taken anywhere but in a preview).
     canvas: Rc<Canvas>,
-    /// How often it may change: 30 times a second, two in hand.
+    /// `gmnb.pixels`': how often it may change, 30 times a second, two in
+    /// hand. (A module picture's allowances are its takers'.)
     allowance: Bucket,
     /// A module's picture (`module:picture`), whose size each `take`
     /// sets; else `gmnb.pixels`'.
     module: bool,
+    /// A module's picture is kept per layer, as a field is: each that has
+    /// taken it, its own allowance and the version it took last. At most
+    /// [`TAKERS`]; past that, the one used longest ago is let go.
+    takers: HashMap<Taker, Took>,
+    /// The versions made, for the next one's number.
+    versions: u64,
+    /// The clock `takers` is kept by: a tick for each take or draw.
+    used: u64,
 }
+
+/// Who takes a module's picture, and so whose allowance a take spends and
+/// whose last version it sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Taker {
+    /// A window layer, in the place it is drawn (this readout's, that
+    /// keypad's): the draw's own `layer`, as fields' are kept by.
+    Layer(u64),
+    /// A preview's tile: no allowance, and nothing it takes changes what a
+    /// window layer draws.
+    Preview,
+    /// Any other hook (`style`, `sound`, an action...): an allowance of its
+    /// own, and, as a layer's take does, the version a layer that has
+    /// never taken the picture draws.
+    Outside,
+}
+
+/// One taker's hold on a module's picture.
+struct Took {
+    allowance: Bucket,
+    /// What it took last: what its draws show.
+    last: Rc<Canvas>,
+    /// When it was last used, on its picture's clock.
+    used: u64,
+}
+
+/// Takers of a module's picture kept at once (as `Fields` keeps layers).
+pub const TAKERS: usize = 32;
 
 /// Why a module's picture can't be `width × height`, if it can't: 1 to
 /// [`DrawLimits::module_picture_side`] a side, and no more than
@@ -202,6 +241,73 @@ fn same_premultiplied(held: &[u8], bytes: &[u8]) -> bool {
             })
 }
 
+/// The versions a picture's state holds: the one standing (or a layer
+/// that never took a module's draws) and each taker's last.
+fn versions(state: &CanvasState) -> Vec<&Rc<Canvas>> {
+    let mut all = vec![&state.canvas];
+    all.extend(state.takers.values().map(|t| &t.last));
+    all
+}
+
+/// The versions a picture's state holds, each once, shared.
+fn distinct(state: &CanvasState) -> Vec<Rc<Canvas>> {
+    let mut out: Vec<Rc<Canvas>> = Vec::new();
+    for c in versions(state) {
+        if !out.iter().any(|o| Rc::ptr_eq(o, c)) {
+            out.push(c.clone());
+        }
+    }
+    out
+}
+
+/// The version taken last of those a picture's state holds.
+fn latest(state: &CanvasState) -> &Rc<Canvas> {
+    versions(state)
+        .into_iter()
+        .max_by_key(|c| c.version)
+        .unwrap_or(&state.canvas)
+}
+
+/// The bytes of `all`, each version once.
+fn distinct_bytes(all: &[&Rc<Canvas>]) -> u64 {
+    let mut seen: Vec<*const Canvas> = Vec::new();
+    let mut bytes = 0;
+    for c in all {
+        if !seen.contains(&Rc::as_ptr(c)) {
+            seen.push(Rc::as_ptr(c));
+            bytes += c.pixels.len() as u64;
+        }
+    }
+    bytes
+}
+
+/// What the bytes a picture's state holds come to.
+fn held(state: &CanvasState) -> u64 {
+    distinct_bytes(&versions(state))
+}
+
+/// Of the versions a picture's state holds, those not among `after` that a
+/// draw holds too (more holds than the state's own): their bytes, and how
+/// many.
+fn leaving(state: &CanvasState, after: &[&Rc<Canvas>]) -> (u64, usize) {
+    let now = versions(state);
+    let mut seen: Vec<*const Canvas> = Vec::new();
+    let (mut bytes, mut n) = (0, 0);
+    for c in &now {
+        let ptr = Rc::as_ptr(c);
+        if seen.contains(&ptr) || after.iter().any(|a| Rc::as_ptr(a) == ptr) {
+            continue;
+        }
+        seen.push(ptr);
+        let own = now.iter().filter(|o| Rc::as_ptr(o) == ptr).count();
+        if Rc::strong_count(c) > own {
+            bytes += c.pixels.len() as u64;
+            n += 1;
+        }
+    }
+    (bytes, n)
+}
+
 /// Why a module picture didn't take what it was given.
 pub(crate) enum Refused {
     /// Too soon after the last change: it can be taken in this many
@@ -209,6 +315,10 @@ pub(crate) enum Refused {
     TooSoon(f64),
     /// Over a cap: the note for the theme's author.
     Over(String),
+    /// The image total is taken up by earlier versions draws still hold:
+    /// the note, and the layer is owed a frame (they go as frames are
+    /// drawn).
+    Full(String),
 }
 
 /// How an animation's own clock stands (docs/theming-media.md, "plays
@@ -394,15 +504,48 @@ impl Pictures {
         }
     }
 
-    /// A picture the theme fills, as it stands.
+    /// A picture the theme fills, as it stands: of a module's, the version
+    /// taken last, anywhere (a preview's too).
     pub fn canvas(&self, id: ImageId) -> Option<&Canvas> {
-        self.canvases.get(&id).map(|c| &*c.canvas)
+        self.canvases.get(&id).map(|c| &**latest(c))
     }
 
-    /// The version of a picture the theme fills standing now, shared:
-    /// what a draw of it holds.
+    /// The same, shared.
     pub fn snapshot(&self, id: ImageId) -> Option<Rc<Canvas>> {
-        self.canvases.get(&id).map(|c| c.canvas.clone())
+        self.canvases.get(&id).map(|c| latest(c).clone())
+    }
+
+    /// The version of a picture the theme fills that a draw by `taker`
+    /// shows, shared: what the draw holds. Of a module's, the version that
+    /// taker took last; one that has never taken it shows the version
+    /// taken last in a window layer or outside any. (A draw keeps its
+    /// taker's hold from being let go before others'.)
+    pub(crate) fn shown(&mut self, id: ImageId, taker: Taker) -> Option<Rc<Canvas>> {
+        let state = self.canvases.get_mut(&id)?;
+        if !state.module {
+            return Some(state.canvas.clone());
+        }
+        state.used += 1;
+        let now = state.used;
+        Some(match state.takers.get_mut(&taker) {
+            Some(took) => {
+                took.used = now;
+                took.last.clone()
+            }
+            None => state.canvas.clone(),
+        })
+    }
+
+    /// The size of a module picture's version that `taker` would draw.
+    pub(crate) fn shown_size(&self, id: ImageId, taker: Taker) -> (u32, u32) {
+        let Some(state) = self.canvases.get(&id) else {
+            return (0, 0);
+        };
+        let c = match state.takers.get(&taker) {
+            Some(took) if state.module => &took.last,
+            _ => &state.canvas,
+        };
+        (c.width, c.height)
     }
 
     /// Bytes of earlier versions of the theme's pictures that draws still
@@ -685,6 +828,9 @@ impl Pictures {
                 }),
                 allowance: Bucket::new(),
                 module: false,
+                takers: HashMap::new(),
+                versions: 0,
+                used: 0,
             },
         );
         Some(id)
@@ -723,101 +869,248 @@ impl Pictures {
                 }),
                 allowance: Bucket::new(),
                 module: true,
+                takers: HashMap::new(),
+                versions: 0,
+                used: 0,
             },
         );
         Some(id)
     }
 
-    /// Seconds from `now` until module picture `id` would take a change:
-    /// 0 if it would now. (Infinite: not a module picture.)
-    pub(crate) fn module_wait(&self, id: ImageId, now: f64) -> f64 {
+    /// Seconds from `now` until module picture `id` would take a change
+    /// from `taker`: 0 if it would now (and always in a preview; one that
+    /// has never taken it has its whole allowance). Infinite: not a module
+    /// picture.
+    pub(crate) fn module_wait(&self, id: ImageId, taker: Taker, now: f64) -> f64 {
         match self.canvases.get(&id) {
-            Some(state) if state.module => state.allowance.wait(now),
+            Some(state) if state.module => match (taker, state.takers.get(&taker)) {
+                (Taker::Preview, _) | (_, None) => 0.0,
+                (_, Some(took)) => took.allowance.wait(now),
+            },
             _ => f64::INFINITY,
         }
     }
 
-    /// `picture:take(module, offset, w, h)` at `now`: module picture `id`
-    /// becomes the `width × height` picture of `bytes` (RGBA,
-    /// premultiplied: each colour is clamped to the pixel's opacity as it
-    /// is copied), charged to the image total at that size, if it wasn't
-    /// changed too recently (`charged`: the allowance applies; in a
-    /// preview it doesn't). The same bytes at the same size again change
-    /// nothing and spend nothing.
+    /// `picture:take(module, offset, w, h)` by `taker` at `now`: for that
+    /// taker, module picture `id` becomes the `width × height` picture of
+    /// `bytes` (RGBA, premultiplied: each colour is clamped to the pixel's
+    /// opacity as it is copied), if its allowance has a change to give (a
+    /// preview's take is always given one, and changes nothing a window
+    /// layer draws). The same bytes as that taker's last, at the same size,
+    /// change nothing and spend nothing. Every version a taker holds is
+    /// charged to the image total, once however many hold it, and the
+    /// earlier versions draws still hold with them.
     pub(crate) fn take_module(
         &mut self,
         id: ImageId,
+        taker: Taker,
         width: u32,
         height: u32,
         bytes: &[u8],
         now: f64,
-        charged: bool,
     ) -> Result<(), Refused> {
         module_size(&self.limits, width.into(), height.into())
             .map_err(|why| Refused::Over(format!("picture:take: {why}")))?;
-        let Some(state) = self.canvases.get(&id).filter(|s| s.module) else {
+        let Some(state) = self.canvases.get_mut(&id).filter(|s| s.module) else {
             return Err(Refused::Over(
                 "picture:take was called on something that isn't a module's picture".into(),
             ));
         };
-        let c = &state.canvas;
-        if (c.width, c.height) == (width, height) && same_premultiplied(&c.pixels, bytes) {
+        state.used += 1;
+        let tick = state.used;
+        let shown = match state.takers.get(&taker) {
+            Some(took) => &took.last,
+            None => &state.canvas,
+        };
+        if (shown.width, shown.height) == (width, height)
+            && same_premultiplied(&shown.pixels, bytes)
+        {
+            // Nothing changes and nothing is spent; a taker that hadn't
+            // taken it keeps the version it shows as its own.
+            match state.takers.get_mut(&taker) {
+                Some(took) => took.used = tick,
+                None => {
+                    let last = state.canvas.clone();
+                    self.add_taker(id, taker, last, Bucket::new());
+                }
+            }
             return Ok(());
         }
-        let held = u64::from(c.width) * u64::from(c.height) * 4;
-        let wanted = bytes.len() as u64;
-        if self.decoded - held + wanted > self.limits.image_bytes {
+        let pixels = premultiplied(bytes);
+        // (The same bytes as the version taken last elsewhere: that one,
+        // held once.)
+        let newest = latest(state);
+        let new = if (newest.width, newest.height) == (width, height)
+            && newest.pixels[..] == pixels[..]
+        {
+            newest.clone()
+        } else {
+            Rc::new(Canvas {
+                width,
+                height,
+                pixels: Bytes::new(pixels),
+                version: state.versions + 1,
+                premultiplied: true,
+            })
+        };
+        // What the picture would hold after, and what that frees.
+        let state = &self.canvases[&id];
+        let evict = (!state.takers.contains_key(&taker) && state.takers.len() >= TAKERS)
+            .then(|| {
+                state
+                    .takers
+                    .iter()
+                    .min_by_key(|(_, t)| t.used)
+                    .map(|(k, _)| *k)
+            })
+            .flatten();
+        let before = held(state);
+        let mut after: Vec<&Rc<Canvas>> = state
+            .takers
+            .iter()
+            .filter(|(k, _)| **k != taker && Some(**k) != evict)
+            .map(|(_, t)| &t.last)
+            .collect();
+        after.push(&new);
+        after.push(if taker == Taker::Preview {
+            &state.canvas
+        } else {
+            &new
+        });
+        let after_bytes = distinct_bytes(&after);
+        // Versions the picture lets go of that draws still hold become
+        // earlier ones, counted while they are.
+        let (gone_bytes, gone) = leaving(state, &after);
+        let total = self.decoded - before + after_bytes;
+        if total > self.limits.image_bytes {
             return Err(Refused::Over(format!(
                 "picture:take: {width}×{height}: the theme's pictures would be over {} MiB decoded",
                 self.limits.image_bytes >> 20
             )));
         }
-        self.room_for(id, wanted)
-            .map_err(|why| Refused::Over(format!("picture:take: {width}×{height}: {why}")))?;
-        let state = self.canvases.get_mut(&id).expect("looked up above");
-        if charged && !state.allowance.take(now) {
-            return Err(Refused::TooSoon(state.allowance.wait(now)));
+        self.earlier.retain(|e| e.strong_count() > 0);
+        let (earlier, count) = self.earlier_bytes();
+        if total + earlier + gone_bytes > self.limits.image_bytes {
+            return Err(Refused::Full(format!(
+                "picture:take: {width}×{height}: the theme's pictures, with the earlier ones still \
+                 shown, would be over {} MiB decoded",
+                self.limits.image_bytes >> 20
+            )));
         }
-        let version = state.canvas.version + 1;
-        self.decoded = self.decoded - held + wanted;
-        self.replace(
-            id,
-            Canvas {
-                width,
-                height,
-                pixels: Bytes::new(premultiplied(bytes)),
-                version,
-                premultiplied: true,
+        if gone > 0 && count + gone > EARLIER_HELD {
+            return Err(Refused::Full(format!(
+                "picture:take: {width}×{height}: {EARLIER_HELD} earlier versions of the theme's \
+                 pictures are still shown"
+            )));
+        }
+        let state = self.canvases.get_mut(&id).expect("looked up above");
+        let mut allowance = match state.takers.get(&taker) {
+            Some(took) => took.allowance,
+            None => Bucket::new(),
+        };
+        if taker != Taker::Preview && !allowance.take(now) {
+            return Err(Refused::TooSoon(allowance.wait(now)));
+        }
+        // Taken: the picture as it stands now, the versions it let go
+        // counted while draws hold them.
+        let old = distinct(state);
+        if new.version > state.versions {
+            state.versions = new.version;
+        }
+        if let Some(k) = evict {
+            state.takers.remove(&k);
+        }
+        if taker != Taker::Preview {
+            state.canvas = new.clone();
+        }
+        state.takers.insert(
+            taker,
+            Took {
+                allowance,
+                last: new,
+                used: tick,
             },
         );
+        let (fallback_w, fallback_h) = (state.canvas.width, state.canvas.height);
+        let after = distinct(state);
+        self.decoded = self.decoded - before + distinct_bytes(&after.iter().collect::<Vec<_>>());
+        for v in old {
+            // (`old` holds one; the picture none, now.)
+            if !after.iter().any(|a| Rc::ptr_eq(a, &v)) && Rc::strong_count(&v) > 1 {
+                self.earlier.push(Rc::downgrade(&v));
+            }
+        }
         if let Some(picture) = self.list.get_mut(id.0 as usize) {
-            picture.width = width;
-            picture.height = height;
+            picture.width = fallback_w;
+            picture.height = fallback_h;
         }
         Ok(())
+    }
+
+    /// `taker` holds `last` of module picture `id` (the version it shows,
+    /// already the picture's), with `allowance`: the taker used longest
+    /// ago let go to make room.
+    fn add_taker(&mut self, id: ImageId, taker: Taker, last: Rc<Canvas>, allowance: Bucket) {
+        let Some(state) = self.canvases.get_mut(&id) else {
+            return;
+        };
+        let before = held(state);
+        let old = distinct(state);
+        if state.takers.len() >= TAKERS
+            && let Some(k) = state
+                .takers
+                .iter()
+                .min_by_key(|(_, t)| t.used)
+                .map(|(k, _)| *k)
+        {
+            state.takers.remove(&k);
+        }
+        let used = state.used;
+        state.takers.insert(
+            taker,
+            Took {
+                allowance,
+                last,
+                used,
+            },
+        );
+        let after = distinct(state);
+        self.decoded = self.decoded - before + distinct_bytes(&after.iter().collect::<Vec<_>>());
+        for v in old {
+            if !after.iter().any(|a| Rc::ptr_eq(a, &v)) && Rc::strong_count(&v) > 1 {
+                self.earlier.push(Rc::downgrade(&v));
+            }
+        }
     }
 
     /// `canvas:set(buffer)` at `now`: the picture takes `bytes`, if they
     /// are as many as it has and it wasn't changed too recently. `Ok` of
     /// `Err`: refused as too soon, and in how many seconds it would be
-    /// taken. `Err`: the wrong size, with a note for the theme's author.
+    /// taken. `Err`: refused, with a note for the theme's author: the
+    /// wrong size (`false`), or the image total taken up by earlier
+    /// versions draws still hold (`true`: the layer is owed a frame, as
+    /// they go as frames are drawn).
     fn set_canvas(
         &mut self,
         id: ImageId,
         bytes: Vec<u8>,
         now: f64,
-    ) -> Result<Result<(), f64>, String> {
+    ) -> Result<Result<(), f64>, (String, bool)> {
         let Some(state) = self.canvases.get(&id) else {
             return Ok(Err(f64::INFINITY));
         };
         let c = &state.canvas;
         let want = c.width as usize * c.height as usize * 4;
         if bytes.len() != want {
-            return Err(format!(
-                "gmnb.pixels: set was given a buffer of {} bytes; a {}×{} picture takes {want}",
-                bytes.len(),
-                c.width,
-                c.height
+            return Err((
+                format!(
+                    "gmnb.pixels: set was given a buffer of {} bytes; a {}×{} picture takes \
+                     {want}",
+                    bytes.len(),
+                    c.width,
+                    c.height
+                ),
+                false,
             ));
         }
         // The bytes it holds already: nothing changes and nothing is
@@ -826,8 +1119,12 @@ impl Pictures {
             return Ok(Ok(()));
         }
         let (width, height) = (c.width, c.height);
-        self.room_for(id, want as u64)
-            .map_err(|why| format!("gmnb.pixels: {width}×{height}: set was refused: {why}"))?;
+        self.room_for(id, want as u64).map_err(|why| {
+            (
+                format!("gmnb.pixels: {width}×{height}: set was refused: {why}"),
+                true,
+            )
+        })?;
         let state = self.canvases.get_mut(&id).expect("looked up above");
         if !state.allowance.take(now) {
             return Ok(Err(state.allowance.wait(now)));
@@ -940,8 +1237,14 @@ pub(crate) fn register(lua: &Lua, gmnb: &Table, shared: &Rc<Shared>) -> mlua::Re
                 Ok(false)
             }
             // The wrong size: the call does nothing, and says so once.
-            Err(note) => {
+            // Earlier versions still shown taking up the image total: the
+            // same, and the layer is owed a frame (they go as frames are
+            // drawn).
+            Err((note, owed)) => {
                 s.pictures.borrow_mut().note(note);
+                if owed {
+                    s.recorder.borrow_mut().retry(1.0 / 30.0);
+                }
                 Ok(false)
             }
         }
