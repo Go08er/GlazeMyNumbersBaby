@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use gmnb_theme::draw::{Filter, Op};
 use gmnb_theme::layer::{DisplayValue, Drawn, Failure, Frame, GlyphBox, Glyphs, LayerKind, Role};
-use gmnb_theme::picture::{EARLIER_HELD, ImageId};
+use gmnb_theme::picture::{EARLIER_HELD, ImageId, TAKERS};
 use gmnb_theme::theme::{Source, Theme};
 use gmnb_theme::{Budget, Ctx, Limits, ThemeError};
 
@@ -1097,6 +1097,7 @@ fn a_module_picture_is_premultiplied_its_colours_clamped_as_it_is_taken() {
     let clamped = [
         128, 100, 50, 128, 0, 0, 0, 0, 10, 20, 30, 255, 128, 128, 128, 128,
     ];
+    consistent(&theme);
     let canvas = theme.api().canvas(ImageId(0)).unwrap();
     assert!(canvas.premultiplied);
     assert_eq!(&canvas.pixels[..], &clamped);
@@ -1170,6 +1171,13 @@ fn tiles(d: &Dir, side: u32, takes: u32, limits: Limits) -> Theme {
     theme
 }
 
+/// The image total the theme's pictures are counted as is what they hold,
+/// worked out afresh (each module picture's versions, each once).
+fn consistent(theme: &Theme) {
+    let pictures = theme.api().pictures();
+    assert_eq!(pictures.decoded_bytes(), pictures.decoded_from_scratch());
+}
+
 /// The version of a module picture a list's first op drew, and its
 /// first byte.
 fn held(list: &gmnb_theme::draw::DisplayList) -> (u64, u8) {
@@ -1191,6 +1199,7 @@ fn a_draw_shows_a_picture_as_it_was_and_a_tile_has_no_allowance() {
     // taken (a frame of a layer has two in hand), and draws the last.
     let a = theme.preview(&option, "a", &Ctx::default()).unwrap();
     let b = theme.preview(&option, "b", &Ctx::default()).unwrap();
+    consistent(&theme);
     // Each tile holds the picture as it drew it, though the picture has
     // changed since: the tiles in Settings stand as they were drawn.
     assert_eq!(held(&a), (3, 3));
@@ -1206,6 +1215,7 @@ fn a_draw_shows_a_picture_as_it_was_and_a_tile_has_no_allowance() {
     assert_eq!(again, [Some(1.0), Some(1.0), Some(2.0)]);
     // A frame refused shows what stands, which the frame before took.
     assert_eq!(held(&frames[2].list), held(&frames[1].list));
+    consistent(&theme);
     drop(a);
     drop(frames);
     // What the picture holds, each version once, is charged to the image
@@ -1238,6 +1248,7 @@ fn earlier_versions_still_shown_count_against_the_image_total() {
         "picture:take: 256×256: the theme's pictures, with the earlier ones still shown, would \
          be over 1 MiB decoded",
     );
+    consistent(&theme);
     // Let go, they are counted no more.
     kept.clear();
     theme.preview(&option, "a", &Ctx::default()).unwrap();
@@ -1260,6 +1271,7 @@ fn at_most_so_many_earlier_versions_are_held() {
         (4 * EARLIER_HELD as u64, EARLIER_HELD)
     );
     let refused = theme.preview(&option, "a", &Ctx::default()).unwrap();
+    consistent(&theme);
     assert_eq!(held(&refused).0, last);
     told(
         &notes(&theme),
@@ -1382,6 +1394,7 @@ fn layers_taking_one_module_picture_each_have_their_own() {
         assert_eq!(grey(&a.list).0, (2 * i % 256) as u8, "frame {i}");
         assert_eq!(grey(&b.list).0, ((2 * i + 101) % 256) as u8, "frame {i}");
     }
+    consistent(&theme);
     // A layer that has never taken it draws the version taken last.
     let bg = drawn(&theme);
     assert_eq!(grey(&bg.list).0, ((2 * 89 + 101) % 256) as u8);
@@ -1405,6 +1418,7 @@ fn a_layer_refused_draws_its_own_last_version() {
     assert_eq!(grey(&other.list).0, 99);
     assert_eq!(third.again, Some(1.0), "the third is refused");
     assert_eq!(grey(&third.list), grey(&second.list));
+    consistent(&theme);
     // And it is owed a frame for when it can be taken.
     assert!(close(third.retry, 1.0 / 30.0), "{:?}", third.retry);
     // Readout 2 had its own allowance: its two in hand, one spent.
@@ -1434,10 +1448,51 @@ fn a_tile_changes_nothing_a_window_layer_draws_or_spends() {
         "taken, though its allowance is spent"
     );
     assert_eq!(grey(&after.list), grey(&before.list));
+    consistent(&theme);
     // A layer that has never taken it draws the readout's, not a tile's.
     assert_eq!(grey(&drawn(&theme).list).0, 41);
     // The tiles still show theirs.
     assert_eq!((grey(&a).0, grey(&b).0), (77, 88));
+    assert!(notes(&theme).is_empty(), "{:?}", notes(&theme));
+}
+
+#[test]
+fn past_so_many_layers_the_one_used_longest_ago_is_let_go() {
+    let d = dir("evicted");
+    let theme = per_layer(&d, false);
+    let _now = clock(&theme, 10.0);
+    let p = |theme: &Theme| {
+        consistent(theme);
+        let pictures = theme.api().pictures();
+        (pictures.decoded_bytes(), pictures.earlier_bytes())
+    };
+    // Readout 1 takes twice at one moment (its two in hand spent): its
+    // first version, still drawn, is an earlier one.
+    let mut kept = vec![readout(&theme, 1, 1, 0.0), readout(&theme, 1, 2, 0.0)];
+    assert_eq!(p(&theme), (16, (16, 1)));
+    // Readouts 2 to TAKERS take one each, every draw kept: the picture
+    // holds TAKERS versions, its fallback the last.
+    for r in 2..=TAKERS as u64 {
+        kept.push(readout(&theme, r, 100 + r as u32, 0.0));
+    }
+    assert_eq!(p(&theme), (16 * TAKERS as u64, (16, 1)));
+    // One more: readout 1, used longest ago, is let go; its version, still
+    // drawn, is an earlier one now.
+    let more = TAKERS as u64 + 1;
+    let last = readout(&theme, more, 200, 0.0);
+    assert_eq!((last.again, grey(&last.list).0), (Some(0.0), 200));
+    assert_eq!(p(&theme), (16 * TAKERS as u64, (32, 2)));
+    // Readout 1 takes again at the same moment, its allowance whole (it
+    // had spent both), and readout 2 goes in its turn.
+    let back = readout(&theme, 1, 3, 0.0);
+    assert_eq!((back.again, grey(&back.list).0), (Some(0.0), 3));
+    assert_eq!(p(&theme), (16 * TAKERS as u64, (48, 3)));
+    // The draws let go, nothing earlier is counted, and every layer kept
+    // still draws its own.
+    kept.clear();
+    assert_eq!(p(&theme), (16 * TAKERS as u64, (0, 0)));
+    let three = readout(&theme, 3, 103, 0.0);
+    assert_eq!((three.again, grey(&three.list).0), (Some(0.0), 103));
     assert!(notes(&theme).is_empty(), "{:?}", notes(&theme));
 }
 
@@ -1476,6 +1531,7 @@ fn a_pixels_picture_refused_for_earlier_versions_is_a_note_and_a_frame_owed() {
     }
     now.set(20.0);
     let refused = drawn(&theme);
+    consistent(&theme);
     // Not an error, nor a strike: a note, and the layer owed a frame.
     assert_eq!(refused.again, Some(2.0));
     assert!(close(refused.retry, 1.0 / 30.0), "{:?}", refused.retry);

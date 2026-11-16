@@ -346,6 +346,10 @@ pub struct Pictures {
     animations_tried: usize,
     /// Bytes all the theme's pictures are counted as, decoded.
     decoded: u64,
+    /// Of those, what was charged once for good: stills, animations,
+    /// pictures `gmnb.pixels` fills. (The rest is what module pictures
+    /// hold now: [`Pictures::decoded_from_scratch`].)
+    charged: u64,
     noises: usize,
     canvases: HashMap<ImageId, CanvasState>,
     /// Versions of those pictures since changed that draws may still
@@ -378,6 +382,7 @@ impl Pictures {
             tried: 0,
             animations_tried: 0,
             decoded: 0,
+            charged: 0,
             noises: 0,
             canvases: HashMap::new(),
             earlier: Vec::new(),
@@ -405,6 +410,29 @@ impl Pictures {
     /// decoded".
     pub fn decoded_bytes(&self) -> u64 {
         self.decoded
+    }
+
+    /// The same, worked out afresh: what was charged once for good, and
+    /// the versions each module picture holds, each version once. The
+    /// count [`Pictures::decoded_bytes`] keeps as pictures change is
+    /// always this (checked as it changes, in a debug build).
+    pub fn decoded_from_scratch(&self) -> u64 {
+        self.charged
+            + self
+                .canvases
+                .values()
+                .filter(|c| c.module)
+                .map(held)
+                .sum::<u64>()
+    }
+
+    /// The count kept is the count worked out afresh.
+    fn check(&self) {
+        debug_assert_eq!(
+            self.decoded,
+            self.decoded_from_scratch(),
+            "the image total kept is not what the pictures hold"
+        );
     }
 
     /// A still's pixels, decoded now: an image file's (read again, and
@@ -656,6 +684,7 @@ impl Pictures {
             return false;
         }
         self.decoded += bytes;
+        self.charged += bytes;
         true
     }
 
@@ -934,6 +963,7 @@ impl Pictures {
                     self.add_taker(id, taker, last, Bucket::new());
                 }
             }
+            self.check();
             return Ok(());
         }
         let pixels = premultiplied(bytes);
@@ -1044,6 +1074,7 @@ impl Pictures {
             picture.width = fallback_w;
             picture.height = fallback_h;
         }
+        self.check();
         Ok(())
     }
 
@@ -1081,6 +1112,7 @@ impl Pictures {
                 self.earlier.push(Rc::downgrade(&v));
             }
         }
+        self.check();
     }
 
     /// `canvas:set(buffer)` at `now`: the picture takes `bytes`, if they
@@ -1140,6 +1172,7 @@ impl Pictures {
                 premultiplied: false,
             },
         );
+        self.check();
         Ok(Ok(()))
     }
 
