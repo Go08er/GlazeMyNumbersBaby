@@ -14,6 +14,7 @@ struct Paint {
     memory: wasmtime::Memory,
     at: wasmtime::TypedFunc<(u32, u32), u32>,
     ramp: wasmtime::TypedFunc<(u32, u32, f32, f32, u32), u32>,
+    made: wasmtime::TypedFunc<u32, u32>,
     size: wasmtime::TypedFunc<(f32, f32, f32), f64>,
     #[allow(clippy::type_complexity)]
     render: wasmtime::TypedFunc<(u32, u32, u32, u32, u32, f32, f32, f32, u32, u32), u32>,
@@ -39,6 +40,7 @@ impl Paint {
         Paint {
             at: instance.get_typed_func(&mut store, "at").unwrap(),
             ramp: instance.get_typed_func(&mut store, "ramp").unwrap(),
+            made: instance.get_typed_func(&mut store, "made").unwrap(),
             size: instance.get_typed_func(&mut store, "size").unwrap(),
             render: instance.get_typed_func(&mut store, "render").unwrap(),
             memory,
@@ -439,8 +441,13 @@ fn what_the_module_refuses_and_a_fresh_one_has_no_ramp() {
     };
     // Fresh: no slot has a ramp (how a theme finds the module started
     // afresh after a timeout).
+    let made = |paint: &mut Paint, slot: u32| -> u32 {
+        let f = paint.made.clone();
+        f.call(&mut paint.store, slot).unwrap()
+    };
     for slot in 0..8 {
         assert_eq!(paint.render(slot, &case, 4, 4), Err(0));
+        assert_eq!(made(&mut paint, slot), 0);
     }
     let gold = [1.0, 0.8, 0.2, 1.0];
     // A ramp of one colour, of seventeen, edges the wrong way round: none.
@@ -451,6 +458,8 @@ fn what_the_module_refuses_and_a_fresh_one_has_no_ramp() {
     // Colours and edges outside 0 to 1 are held to it, as gmnb.ramp did.
     let wild = [[2.0, -1.0, 0.5, 1.0], [0.0, 0.0, 0.0, 7.0]];
     assert_eq!(paint.set_ramp(1, &wild, [-0.5, 1.5], false), 1);
+    assert_eq!(made(&mut paint, 1), 2);
+    assert_eq!(made(&mut paint, 9), 0);
     let held = Ramp::new(
         &[[1.0, 0.0, 0.5, 1.0], [0.0, 0.0, 0.0, 1.0]],
         [0.0, 1.0],
@@ -517,6 +526,7 @@ fn what_a_pass_costs() {
         memory: instance.get_memory(&mut store, "memory").unwrap(),
         at: instance.get_typed_func(&mut store, "at").unwrap(),
         ramp: instance.get_typed_func(&mut store, "ramp").unwrap(),
+        made: instance.get_typed_func(&mut store, "made").unwrap(),
         size: instance.get_typed_func(&mut store, "size").unwrap(),
         render: instance.get_typed_func(&mut store, "render").unwrap(),
         store,

@@ -1,9 +1,11 @@
 //! Nothing of wasmtime exists until a theme with modules is applied
-//! (docs/theming.md, "Modules"): the base look, the built-in themes (none
-//! of which has a module yet), Settings' listing of a theme with modules,
-//! and a theme that uses a module at the top of its file make no engine,
-//! install no signal handler, make no timer and start no thread. One test
-//! in a process of its own (this file), since the engine is the process's.
+//! (docs/theming.md, "Modules"): the base look, the built-in themes that
+//! have no module (Aurora, Sprinkles), Swirls listed but not applied,
+//! Settings' listing of a theme with modules, and a theme that uses a
+//! module at the top of its file make no engine, install no signal
+//! handler, make no timer and start no thread; Swirls applied makes one
+//! compile of its paint. One test in a process of its own (this file),
+//! since the engine is the process's.
 
 use std::time::Duration;
 
@@ -44,9 +46,14 @@ fn nothing_is_made_until_a_theme_with_modules_is_applied() {
         ..Limits::default()
     };
 
-    // The built-in themes, applied and drawn.
+    // The built-in themes without modules, applied and drawn; and Swirls,
+    // which has one, loaded and let go without being applied.
     for b in &theme::BUILT_IN {
         let mut t = Theme::load(Source::built_in(b.id).unwrap(), limits.clone()).unwrap();
+        if b.id == "swirls" {
+            assert_eq!(t.modules(), ["paint.wasm"]);
+            continue;
+        }
         assert!(t.modules().is_empty());
         assert!(t.prepare_modules().is_none());
         assert!(t.style(&Ctx::default()).is_ok());
@@ -128,10 +135,35 @@ fn nothing_is_made_until_a_theme_with_modules_is_applied() {
     );
     assert_ne!(handler(libc::SIGRTMIN() + 3), libc::SIG_DFL, "the timer's");
     // Applied again (Reload): taken from memory, a fresh instance.
-    let mut again = Theme::load(source, limits).unwrap();
+    let mut again = Theme::load(source, limits.clone()).unwrap();
     assert!(again.prepare_modules().is_none());
     assert_eq!(module::stats().compiles, 1);
     assert_eq!(module::stats().instances, 2);
     assert_eq!(module::stats().engines, 1);
     let _ = std::fs::remove_dir_all(&dir);
+
+    // Swirls applied (`load_ready`, which the tools and tests use): its
+    // paint compiled once, on a thread of its own, and started; drawn, it
+    // calls it. Still the one engine.
+    let swirls = Theme::load_ready(Source::built_in("swirls").unwrap(), limits).unwrap();
+    assert!(swirls.modules_ready());
+    let applied = module::stats();
+    assert_eq!(
+        (
+            applied.engines,
+            applied.compiles,
+            applied.instances,
+            applied.threads
+        ),
+        (1, 2, 3, 2)
+    );
+    swirls
+        .draw(
+            LayerKind::Background,
+            &Ctx::default(),
+            &Frame::sized(760.0, 640.0),
+        )
+        .unwrap();
+    assert!(module::stats().calls > applied.calls);
+    assert_eq!(module::stats().timeouts, 0);
 }

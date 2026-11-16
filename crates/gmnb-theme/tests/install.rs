@@ -459,8 +459,8 @@ fn the_built_in_themes_load_from_their_folders() {
     for source in sources {
         assert_eq!(source.origin, Origin::Folder);
         let id = source.id.clone();
-        let folder = Theme::load(source, limits.clone()).unwrap();
-        let own = Theme::load(theme::Source::built_in(&id).unwrap(), limits.clone()).unwrap();
+        let folder = Theme::load_ready(source, limits.clone()).unwrap();
+        let own = Theme::load_ready(theme::Source::built_in(&id).unwrap(), limits.clone()).unwrap();
         assert_eq!(folder.def.meta, own.def.meta, "{id}");
         assert!(folder.notes.is_empty(), "{id}: {:?}", folder.notes);
         assert_eq!(folder.def.fonts, own.def.fonts, "{id}");
@@ -469,7 +469,22 @@ fn the_built_in_themes_load_from_their_folders() {
         }
         assert_eq!(folder.font_files().len(), own.font_files().len(), "{id}");
         assert_eq!(folder.credits(), own.credits(), "{id}");
+        // Its modules (Swirls' paint) written with it, and found there.
+        assert_eq!(folder.modules(), own.modules(), "{id}");
+        assert!(folder.modules_ready(), "{id}");
+        for file in folder.modules() {
+            let written = fs::read(f.theme(&id).join(&file)).unwrap();
+            let carried = BUILT_IN.iter().find(|b| b.id == id).unwrap().files;
+            assert!(
+                carried
+                    .iter()
+                    .any(|(name, bytes)| *name == file && *bytes == written),
+                "{id}: {file}"
+            );
+        }
     }
+    let swirls = BUILT_IN.iter().find(|b| b.id == "swirls").unwrap();
+    assert!(swirls.files.iter().any(|(name, _)| *name == "paint.wasm"));
 }
 
 /// A hostile themes folder with a great many theme folders (each one a

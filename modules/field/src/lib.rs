@@ -22,12 +22,14 @@
 //! | `at(slot, part)` | Where in memory a slot's `part` is: 0 the snapshot, 1 the snapshot after it (each `cols × rows × channels` 32-bit floats), 2 the ramp's colours (red, green, blue, opacity, 32-bit floats, not premultiplied), 3 its picture. 0 for no such slot or part. |
 //! | `ramp(slot, n, e0, e1, cycle)` | The slot's ramp, from the `n` colours written at part 2: `gmnb.ramp { colors, edge = { e0, e1 }, cycle }`'s table. 1, or 0 if it can't be made. |
 //! | `size(w, h, quality)` | The picture's size for a rectangle of `w × h` at `quality` (0.1 to 1): `width × 2²⁰ + height`. |
+//! | `made(slot)` | How many colours the slot's ramp has: 0 for none, as in a fresh module. |
 //! | `render(slot, cols, rows, channels, glide, mix, scale, offset, width, height)` | The slot's picture, `width × height`, premultiplied RGBA at part 3: the snapshot, or with `glide` 1 the snapshot `mix` of the way to the one after it, coloured through the slot's ramp at `value × scale + offset`. 1; 0 if the slot has no ramp (the module is fresh: see below); 2 if the field or the size isn't one the pass takes. |
 //!
 //! **A fresh module has no ramp.** A module stopped at its deadline starts
 //! afresh, its memory as on load, and the theme isn't told: `render`
-//! answering 0 is how it finds out. It then writes everything again (every
-//! slot's ramp and snapshots) and asks once more.
+//! answering 0, or `made` (before a picture the theme believes made is
+//! taken again), is how it finds out. It then writes everything again
+//! (every slot's ramp and snapshots) and asks once more.
 
 #![no_std]
 
@@ -261,6 +263,13 @@ pub extern "C" fn ramp(n: u32, colors: u32, e0: f32, e1: f32, cycle: u32) -> u32
     s.colors_made = colors;
     s.cycle = cycle;
     1
+}
+
+/// How many colours slot `n`'s ramp was made of: 0 if none was (a fresh
+/// module, or no such slot).
+#[unsafe(no_mangle)]
+pub extern "C" fn made(n: u32) -> u32 {
+    slot(n).map_or(0, |s| s.colors_made)
 }
 
 /// Step 1: how many pixels are computed for a rectangle of `w × h` at

@@ -90,10 +90,17 @@ pub static BUILT_IN: [BuiltIn; 3] = [
     BuiltIn {
         id: "swirls",
         source: include_str!("../../../apps/gmnb/themes/swirls/theme.luau"),
-        files: &[(
-            "credits/ColorMix.txt",
-            include_bytes!("../../../apps/gmnb/themes/swirls/credits/ColorMix.txt"),
-        )],
+        files: &[
+            (
+                "credits/ColorMix.txt",
+                include_bytes!("../../../apps/gmnb/themes/swirls/credits/ColorMix.txt"),
+            ),
+            // Its paint: built from modules/field (modules/build.sh).
+            (
+                "paint.wasm",
+                include_bytes!("../../../apps/gmnb/themes/swirls/paint.wasm"),
+            ),
+        ],
     },
 ];
 

@@ -34,7 +34,7 @@ const FLAVOURS: [&str; 7] = [
 ];
 
 fn built_in(id: &str) -> Theme {
-    Theme::load(Source::built_in(id).unwrap(), common::limits()).unwrap()
+    Theme::load_ready(Source::built_in(id).unwrap(), common::limits()).unwrap()
 }
 
 fn with(theme: &Theme, dark: bool, opacity: f32, options: &[(&str, OptionValue)]) -> Ctx {
@@ -1701,11 +1701,14 @@ fn entries(ramp: &gmnb_media::Ramp) -> Vec<Rgba> {
         .collect()
 }
 
-/// The ramp Swirls' background is drawn through for `ctx`, drawn on a
-/// clock of its own (the fields' allowance runs on it); the field in no
-/// opacity group, as the paint's own opacity is all its thinning.
+/// The ramp Swirls' background is drawn through for `ctx`: drawn on a
+/// clock of its own (the pictures' allowance runs on it), the paint in no
+/// opacity group, as the paint's own opacity is all its thinning, one
+/// picture of it; and its ramp, its bands' as the theme thins them
+/// (`common::swirls_ramp`: its paint's picture doesn't carry its ramp, as
+/// a field's did; `tests/swirls.rs` holds every pixel drawn to it).
 fn paint_ramp(
-    theme: &Theme,
+    theme: &mut Theme,
     ctx: &Ctx,
     clock: &std::rc::Rc<std::cell::Cell<f64>>,
 ) -> std::rc::Rc<gmnb_media::Ramp> {
@@ -1719,16 +1722,30 @@ fn paint_ramp(
     let drawn = theme
         .draw(LayerKind::Background, ctx, &Frame::sized(360.0, 600.0))
         .unwrap_or_else(|_| panic!("the background didn't draw"));
-    let mut ramps = Vec::new();
+    let mut paints = 0;
     for op in &drawn.list.ops {
         match op {
             Op::PushOpacity(_) => panic!("the paint is thinned in a group"),
-            Op::Field { picture, .. } => ramps.push(picture.ramp.clone()),
+            Op::Image {
+                canvas: Some(_), ..
+            } => paints += 1,
             _ => {}
         }
     }
-    assert_eq!(ramps.len(), 1);
-    ramps.remove(0)
+    assert_eq!(paints, 1);
+    // The bands, as an opaque window's style names them.
+    let whole = Ctx {
+        opacity: 1.0,
+        ..ctx.clone()
+    };
+    let style = theme.style(&whole).unwrap().style.clone();
+    let Some(Paint::Gradient(g)) = style.fill("window.background").0.first().cloned() else {
+        panic!("Swirls' window.background is a gradient of its three bands");
+    };
+    let [a, ground, b] = g.colors[..] else {
+        panic!("three bands, not {}", g.colors.len());
+    };
+    std::rc::Rc::new(common::swirls_ramp([a, b, ground], ctx.opacity))
 }
 
 /// Swirl for `ctx`: its style, its paint and its figures.

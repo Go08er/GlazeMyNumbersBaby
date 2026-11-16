@@ -6,8 +6,9 @@
 -- src/animations/ColorMix.zig): a coordinate bent three times and pushed
 -- through three bands of colour, gold, cyan and near-black. Here the theme
 -- works out the bent coordinate on a coarse grid five times a second, and
--- the app colours every pixel of it thirty times a second (draw:field,
--- docs/theming-media.md). Everything else is built on that one picture:
+-- its paint (paint.wasm, a WebAssembly module built from modules/field)
+-- colours every pixel of it thirty times a second (docs/theming.md,
+-- "Modules"). Everything else is built on that one picture:
 --
 --   the keys      panes of dark glass with the design's cyan hairline, its
 --                 hover and its gold focus ring; a pressed key clears, and
@@ -76,14 +77,23 @@ local DEFAULT_FIRST, DEFAULT_SECOND, DEFAULT_DARK = "#ffb86b", "#b18cff", "#160a
 -- The design's text colour.
 local FG = hex("#f5faff")
 
--- The ramp of a set: its three colours in the design's order, each
--- blending into the next between 8% and 92% of its band, and after the
--- last the first again. The six are made once; one's own, whenever its
--- colours change (the same colours again are the same ramp).
-local function ramp_of(set: Bands): Ramp
-	return gmnb.ramp({ colors = { set.a, set.b, set.ground }, edge = { 0.08, 0.92 }, cycle = true })
+-- The ramp a set is painted through: its three colours in the design's
+-- order, each blending into the next between 8% and 92% of its band, and
+-- after the last the first again (the paint makes its table: section 4).
+-- Known by its colours: the same colours again are the same ramp.
+type PaintRamp = { colors: { Rgba }, key: string }
+local function paint_ramp(colors: { Rgba }): PaintRamp
+	local key = ""
+	for _, c in colors do
+		key ..= string.format("%.17g,%.17g,%.17g,%.17g;", c.r, c.g, c.b, c.a or 1)
+	end
+	return { colors = colors, key = key }
 end
-local RAMPS: { [string]: Ramp } = {}
+-- The six are made once; one's own, whenever its colours change.
+local function ramp_of(set: Bands): PaintRamp
+	return paint_ramp({ set.a, set.b, set.ground })
+end
+local RAMPS: { [string]: PaintRamp } = {}
 for id, set in BANDS do
 	RAMPS[id] = ramp_of(set)
 end
@@ -312,8 +322,8 @@ type Scheme = {
 	-- The ramp its paint is coloured through (on a see-through window, the
 	-- paint thinned), and the one its figures and tiles are: the bands
 	-- themselves.
-	ramp: Ramp,
-	figure_ramp: Ramp,
+	ramp: PaintRamp,
+	figure_ramp: PaintRamp,
 	-- How far the dark band has cleared: 0 on an opaque window.
 	cleared: number,
 	-- How much of the dark band lies under the paint (see `thinned`).
@@ -461,11 +471,7 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 	local whole = RAMPS[id] or ramp_of(set)
 	local paint = whole
 	if opacity < 1 then
-		paint = gmnb.ramp({
-			colors = { alpha(a, bright), alpha(b, bright), alpha(ground, dark) },
-			edge = { 0.08, 0.92 },
-			cycle = true,
-		})
+		paint = paint_ramp({ alpha(a, bright), alpha(b, bright), alpha(ground, dark) })
 	end
 
 	return {
@@ -1129,6 +1135,199 @@ end
 -- 4. The field
 ---------------------------------------------------------------------------
 
+-- The paint: paint.wasm in this folder, built from modules/field. It makes
+-- each picture of a field as GMNB's own field pass made it, pixel for
+-- pixel: the field interpolated for every pixel and only then coloured
+-- through a ramp, so the bands' edges stay sharp. It holds eight fields at
+-- once, a slot each: the background's, six for the figures' slices (a
+-- slot for each size of slice), and the tiles'. Its picture is one, kept
+-- per layer: the background, each readout and each tile its own version.
+local paint = gmnb.module("paint.wasm")
+local picture = paint:picture()
+local LINEAR: ImageOptions = { filter = "linear" }
+local BACK, TILES, SLICE_SLOTS = 0, 7, 6
+
+-- What each slot holds, as far as the theme knows: the snapshots written
+-- to it (and their stamps), its ramp, and what its picture was made of.
+type Held = {
+	data: buffer?,
+	data_stamp: number,
+	next: buffer?,
+	next_stamp: number,
+	ramp: string?,
+	made: string?,
+}
+local in_slot: { [number]: Held } = {}
+-- Where each slot's parts are in the paint's memory, asked once.
+local where: { [number]: number } = {}
+-- Nothing written: as at the start, and when the paint has started afresh
+-- (a call of it stopped at its deadline does that, and the theme isn't
+-- told: the paint says so itself, `render` answering 0 and `made` 0).
+local function forget()
+	for slot = 0, 7 do
+		in_slot[slot] = { data = nil, data_stamp = -1, next = nil, next_stamp = -1, ramp = nil, made = nil }
+	end
+	where = {}
+end
+forget()
+
+-- A number for each version of a buffer the paint is given: the same
+-- buffer and stamp are the same numbers.
+local stamps = 0
+local function stamp(): number
+	stamps += 1
+	return stamps
+end
+
+local function at(slot: number, part: number): number?
+	local key = slot * 4 + part
+	local found = where[key]
+	if found == nil then
+		local a = paint:call("at", slot, part)
+		if a == nil or a == 0 then
+			return nil
+		end
+		where[key] = a
+		found = a
+	end
+	return found
+end
+
+local ramp_bytes = buffer.create(3 * 16)
+local function set_ramp(slot: number, ramp: PaintRamp): boolean
+	local h = in_slot[slot]
+	if h.ramp == ramp.key then
+		return true
+	end
+	local into = at(slot, 2)
+	if not into then
+		return false
+	end
+	local n = #ramp.colors
+	local bytes = if n == 3 then ramp_bytes else buffer.create(n * 16)
+	for i, c in ramp.colors do
+		local o = (i - 1) * 16
+		writef32(bytes, o, c.r)
+		writef32(bytes, o + 4, c.g)
+		writef32(bytes, o + 8, c.b)
+		writef32(bytes, o + 12, c.a or 1)
+	end
+	paint:write(into, bytes)
+	if paint:call("ramp", slot, n, 0.08, 0.92, 1) ~= 1 then
+		return false
+	end
+	h.ramp = ramp.key
+	h.made = nil
+	return true
+end
+
+-- A field to paint, as draw:field was given one: its snapshot (and the one
+-- after it, and how far the glide between them has gone), its points, its
+-- ramp, how a value is a position in it, and how many pixels a side.
+type Field = {
+	slot: number,
+	data: buffer,
+	stamp: number,
+	next: buffer?,
+	next_stamp: number,
+	mix: number,
+	cols: number,
+	rows: number,
+	channels: number,
+	ramp: PaintRamp,
+	scale: number,
+	quality: number,
+}
+
+local function set_data(f: Field): boolean
+	local h = in_slot[f.slot]
+	if h.data ~= f.data or h.data_stamp ~= f.stamp then
+		local into = at(f.slot, 0)
+		if not into then
+			return false
+		end
+		paint:write(into, f.data)
+		h.data, h.data_stamp, h.made = f.data, f.stamp, nil
+	end
+	local next = f.next
+	if next and (h.next ~= next or h.next_stamp ~= f.next_stamp) then
+		local into = at(f.slot, 1)
+		if not into then
+			return false
+		end
+		paint:write(into, next)
+		h.next, h.next_stamp, h.made = next, f.next_stamp, nil
+	end
+	return true
+end
+
+-- The slot's picture of `f` made, as `key` says it is, unless the slot
+-- holds it already. False: the paint can't make it.
+local function paint_field(f: Field, key: string, width: number, height: number): boolean
+	for _ = 1, 2 do
+		if in_slot[f.slot].made == key then
+			if paint:call("made", f.slot) ~= 0 then
+				return true
+			end
+			forget()
+		else
+			if not (set_ramp(f.slot, f.ramp) and set_data(f)) then
+				return false
+			end
+			local glide = if f.next then 1 else 0
+			local done = paint:call("render", f.slot, f.cols, f.rows, f.channels, glide, f.mix, f.scale, 0, width, height)
+			if done == 1 then
+				in_slot[f.slot].made = key
+				return true
+			elseif done ~= 0 then
+				return false
+			end
+			-- Started afresh: everything is written again.
+			forget()
+		end
+	end
+	return false
+end
+
+-- Draws field `f` over x, y, w × h as draw:field drew one: made by the
+-- paint (unless it holds that picture already), taken into this layer's
+-- own version of the picture, and scaled up smoothly. `last`: what this
+-- layer took last, where the theme knows it (the background is one layer;
+-- readouts and tiles are not told apart): nothing is made or taken then,
+-- while it still is. When this layer's picture can't change now
+-- (`ready`), nothing is made: it draws its own last version, and the app
+-- draws the layer once more when it can. Returns what the layer took last.
+-- (A paint left out, missing or broken: nothing is drawn.)
+local function show(draw: Draw, f: Field, x: number, y: number, w: number, h: number, last: string?): string?
+	local size = paint:call("size", w, h, f.quality)
+	if size == nil then
+		return last
+	end
+	local width = size // 1048576
+	local height = size - width * 1048576
+	local key = string.format(
+		"%d|%d|%.17g|%d|%d|%d|%d|%d|%.17g|%s",
+		f.stamp,
+		if f.next then f.next_stamp else -1,
+		f.mix,
+		f.cols,
+		f.rows,
+		f.channels,
+		width,
+		height,
+		f.scale,
+		f.ramp.key
+	)
+	if key ~= last and (in_slot[f.slot].made == key or picture:ready()) and paint_field(f, key, width, height) then
+		local from = at(f.slot, 3)
+		if from and picture:take(paint, from, width, height) then
+			last = key
+		end
+	end
+	draw:image(picture, x, y, w, h, LINEAR)
+	return last
+end
+
 -- The picture thirty times a second, as on the page. The field five times
 -- (the design's ten are for a browser's shader; at the design's pace the swirl
 -- turns a hundredth of a radian between two of these, and gliding over
@@ -1160,7 +1359,7 @@ end
 -- grow with the window, so they are as smooth in it.)
 local POINTS = 3600
 local FINEST = 12
--- And about as many pixels for the app to colour as that window has at
+-- And about as many pixels for the paint to colour as that window has at
 -- half size (`quality` 0.5, the design's own sharpness there): a bigger
 -- window's picture is scaled up further, not coloured for longer. The
 -- bands are soft-edged and grow with the window; it doesn't show.
@@ -1211,7 +1410,7 @@ local function grid(width: number, height: number): (number, number)
 	return clamp(ceil(width / step) + 1, 2, 256), clamp(ceil(height / step) + 1, 2, 256)
 end
 
--- How many pixels the app colours per pixel of the window, along a side.
+-- How many pixels the paint colours per pixel of the window, along a side.
 local function sharpness(width: number, height: number): number
 	return clamp(sqrt(PIXELS / thin / (width * height)), 0.1, 0.5)
 end
@@ -1264,6 +1463,10 @@ type Kept = {
 	-- anything is still disturbing the paint.
 	bent: boolean,
 	stirred: boolean,
+	-- The stamps of the two snapshots handed over (a and b), and of the
+	-- bent ones: new whenever what they hold is.
+	ab: number,
+	bent_stamp: number,
 }
 local kept: Kept? = nil
 
@@ -1296,6 +1499,8 @@ local function make(width: number, height: number): Kept
 		bottom = -1,
 		bent = false,
 		stirred = false,
+		ab = stamp(),
+		bent_stamp = stamp(),
 	}
 end
 
@@ -1362,6 +1567,7 @@ local function keep(width: number, height: number): (Kept, boolean)
 	end
 	swirl(made.a, made.cols, made.rows, width, height, STILL + turned, row, made.rows)
 	buffer.copy(made.b, 0, made.a)
+	made.ab = stamp()
 	kept = made
 	return made, true
 end
@@ -1578,6 +1784,7 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 	k.bent = k.right >= k.left
 	if k.bent then
 		bend(k)
+		k.bent_stamp = stamp()
 	end
 	return alive
 end
@@ -1586,6 +1793,9 @@ local function number_option(ctx: Ctx, id: string, fallback: number): number
 	local value = ctx.options[id]
 	return if type(value) == "number" then value else fallback
 end
+
+-- What the background took last (it is one layer).
+local back_last: string? = nil
 
 local function background_frame(draw: Draw, frame: Frame): Again
 	local started = os.clock()
@@ -1600,21 +1810,26 @@ local function background_frame(draw: Draw, frame: Frame): Again
 
 	if not frame.motion then
 		-- A still picture: the paint as it stands.
-		draw:field(0, 0, width, height, {
+		back_last = show(draw, {
+			slot = BACK,
 			data = k.a,
+			stamp = k.ab,
+			next = nil,
+			next_stamp = -1,
+			mix = 0,
 			cols = cols,
 			rows = rows,
 			channels = 2,
 			ramp = ramp,
 			scale = 1.25,
 			quality = sharpness(width, height),
-		})
+		}, 0, 0, width, height, back_last)
 		return nil
 	end
 
 	-- Which thirtieth of a second this is. Drawn again within the same one
 	-- (an event came, the window's colours changed), the numbers are the
-	-- same and the app has the picture already.
+	-- same and the background has its picture already.
 	local speed = number_option(ctx, "speed", 1)
 	local stirring = ctx.options.stir ~= false
 	local shown = thirtieth(frame.time)
@@ -1653,6 +1868,7 @@ local function background_frame(draw: Draw, frame: Frame): Again
 				swirl(k.c, cols, rows, width, height, STILL + k.turn_c, k.done, rows)
 			end
 			k.a, k.b, k.c = k.b, k.c, k.a
+			k.ab = stamp()
 			k.turn_a, k.turn_b = k.turn_b, k.turn_c
 			turned = k.turn_b
 			k.tick = tick
@@ -1673,9 +1889,13 @@ local function background_frame(draw: Draw, frame: Frame): Again
 		k.stirred = stirring and #frame.events > 0 and disturb(k, frame.events, width, height, started)
 	end
 
-	draw:field(0, 0, width, height, {
+	local stamped = if k.bent then k.bent_stamp else k.ab
+	back_last = show(draw, {
+		slot = BACK,
 		data = if k.bent then k.bent_a else k.a,
+		stamp = stamped,
 		next = if k.bent then k.bent_b else k.b,
+		next_stamp = stamped,
 		mix = k.mix,
 		cols = cols,
 		rows = rows,
@@ -1683,7 +1903,7 @@ local function background_frame(draw: Draw, frame: Frame): Again
 		ramp = ramp,
 		scale = 1.25,
 		quality = sharpness(width, height),
-	})
+	}, 0, 0, width, height, back_last)
 
 	-- Again when the next thirtieth begins, for as long as anything moves:
 	-- the paint is meant to flow, a glide is under way or to come, or
@@ -1855,10 +2075,50 @@ local function slice(buf: buffer, cols: number, rows: number, width: number, hei
 	end
 end
 
-type Slice = { cols: number, rows: number, a: buffer, b: buffer, tick: number, shown: number, mix: number, turn: number }
+type Slice = {
+	cols: number,
+	rows: number,
+	a: buffer,
+	b: buffer,
+	tick: number,
+	shown: number,
+	mix: number,
+	turn: number,
+	-- What a and b hold: new whenever either is worked out again.
+	stamp: number,
+}
 -- By size: two readouts of one size (the converter's) show one slice.
 local slices: { [number]: Slice } = {}
 local slices_count = 0
+
+-- The paint's slot for the slice of a size: one of six, the one used
+-- longest ago given to a new size.
+local slice_slots: { [number]: number } = {}
+local slot_slice: { [number]: number } = {}
+local slot_used: { [number]: number } = {}
+local slot_uses = 0
+local function slot_for(key: number): number
+	slot_uses += 1
+	local slot = slice_slots[key]
+	if slot == nil then
+		local oldest = math.huge
+		local chosen = 1
+		for i = 1, SLICE_SLOTS do
+			local used = slot_used[i] or 0
+			if used < oldest then
+				chosen, oldest = i, used
+			end
+		end
+		local was = slot_slice[chosen]
+		if was then
+			slice_slots[was] = nil
+		end
+		slice_slots[key], slot_slice[chosen] = chosen, key
+		slot = chosen
+	end
+	slot_used[slot] = slot_uses
+	return slot
+end
 
 -- How long each kind of change plays for, in seconds.
 local function change_time(kind: string, digits: number): number
@@ -1979,7 +2239,17 @@ local function display(draw: Draw, frame: Frame): Again
 		if slices_count >= 24 then
 			slices, slices_count = {}, 0
 		end
-		k = { cols = cols, rows = rows, a = buffer.create(cols * rows * 4), b = buffer.create(cols * rows * 4), tick = -1, shown = -1, mix = 0, turn = 0 }
+		k = {
+			cols = cols,
+			rows = rows,
+			a = buffer.create(cols * rows * 4),
+			b = buffer.create(cols * rows * 4),
+			tick = -1,
+			shown = -1,
+			mix = 0,
+			turn = 0,
+			stamp = stamp(),
+		}
 		slices[key] = k
 		slices_count += 1
 	end
@@ -1987,6 +2257,7 @@ local function display(draw: Draw, frame: Frame): Again
 		if k.tick ~= -2 then
 			slice(k.a, cols, rows, band.w, band.h, STILL + turned * DIGIT_FLOW)
 			k.tick = -2
+			k.stamp = stamp()
 		end
 		k.mix = 0
 	else
@@ -1999,11 +2270,13 @@ local function display(draw: Draw, frame: Frame): Again
 				buffer.copy(k.b, 0, k.a)
 				k.turn = turn
 				k.tick = tick
+				k.stamp = stamp()
 			elseif tick ~= k.tick then
 				if turn ~= k.turn then
 					k.a, k.b = k.b, k.a
 					slice(k.b, cols, rows, band.w, band.h, turn)
 					k.turn = turn
+					k.stamp = stamp()
 				end
 				k.tick = tick
 			end
@@ -2015,15 +2288,20 @@ local function display(draw: Draw, frame: Frame): Again
 	draw:push_mask("alpha")
 	glyphs(white)
 	draw:pop()
-	draw:field(band.x, band.y, band.w, band.h, {
+	show(draw, {
+		slot = slot_for(key),
 		data = k.a,
+		stamp = k.stamp,
 		next = k.b,
+		next_stamp = k.stamp,
 		mix = k.mix,
 		cols = cols,
 		rows = rows,
 		channels = 1,
 		ramp = s.figure_ramp,
-	})
+		scale = 1,
+		quality = 0.5,
+	}, band.x, band.y, band.w, band.h, nil)
 	if kind == "result" then
 		-- The figures land white-hot, and cool into their paint.
 		local p = clamp(t / change_time("result", digits), 0, 1)
@@ -2049,13 +2327,28 @@ end
 local TILE_COLS, TILE_ROWS = 17, 11
 local tile_field = buffer.create(TILE_COLS * TILE_ROWS * 8)
 local tile_made = false
+local tile_stamp = 0
 
-local function tile_swirl(draw: Draw, w: number, h: number, ramp: Ramp)
+local function tile_swirl(draw: Draw, w: number, h: number, ramp: PaintRamp)
 	if not tile_made then
 		swirl(tile_field, TILE_COLS, TILE_ROWS, 96, 56, STILL, 0, TILE_ROWS)
 		tile_made = true
+		tile_stamp = stamp()
 	end
-	draw:field(0, 0, w, h, { data = tile_field, cols = TILE_COLS, rows = TILE_ROWS, channels = 2, ramp = ramp, scale = 1.25, quality = 1 })
+	show(draw, {
+		slot = TILES,
+		data = tile_field,
+		stamp = tile_stamp,
+		next = nil,
+		next_stamp = -1,
+		mix = 0,
+		cols = TILE_COLS,
+		rows = TILE_ROWS,
+		channels = 2,
+		ramp = ramp,
+		scale = 1.25,
+		quality = 1,
+	}, 0, 0, w, h, nil)
 end
 
 -- A set of bands: its swirl, and a key of its glass with its equals sign.
