@@ -33,12 +33,19 @@
 
 #![no_std]
 
-// (Square roots are SIMD's: the scalar ones aren't in `core` on stable
-// Rust. Each lane is the IEEE square root, as the scalar is.)
+// The pass is written four pixels at a time in simd128, each lane the
+// same arithmetic as one pixel's (the IEEE operations, the exact floor),
+// so that its bytes are the native pass's: a third quicker than leaving it
+// to the compiler. (Square roots are SIMD's even where one is needed: the
+// scalar ones aren't in `core` on stable Rust.)
 #[cfg(not(target_feature = "simd128"))]
 compile_error!("the module is built with simd128: modules/build.sh");
 
-use core::arch::wasm32::{f32x4_extract_lane, f32x4_splat, f32x4_sqrt};
+use core::arch::wasm32::{
+    f32x4_abs, f32x4_add, f32x4_div, f32x4_extract_lane, f32x4_floor, f32x4_lt, f32x4_max,
+    f32x4_min, f32x4_mul, f32x4_splat, f32x4_sqrt, f32x4_sub, v128, v128_bitselect, v128_load,
+    v128_store,
+};
 use core::arch::wasm32::{f64x2_extract_lane, f64x2_splat, f64x2_sqrt};
 use core::cell::UnsafeCell;
 
@@ -80,6 +87,9 @@ struct Scratch {
     across: [f32; MAX_WIDTH],
     row: [f32; MAX_SIDE * 2],
     value: [f32; MAX_WIDTH],
+    /// The runs of pixels along a row between the same two points: where
+    /// each starts, and the point.
+    runs: [(u32, u32); MAX_SIDE],
 }
 
 // (Only ever the statics' first value: no copy of it is made at run time.)
@@ -108,6 +118,7 @@ static SCRATCH: Memory<Scratch> = Memory(UnsafeCell::new(Scratch {
     across: [0.0; MAX_WIDTH],
     row: [0.0; MAX_SIDE * 2],
     value: [0.0; MAX_WIDTH],
+    runs: [(0, 0); MAX_SIDE],
 }));
 
 fn slot(n: u32) -> Option<&'static mut Slot> {
@@ -384,6 +395,16 @@ pub extern "C" fn render(
         *l = (i * channels) as u32;
         *t = fx - i as f32;
     }
+    // The runs of pixels between the same two points along a row (`left`
+    // only grows along it).
+    let mut runs = 0;
+    for (x, l) in left.iter().enumerate() {
+        if runs == 0 || scratch.runs[runs - 1].1 != *l {
+            scratch.runs[runs] = (x as u32, *l);
+            runs += 1;
+        }
+    }
+    let runs = &scratch.runs[..runs];
     let per_row = cols * channels;
     let row = &mut scratch.row[..per_row];
     let value = &mut scratch.value[..width];
@@ -402,37 +423,133 @@ pub extern "C" fn render(
         for ((r, a), b) in row.iter_mut().zip(top).zip(bottom) {
             *r = a + (b - a) * down;
         }
-        // Then along the row, and step 4: the value.
-        if channels == 2 {
-            for ((v, i), t) in value.iter_mut().zip(left.iter()).zip(across.iter()) {
-                let i = *i as usize;
-                let p = &row[i..i + 4];
-                let u = p[0] + (p[2] - p[0]) * t;
-                let w = p[1] + (p[3] - p[1]) * t;
-                *v = sqrt(u * u + w * w);
-            }
-        } else {
-            for ((v, i), t) in value.iter_mut().zip(left.iter()).zip(across.iter()) {
-                let i = *i as usize;
-                let p = &row[i..i + 2];
-                *v = p[0] + (p[1] - p[0]) * t;
+        // Then along the row, and step 4: the value, a run of pixels
+        // between the same two points at a time, four pixels at a time
+        // (each lane the same arithmetic as one pixel's).
+        for (n, &(start, i)) in runs.iter().enumerate() {
+            let start = start as usize;
+            let end = runs.get(n + 1).map_or(width, |r| r.0 as usize);
+            let i = i as usize;
+            if channels == 2 {
+                let (p0, p1, p2, p3) = (row[i], row[i + 1], row[i + 2], row[i + 3]);
+                along2(&mut value[start..end], &across[start..end], p0, p1, p2, p3);
+            } else {
+                let (p0, p1) = (row[i], row[i + 1]);
+                along1(&mut value[start..end], &across[start..end], p0, p1);
             }
         }
         // Steps 5 to 7: the position, its entry of the table, and the
-        // colour there. (Two loops for the two kinds of ramp, so that
-        // neither carries the other's choice through every pixel.)
-        if cycle {
-            for v in value.iter_mut() {
-                *v = entry(*v * scale + offset, colors, true);
-            }
-        } else {
-            for v in value.iter_mut() {
-                *v = entry(*v * scale + offset, colors, false);
-            }
-        }
+        // colour there, four pixels at a time.
+        positions(value, scale, offset, colors, cycle);
         for (pixel, e) in line.iter_mut().zip(value.iter()) {
-            *pixel = table[*e as i32 as usize];
+            // An entry is at most the ramp's last (`entry` holds it to the
+            // bands and to 255 in one): unchecked.
+            let at = *e as i32 as usize;
+            debug_assert!(at < table.len());
+            // SAFETY: as above.
+            *pixel = unsafe { *table.get_unchecked(at) };
         }
     }
     1
+}
+
+/// Four floats of `s` from `at` (the slice is at least that long).
+#[inline(always)]
+fn load4(s: &[f32], at: usize) -> v128 {
+    debug_assert!(at + 4 <= s.len());
+    // SAFETY: four floats in the slice; an unaligned load.
+    unsafe { v128_load(s.as_ptr().add(at) as *const v128) }
+}
+
+#[inline(always)]
+fn store4(s: &mut [f32], at: usize, v: v128) {
+    debug_assert!(at + 4 <= s.len());
+    // SAFETY: as `load4`.
+    unsafe { v128_store(s.as_mut_ptr().add(at) as *mut v128, v) }
+}
+
+/// Step 4 for two channels along a run: `u = p0 + (p2 − p0) × t`,
+/// `w = p1 + (p3 − p1) × t`, the value `√(u² + w²)`.
+#[inline(always)]
+fn along2(value: &mut [f32], across: &[f32], p0: f32, p1: f32, p2: f32, p3: f32) {
+    let (d0, d1) = (p2 - p0, p3 - p1);
+    let (v0, vd0, v1, vd1) = (
+        f32x4_splat(p0),
+        f32x4_splat(d0),
+        f32x4_splat(p1),
+        f32x4_splat(d1),
+    );
+    let n = value.len();
+    let mut x = 0;
+    while x + 4 <= n {
+        let t = load4(across, x);
+        let u = f32x4_add(v0, f32x4_mul(vd0, t));
+        let w = f32x4_add(v1, f32x4_mul(vd1, t));
+        store4(
+            value,
+            x,
+            f32x4_sqrt(f32x4_add(f32x4_mul(u, u), f32x4_mul(w, w))),
+        );
+        x += 4;
+    }
+    while x < n {
+        let t = across[x];
+        let u = p0 + d0 * t;
+        let w = p1 + d1 * t;
+        value[x] = sqrt(u * u + w * w);
+        x += 1;
+    }
+}
+
+/// Step 4 for one channel along a run: `p0 + (p1 − p0) × t`.
+#[inline(always)]
+fn along1(value: &mut [f32], across: &[f32], p0: f32, p1: f32) {
+    let d = p1 - p0;
+    let (v0, vd) = (f32x4_splat(p0), f32x4_splat(d));
+    let n = value.len();
+    let mut x = 0;
+    while x + 4 <= n {
+        store4(value, x, f32x4_add(v0, f32x4_mul(vd, load4(across, x))));
+        x += 4;
+    }
+    while x < n {
+        value[x] = p0 + d * across[x];
+        x += 1;
+    }
+}
+
+/// Steps 5 to 7 for a row of values, into their entries of the table
+/// (whole numbers, still floats): [`entry`], four at a time. (Lane for
+/// lane the same: the floor is the exact one, as `floor` is; the bounds
+/// are applied to numbers that are never NaN.)
+#[inline(always)]
+fn positions(value: &mut [f32], scale: f32, offset: f32, n: f32, cycle: bool) {
+    let (vs, vo) = (f32x4_splat(scale), f32x4_splat(offset));
+    let (zero, inf) = (f32x4_splat(0.0), f32x4_splat(f32::INFINITY));
+    let entries = f32x4_splat(ENTRIES as f32);
+    let last = f32x4_splat(ENTRIES as f32 - 1.0);
+    let vn = f32x4_splat(n);
+    let bands = if cycle { n } else { n - 1.0 };
+    let (vbands_last, vn_last) = (f32x4_splat(bands - 1.0), f32x4_splat(n - 1.0));
+    let len = value.len();
+    let mut x = 0;
+    while x + 4 <= len {
+        let p = f32x4_add(f32x4_mul(load4(value, x), vs), vo);
+        // A position that is not finite counts as 0.
+        let p = v128_bitselect(p, zero, f32x4_lt(f32x4_abs(p), inf));
+        let p = if cycle {
+            f32x4_sub(p, f32x4_mul(vn, f32x4_floor(f32x4_div(p, vn))))
+        } else {
+            f32x4_min(f32x4_max(p, zero), vn_last)
+        };
+        let band = f32x4_min(f32x4_max(f32x4_floor(p), zero), vbands_last);
+        let e = f32x4_floor(f32x4_mul(f32x4_sub(p, band), entries));
+        let e = f32x4_min(f32x4_max(e, zero), last);
+        store4(value, x, f32x4_add(f32x4_mul(band, entries), e));
+        x += 4;
+    }
+    while x < len {
+        value[x] = entry(value[x] * scale + offset, n, cycle);
+        x += 1;
+    }
 }

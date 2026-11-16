@@ -21,14 +21,14 @@ fn limits(frame: u64) -> Limits {
     }
 }
 
-/// A small window: Swirls' frames there take a small part of 2 ms.
+/// A small window: Swirls' frames there take a small part of 1 ms.
 const W: f32 = 120.0;
 const H: f32 = 90.0;
 
 /// Swirls, with its paint wrapped (the theme's own `gmnb` shadowed), and a
-/// frame's deadline of 2 ms: its `stop_at`-th call of `render` first has
+/// frame's deadline of 1 ms: its `stop_at`-th call of `render` first has
 /// the paint colour the most pixels a picture may have, 512 × 512 from two
-/// channels (some 3.5 ms a time), so that the deadline stops that call
+/// channels (some 2.3 ms a time), so that the deadline stops that call
 /// (its timer may be a tick, 1 ms, late), not the theme's own code.
 fn stopped_once(stop_at: u32) -> Theme {
     let from =
@@ -70,7 +70,7 @@ local gmnb = setmetatable({{
 "#
     );
     std::fs::write(dir.join("theme.luau"), format!("{first}\n{shim}{rest}")).unwrap();
-    let theme = Theme::load_ready(Source::folder("swirls", &dir), limits(2)).unwrap();
+    let theme = Theme::load_ready(Source::folder("swirls", &dir), limits(1)).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     theme
 }
