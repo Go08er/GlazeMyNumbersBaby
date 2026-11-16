@@ -1927,9 +1927,16 @@ end
 -- may be gone from, were the machine a little busier; one that takes
 -- much longer was held up by something else (the deadline is of the
 -- processor's time, which waiting doesn't use) and tells nothing.
--- (A frame past 4.5 ms: well over what either theme spends on an idle
--- machine, some 3.3 ms at its worst, and 3.5 ms under the 8 ms deadline.)
-local SLOW_FRAME, STALLED = 0.0045, 0.016
+-- (A frame past 6.5 ms. Swirls' frames take some 1.9 to 2.2 ms on an idle
+-- machine, and some 2.8 to 3 ms at their worst (with keys pressed and results
+-- rippling). 6.5 ms makes the paint coarser on no faster a machine than
+-- 4.5 ms did when the app coloured it, before it had a module of its own:
+-- about 2.4 times slower than the one this was written on at 1600 × 1000,
+-- 2.3 at 760 × 640 (2.0 then). On the slowest machine that doesn't pass it,
+-- the worst frames measured still took under 8 ms. So the paint stays fine
+-- on as many machines as before (the owner's choice), at 1.5 ms under the
+-- 8 ms deadline in place of 3.5.)
+local SLOW_FRAME, STALLED = 0.0065, 0.016
 -- How many such frames, net of the quick ones between, make the paint
 -- coarser, and by how much.
 local SLOW_FRAMES, COARSER = 3, 1.6
